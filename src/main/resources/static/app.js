@@ -30,6 +30,11 @@ async function api(url, method = 'GET', payload) {
 		opts.body = JSON.stringify(payload);
 	}
 	const res = await fetch(url, opts);
+	if (res.status === 401) {
+		// Session missing/expired — bounce back to the login screen instead of surfacing an error.
+		showLogin();
+		throw new Error('Your session has expired. Please sign in again.');
+	}
 	const body = await res.json().catch(() => null);
 	if (!res.ok) {
 		const base = (body && body.message) || `${res.status} ${res.statusText}`;
@@ -38,6 +43,90 @@ async function api(url, method = 'GET', payload) {
 		throw new Error(detail ? `${base} — ${detail}` : base);
 	}
 	return body;
+}
+
+// --- auth --------------------------------------------------------------
+// When security.auth is enabled the app is gated behind a login screen: the console shell loads
+// but every /api/** call needs a session cookie. `/api/auth/status` tells us whether to show the
+// login screen or the console on load; a 404 means the auth feature is off (nothing to gate).
+let authEnabled = false;
+
+async function fetchAuthStatus() {
+	try {
+		const res = await fetch('/api/auth/status', { headers: { Accept: 'application/json' } });
+		if (res.status === 404) return { enabled: false, authenticated: true };
+		const b = await res.json().catch(() => null);
+		return { enabled: true, authenticated: !!(b && b.authenticated) };
+	} catch (e) {
+		return { enabled: false, authenticated: true }; // can't reach status — don't block the UI
+	}
+}
+
+function showLogin() {
+	el('loginScreen').hidden = false;
+	el('appMain').hidden = true;
+	el('topbarRight').hidden = true;
+	el('signOutBtn').hidden = true;
+	const u = el('loginUser');
+	if (u) setTimeout(() => u.focus(), 0);
+}
+
+function showApp() {
+	el('loginScreen').hidden = true;
+	el('appMain').hidden = false;
+	el('topbarRight').hidden = false;
+	el('signOutBtn').hidden = !authEnabled;
+}
+
+async function bootstrap() {
+	const status = await fetchAuthStatus();
+	authEnabled = status.enabled;
+	if (status.enabled && !status.authenticated) {
+		showLogin();
+	} else {
+		showApp();
+		loadCatalog();
+	}
+}
+
+async function doLogin(ev) {
+	ev.preventDefault();
+	const btn = el('loginBtn');
+	const err = el('loginError');
+	const username = el('loginUser').value.trim();
+	const password = el('loginPass').value;
+	err.hidden = true;
+	const label = btn.textContent;
+	btn.disabled = true; btn.innerHTML = `<span class="spinner"></span> Signing in…`;
+	try {
+		const res = await fetch('/api/auth/login', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+			body: JSON.stringify({ username, password }),
+		});
+		if (!res.ok) {
+			const b = await res.json().catch(() => null);
+			err.textContent = (b && b.message) || 'Sign in failed. Please try again.';
+			err.hidden = false;
+			return;
+		}
+		authEnabled = true;
+		el('loginPass').value = '';
+		showApp();
+		loadCatalog();
+	} catch (e) {
+		err.textContent = 'Could not reach the server. Please try again.';
+		err.hidden = false;
+	} finally {
+		btn.disabled = false; btn.innerHTML = label;
+	}
+}
+
+async function doLogout() {
+	try { await fetch('/api/auth/logout', { method: 'POST', headers: { Accept: 'application/json' } }); }
+	catch (e) { /* ignore — return to login regardless */ }
+	entries = []; loaded = false;
+	showLogin();
 }
 
 // concurrency-limited scheduler so lazy enrichment never floods the supplier
@@ -549,4 +638,7 @@ el('prevPage').addEventListener('click', () => { if (page > 0) { page--; renderT
 el('nextPage').addEventListener('click', () => { page++; renderTable(); });
 el('pageSize').addEventListener('change', (e) => { pageSize = parseInt(e.target.value, 10) || 25; page = 0; renderTable(); });
 
-loadCatalog();
+el('loginForm').addEventListener('submit', doLogin);
+el('signOutBtn').addEventListener('click', doLogout);
+
+bootstrap();

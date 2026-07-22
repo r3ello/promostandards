@@ -3,23 +3,29 @@ spring:
     name: promostandards
 
 # ---------------------------------------------------------------------------
-# App access protection (HTTP Basic)
+# App access protection (form login)
 #
-# A single username/password gate over the whole app (console + REST API). Off by
-# default so local/stub development and the test suite need no credentials; the prod
-# profile turns it on (see application-prod.yaml). /actuator/health is always exempt
-# so the Docker healthcheck keeps working.
+# A single username/password gate over the whole app. Sensitive endpoints (/api/**
+# and /actuator/**) require a session cookie set by the console's login screen; the
+# static console shell and /actuator/health stay open (so the login page can render
+# and the Docker healthcheck keeps working). Off by default so local/stub development
+# and the test suite need no credentials; the prod profile turns it on (see
+# application-prod.yaml).
 #
 # The password is sensitive: supply it via APP_AUTH_PASSWORD (or an untracked
 # application-local.yaml) — never commit a real password. To try it locally run with
 # `--security.auth.enabled=true --security.auth.password=secret`.
+#
+# cookie-secure: leave false for plain-HTTP local runs; set true in prod (HTTPS).
+# session-minutes: how long a login stays valid before re-authentication (default 12h).
 # ---------------------------------------------------------------------------
 security:
   auth:
     enabled: false
-    realm: PromoStandards
     username: "${APP_AUTH_USERNAME:admin}"
     password: "${APP_AUTH_PASSWORD:}"
+    cookie-secure: false
+    session-minutes: 720
 
 # ---------------------------------------------------------------------------
 # PromoStandards integration

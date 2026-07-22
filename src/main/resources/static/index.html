@@ -8,6 +8,32 @@
 	<link rel="stylesheet" href="app.css">
 </head>
 <body>
+	<!-- Login screen (shown until authenticated; the app + API stay hidden behind it) -->
+	<div class="login" id="loginScreen" hidden>
+		<form class="login__card" id="loginForm" autocomplete="on">
+			<div class="login__brand">
+				<span class="login__mark">◆</span>
+				<div class="login__brandtext">
+					<strong>TrophyPartner</strong>
+					<span>Product Sync</span>
+				</div>
+			</div>
+			<h1 class="login__title">Sign in</h1>
+			<p class="login__sub">Enter your credentials to access the product console.</p>
+			<label class="login__field">
+				<span>Username</span>
+				<input type="text" id="loginUser" name="username" autocomplete="username"
+					autocapitalize="none" autocorrect="off" spellcheck="false" required>
+			</label>
+			<label class="login__field">
+				<span>Password</span>
+				<input type="password" id="loginPass" name="password" autocomplete="current-password" required>
+			</label>
+			<p class="login__error" id="loginError" role="alert" hidden></p>
+			<button type="submit" class="btn btn--primary login__submit" id="loginBtn">Sign in</button>
+		</form>
+	</div>
+
 	<!-- Top bar -->
 	<header class="topbar">
 		<div class="brand">
@@ -17,7 +43,7 @@
 				<span>Product Sync</span>
 			</div>
 		</div>
-		<div class="topbar__right">
+		<div class="topbar__right" id="topbarRight" hidden>
 			<span class="conn" id="shopifyStatus" title="Shopify connection">
 				<span class="conn__dot"></span><span id="shopifyStatusText">checking…</span>
 			</span>
@@ -25,10 +51,11 @@
 				<label for="supplier">Supplier</label>
 				<select id="supplier" class="select"></select>
 			</div>
+			<button class="btn btn--sm" id="signOutBtn" hidden>Sign out</button>
 		</div>
 	</header>
 
-	<main class="page">
+	<main class="page" id="appMain" hidden>
 		<section class="card">
 			<!-- Card header + toolbar -->
 			<div class="card__head">
