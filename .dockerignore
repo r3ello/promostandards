@@ -1,0 +1,27 @@
+# Build output
+target/
+
+# IDE / tooling
+.idea/
+*.iml
+.vscode/
+
+# Local helper scripts (not needed in the image)
+scripts/
+
+# CRITICAL: real PaceSetter + Shopify credentials live here — must NEVER enter the image.
+# Runtime config comes from the server's .env file (see docker-compose.yaml / DEPLOY.md).
+**/application-local.yaml
+
+# Scratch files in the resources root (not used by the app; static/ assets stay in)
+src/main/resources/image.png
+src/main/resources/img.png
+src/main/resources/starAwardPromostandard.png
+src/main/resources/promo-shopify.png
+src/main/resources/supliers.txt
+
+# Docs / deploy files (not needed inside the build context)
+*.md
+docker-compose.yaml
+.env
+.env.example

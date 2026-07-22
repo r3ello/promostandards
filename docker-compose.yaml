@@ -1,0 +1,22 @@
+# Runs the PromoStandards integration service on the server (Contabo).
+#
+#   cp .env.example .env    # then fill in the real credentials
+#   docker compose build
+#   docker compose up -d
+#
+# The port is bound to 127.0.0.1 ON PURPOSE: the app has no authentication, so it must not
+# be reachable from the internet directly. Front it with nginx + basic auth (see DEPLOY.md),
+# or reach it through an SSH tunnel: ssh -L 8080:127.0.0.1:8080 <server>.
+
+services:
+  promostandards:
+    build: .
+    image: promostandards:latest
+    container_name: promostandards
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    env_file:
+      - .env
+    environment:
+      SPRING_PROFILES_ACTIVE: prod

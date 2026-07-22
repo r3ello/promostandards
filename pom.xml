@@ -1,0 +1,368 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>3.5.15</version>
+		<relativePath/> <!-- lookup parent from repository -->
+	</parent>
+	<groupId>com.trophy</groupId>
+	<artifactId>promostandards</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<name/>
+	<description/>
+	<url/>
+	<licenses>
+		<license/>
+	</licenses>
+	<developers>
+		<developer/>
+	</developers>
+	<scm>
+		<connection/>
+		<developerConnection/>
+		<tag/>
+		<url/>
+	</scm>
+	<properties>
+		<java.version>17</java.version>
+		<cxf.version>4.0.5</cxf.version>
+	</properties>
+	<dependencies>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-web</artifactId>
+		</dependency>
+
+		<!-- /actuator/health for the Docker container healthcheck (see Dockerfile) -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+
+		<!-- PromoStandards SOAP clients: CXF JAX-WS runtime + JAXB databinding -->
+		<dependency>
+			<groupId>org.apache.cxf</groupId>
+			<artifactId>cxf-spring-boot-starter-jaxws</artifactId>
+			<version>${cxf.version}</version>
+		</dependency>
+
+		<!-- Optional SOAP message logging (LoggingFeature); enabled via promostandards.*.log-messages -->
+		<dependency>
+			<groupId>org.apache.cxf</groupId>
+			<artifactId>cxf-rt-features-logging</artifactId>
+			<version>${cxf.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+			</plugin>
+		</plugins>
+	</build>
+
+	<profiles>
+		<!--
+		  SOAP client codegen. Auto-activates once the Inventory WSDL is vendored at the path
+		  below, so the default build stays green until then. Generates JAX-WS stubs into
+		  target/generated-sources/cxf during the generate-sources phase.
+		  Name your WSDL exactly as below, or update both the <exists> and <wsdl> paths to match.
+		-->
+		<profile>
+			<id>inventory-soap-codegen</id>
+			<activation>
+				<file>
+					<exists>src/main/resources/wsdl/inventory/InventoryService.wsdl</exists>
+				</file>
+			</activation>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.cxf</groupId>
+						<artifactId>cxf-codegen-plugin</artifactId>
+						<version>${cxf.version}</version>
+						<executions>
+							<execution>
+								<id>generate-inventory-client</id>
+								<phase>generate-sources</phase>
+								<goals>
+									<goal>wsdl2java</goal>
+								</goals>
+								<configuration>
+									<sourceRoot>${project.build.directory}/generated-sources/cxf</sourceRoot>
+									<wsdlOptions>
+										<wsdlOption>
+											<wsdl>${project.basedir}/src/main/resources/wsdl/inventory/InventoryService.wsdl</wsdl>
+											<wsdlLocation>classpath:wsdl/inventory/InventoryService.wsdl</wsdlLocation>
+											<extraargs>
+												<extraarg>-client</extraarg>
+												<!-- Package overrides, one per targetNamespace found in the WSDL/XSDs.
+												     INV 1.2.1 uses a single namespace (no SharedObjects/xsstl). -->
+												<extraarg>-p</extraarg>
+												<extraarg>http://www.promostandards.org/WSDL/InventoryService/1.0.0/=com.trophy.promostandards.inventory.soap</extraarg>
+											</extraargs>
+										</wsdlOption>
+									</wsdlOptions>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+
+		<!--
+		  Product Data SOAP client codegen. Auto-activates once the Product Data WSDL is vendored
+		  at the path below. Generates JAX-WS stubs into target/generated-sources/cxf.
+		-->
+		<profile>
+			<id>product-data-soap-codegen</id>
+			<activation>
+				<file>
+					<exists>src/main/resources/wsdl/product/ProductDataService.wsdl</exists>
+				</file>
+			</activation>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.cxf</groupId>
+						<artifactId>cxf-codegen-plugin</artifactId>
+						<version>${cxf.version}</version>
+						<executions>
+							<execution>
+								<id>generate-product-data-client</id>
+								<phase>generate-sources</phase>
+								<goals>
+									<goal>wsdl2java</goal>
+								</goals>
+								<configuration>
+									<sourceRoot>${project.build.directory}/generated-sources/cxf</sourceRoot>
+									<wsdlOptions>
+										<wsdlOption>
+											<wsdl>${project.basedir}/src/main/resources/wsdl/product/ProductDataService.wsdl</wsdl>
+											<wsdlLocation>classpath:wsdl/product/ProductDataService.wsdl</wsdlLocation>
+											<extraargs>
+												<extraarg>-client</extraarg>
+												<!-- Package overrides, one per targetNamespace found in the WSDL/XSDs -->
+												<extraarg>-p</extraarg>
+												<extraarg>http://www.promostandards.org/WSDL/ProductDataService/1.0.0/=com.trophy.promostandards.productdata.soap</extraarg>
+												<extraarg>-p</extraarg>
+												<extraarg>http://www.promostandards.org/WSDL/ProductDataService/1.0.0/SharedObjects/=com.trophy.promostandards.productdata.soap.shared</extraarg>
+												<extraarg>-p</extraarg>
+												<extraarg>http://www.codesynthesis.com/xmlns/xsstl=com.trophy.promostandards.productdata.soap.xsstl</extraarg>
+											</extraargs>
+										</wsdlOption>
+									</wsdlOptions>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+
+		<!--
+		  Media Content SOAP client codegen. Auto-activates once the Media WSDL is vendored at the
+		  path below. Generates JAX-WS stubs into target/generated-sources/cxf.
+		-->
+		<profile>
+			<id>media-soap-codegen</id>
+			<activation>
+				<file>
+					<exists>src/main/resources/wsdl/media/MediaContentService.wsdl</exists>
+				</file>
+			</activation>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.cxf</groupId>
+						<artifactId>cxf-codegen-plugin</artifactId>
+						<version>${cxf.version}</version>
+						<executions>
+							<execution>
+								<id>generate-media-client</id>
+								<phase>generate-sources</phase>
+								<goals>
+									<goal>wsdl2java</goal>
+								</goals>
+								<configuration>
+									<sourceRoot>${project.build.directory}/generated-sources/cxf</sourceRoot>
+									<wsdlOptions>
+										<wsdlOption>
+											<wsdl>${project.basedir}/src/main/resources/wsdl/media/MediaContentService.wsdl</wsdl>
+											<wsdlLocation>classpath:wsdl/media/MediaContentService.wsdl</wsdlLocation>
+											<extraargs>
+												<extraarg>-client</extraarg>
+												<!-- Package overrides, one per targetNamespace found in the WSDL/XSDs -->
+												<extraarg>-p</extraarg>
+												<extraarg>http://www.promostandards.org/WSDL/MediaService/1.0.0/=com.trophy.promostandards.media.soap</extraarg>
+												<extraarg>-p</extraarg>
+												<extraarg>http://www.promostandards.org/WSDL/MediaService/1.0.0/SharedObjects/=com.trophy.promostandards.media.soap.shared</extraarg>
+											</extraargs>
+										</wsdlOption>
+									</wsdlOptions>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+
+		<!--
+		  Pricing & Configuration SOAP client codegen. Auto-activates once the PPC WSDL is vendored
+		  at the path below. Generates JAX-WS stubs into target/generated-sources/cxf.
+		-->
+		<profile>
+			<id>pricing-soap-codegen</id>
+			<activation>
+				<file>
+					<exists>src/main/resources/wsdl/pricing/PricingAndConfiguration.wsdl</exists>
+				</file>
+			</activation>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.cxf</groupId>
+						<artifactId>cxf-codegen-plugin</artifactId>
+						<version>${cxf.version}</version>
+						<executions>
+							<execution>
+								<id>generate-pricing-client</id>
+								<phase>generate-sources</phase>
+								<goals>
+									<goal>wsdl2java</goal>
+								</goals>
+								<configuration>
+									<sourceRoot>${project.build.directory}/generated-sources/cxf</sourceRoot>
+									<wsdlOptions>
+										<wsdlOption>
+											<wsdl>${project.basedir}/src/main/resources/wsdl/pricing/PricingAndConfiguration.wsdl</wsdl>
+											<wsdlLocation>classpath:wsdl/pricing/PricingAndConfiguration.wsdl</wsdlLocation>
+											<extraargs>
+												<extraarg>-client</extraarg>
+												<!-- Package overrides, one per targetNamespace found in the WSDL/XSDs -->
+												<extraarg>-p</extraarg>
+												<extraarg>http://www.promostandards.org/WSDL/PricingAndConfiguration/1.0.0/=com.trophy.promostandards.pricing.soap</extraarg>
+												<extraarg>-p</extraarg>
+												<extraarg>http://www.promostandards.org/WSDL/PricingAndConfiguration/1.0.0/SharedObjects/=com.trophy.promostandards.pricing.soap.shared</extraarg>
+												<extraarg>-p</extraarg>
+												<extraarg>http://www.codesynthesis.com/xmlns/xsstl=com.trophy.promostandards.pricing.soap.xsstl</extraarg>
+												<extraarg>-p</extraarg>
+												<extraarg>http://www.isotc211.org/iso4217/=com.trophy.promostandards.pricing.soap.iso4217</extraarg>
+											</extraargs>
+										</wsdlOption>
+									</wsdlOptions>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+
+		<!--
+		  Order Shipment Notification SOAP client codegen. Auto-activates once the OSN WSDL is
+		  vendored at the path below. Generates JAX-WS stubs into target/generated-sources/cxf.
+		-->
+		<profile>
+			<id>order-shipment-soap-codegen</id>
+			<activation>
+				<file>
+					<exists>src/main/resources/wsdl/ordershipment/OrderShipmentNotificationService.wsdl</exists>
+				</file>
+			</activation>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.cxf</groupId>
+						<artifactId>cxf-codegen-plugin</artifactId>
+						<version>${cxf.version}</version>
+						<executions>
+							<execution>
+								<id>generate-order-shipment-client</id>
+								<phase>generate-sources</phase>
+								<goals>
+									<goal>wsdl2java</goal>
+								</goals>
+								<configuration>
+									<sourceRoot>${project.build.directory}/generated-sources/cxf</sourceRoot>
+									<wsdlOptions>
+										<wsdlOption>
+											<wsdl>${project.basedir}/src/main/resources/wsdl/ordershipment/OrderShipmentNotificationService.wsdl</wsdl>
+											<wsdlLocation>classpath:wsdl/ordershipment/OrderShipmentNotificationService.wsdl</wsdlLocation>
+											<extraargs>
+												<extraarg>-client</extraarg>
+												<extraarg>-p</extraarg>
+												<extraarg>http://www.promostandards.org/WSDL/OrderShipmentNotificationService/1.0.0/=com.trophy.promostandards.ordershipment.soap</extraarg>
+												<extraarg>-p</extraarg>
+												<extraarg>http://www.promostandards.org/WSDL/OrderShipmentNotificationService/1.0.0/SharedObjects/=com.trophy.promostandards.ordershipment.soap.shared</extraarg>
+											</extraargs>
+										</wsdlOption>
+									</wsdlOptions>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+
+		<!--
+		  Order Status SOAP client codegen. Auto-activates once the Order Status WSDL is vendored
+		  at the path below. Generates JAX-WS stubs into target/generated-sources/cxf.
+		-->
+		<profile>
+			<id>order-status-soap-codegen</id>
+			<activation>
+				<file>
+					<exists>src/main/resources/wsdl/orderstatus/OrderStatusService.wsdl</exists>
+				</file>
+			</activation>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.cxf</groupId>
+						<artifactId>cxf-codegen-plugin</artifactId>
+						<version>${cxf.version}</version>
+						<executions>
+							<execution>
+								<id>generate-order-status-client</id>
+								<phase>generate-sources</phase>
+								<goals>
+									<goal>wsdl2java</goal>
+								</goals>
+								<configuration>
+									<sourceRoot>${project.build.directory}/generated-sources/cxf</sourceRoot>
+									<wsdlOptions>
+										<wsdlOption>
+											<wsdl>${project.basedir}/src/main/resources/wsdl/orderstatus/OrderStatusService.wsdl</wsdl>
+											<wsdlLocation>classpath:wsdl/orderstatus/OrderStatusService.wsdl</wsdlLocation>
+											<extraargs>
+												<extraarg>-client</extraarg>
+												<extraarg>-p</extraarg>
+												<extraarg>http://www.promostandards.org/WSDL/OrderStatusService/1.0.0/=com.trophy.promostandards.orderstatus.soap</extraarg>
+											</extraargs>
+										</wsdlOption>
+									</wsdlOptions>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
+
+</project>

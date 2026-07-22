@@ -1,0 +1,66 @@
+# Production profile — used by the Docker deployment on the Contabo server.
+# Activate with SPRING_PROFILES_ACTIVE=prod (set in docker-compose.yaml).
+#
+# All 6 PromoStandards services run against the REAL PaceSetter SOAP endpoints here.
+# The endpoint URLs are public and safe to commit; credentials are NOT — they must come
+# from the environment (.env on the server): PROMOSTANDARDS_CREDENTIALS_ID / _PASSWORD.
+# Shopify secrets likewise come only from the environment (see .env.example).
+
+promostandards:
+  # Inventory Service 1.2.1 (Production)
+  inventory:
+    mode: soap
+    endpoint-url: "${PROMOSTANDARDS_INVENTORY_ENDPOINT:https://pacesetterawards.com/InventoryService/PaceSetterInventoryWCF.svc}"
+    log-messages: false
+
+  # Product Data Service 1.0.0
+  product-data:
+    mode: soap
+    endpoint-url: "${PROMOSTANDARDS_PRODUCT_ENDPOINT:https://pacesetterawards.com/ProductDataService/PaceSetterProductDataWCF.svc}"
+    log-messages: false
+
+  # Pricing & Configuration Service 1.0.0
+  pricing:
+    mode: soap
+    endpoint-url: "${PROMOSTANDARDS_PRICING_ENDPOINT:https://pacesetterawards.com/ProductConfigurationPricing/PacesetterProductConfig_Pricing.svc}"
+    log-messages: false
+
+  # Media Content Service 1.1.0
+  media:
+    mode: soap
+    endpoint-url: "${PROMOSTANDARDS_MEDIA_ENDPOINT:https://pacesetterawards.com/MediaContent_Service/MediaContentService.svc}"
+    log-messages: false
+
+  # Order Shipment Notification Service 1.0.0
+  order-shipment:
+    mode: soap
+    endpoint-url: "${PROMOSTANDARDS_ORDER_SHIPMENT_ENDPOINT:https://pacesetterawards.com/OrderShipment_Service/PaceSetterOrderShipment.svc}"
+    log-messages: false
+
+  # Order Status Service 1.0.0
+  order-status:
+    mode: soap
+    endpoint-url: "${PROMOSTANDARDS_ORDER_STATUS_ENDPOINT:https://pacesetterawards.com/OrderStatus_Service/PaceSetterOrderStatusWCF.svc}"
+    log-messages: false
+
+sync:
+  schedule:
+    # Keep the cron jobs off until the deployment is smoke-tested; flip via .env
+    # (SYNC_SCHEDULE_ENABLED=true) and `docker compose up -d` to enable.
+    enabled: ${SYNC_SCHEDULE_ENABLED:false}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # Only expose /actuator/health — nothing else (avoids leaking env, beans, mappings, etc.)
+        include: health
+  endpoint:
+    health:
+      # The container healthcheck only needs liveness; never show component details publicly.
+      show-details: never
+      probes:
+        enabled: true
+
+server:
+  port: ${SERVER_PORT:8080}

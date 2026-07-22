@@ -1,0 +1,133 @@
+spring:
+  application:
+    name: promostandards
+
+# ---------------------------------------------------------------------------
+# PromoStandards integration
+#
+# Each service runs against a swappable client. With mode=stub (the default)
+# the bundled in-memory StubXxxClient is used. Set mode=soap once a real SOAP
+# client bean is wired (see README.md) and supply the endpoint-url + credentials.
+#
+# Credentials are sensitive: provide them via environment variables or an
+# untracked application-local.yaml (see application-local.yaml.example) — never
+# commit real credentials.
+# ---------------------------------------------------------------------------
+promostandards:
+  # Supplier account credentials (sent with every request; unused by stubs)
+  credentials:
+    id: "${PROMOSTANDARDS_CREDENTIALS_ID:}"
+    password: "${PROMOSTANDARDS_CREDENTIALS_PASSWORD:}"
+
+  # Inventory Service 1.2.1
+  inventory:
+    mode: stub                       # stub (default) | soap
+    ws-version: 1.2.1
+    endpoint-url: "${PROMOSTANDARDS_INVENTORY_ENDPOINT:}"
+    # SOAP client tuning (only used when mode=soap)
+    connect-timeout-ms: 10000
+    receive-timeout-ms: 30000
+    log-messages: false
+
+  # Product Data Service 1.0.0
+  product-data:
+    mode: stub                       # stub (default) | soap
+    ws-version: 1.0.0
+    endpoint-url: "${PROMOSTANDARDS_PRODUCT_ENDPOINT:}"
+    connect-timeout-ms: 10000
+    receive-timeout-ms: 30000
+    log-messages: false
+
+  # Pricing and Configuration Service 1.0.0
+  pricing:
+    mode: stub                       # stub (default) | soap
+    ws-version: 1.0.0
+    endpoint-url: "${PROMOSTANDARDS_PRICING_ENDPOINT:}"
+    connect-timeout-ms: 10000
+    receive-timeout-ms: 30000
+    log-messages: false
+
+  # Media Content Service 1.1.0
+  media:
+    mode: stub                       # stub (default) | soap
+    ws-version: 1.1.0
+    endpoint-url: "${PROMOSTANDARDS_MEDIA_ENDPOINT:}"
+    connect-timeout-ms: 10000
+    receive-timeout-ms: 30000
+    log-messages: false
+
+  # Order Shipment Notification Service 1.0.0
+  order-shipment:
+    mode: stub                       # stub (default) | soap
+    ws-version: 1.0.0
+    endpoint-url: "${PROMOSTANDARDS_ORDER_SHIPMENT_ENDPOINT:}"
+    connect-timeout-ms: 10000
+    receive-timeout-ms: 30000
+    log-messages: false
+
+  # Order Status Service 1.0.0
+  order-status:
+    mode: stub                       # stub (default) | soap
+    ws-version: 1.0.0
+    endpoint-url: "${PROMOSTANDARDS_ORDER_STATUS_ENDPOINT:}"
+    connect-timeout-ms: 10000
+    receive-timeout-ms: 30000
+    log-messages: false
+
+# ---------------------------------------------------------------------------
+# Shopify Admin API (sync target)
+#
+# Secrets are sensitive: provide them via environment variables (or an untracked
+# application-local.yaml) — never commit real credentials. Client credentials are
+# exchanged for a short-lived Admin API token that is cached and auto-refreshed.
+# ---------------------------------------------------------------------------
+shopify:
+  store-domain: "${SHOPIFY_STORE_DOMAIN:}"   # e.g. trophypartner.myshopify.com
+  client-id: "${SHOPIFY_CLIENT_ID:}"
+  client-secret: "${SHOPIFY_CLIENT_SECRET:}"
+  webhook-secret: "${SHOPIFY_WEBHOOK_SECRET:}"
+  api-version: "${SHOPIFY_API_VERSION:2026-04}"
+  # Inventory location GID quantities are written to, e.g. gid://shopify/Location/123
+  location-id: "${SHOPIFY_LOCATION_ID:gid://shopify/Location/74343743582}"
+
+# ---------------------------------------------------------------------------
+# Supplier -> Shopify sync
+# ---------------------------------------------------------------------------
+sync:
+  supplier-code: PaceSetter          # stamped on products + used in the deterministic handle
+  # Store metaobject entry identifying this supplier. When handle is set, every import writes the
+  # custom.promo_standard_supplier product metafield (metaobject_reference) pointing at this entry;
+  # its GID is resolved via metaobjectByHandle (app token needs the read_metaobjects scope).
+  supplier-metaobject:
+    type: promo_standard_supplier
+    handle: pace-setter
+  # Create the custom.ps_* metafield DEFINITIONS at startup (admin visibility only). Needs the
+  # write_metafield_definitions scope; leave false unless the app token has it — sync stamps the
+  # metafield values regardless.
+  ensure-metafield-definitions: false
+  currency: USD
+  country: US
+  language: en
+  # Variant SKU strategy: PART (partId) | PART_SIZE (partId-size)
+  sku-strategy: PART_SIZE
+  pricing:
+    strategy: MARKUP                 # MARKUP (supplier net * (1 + markup))
+    markup-percent: 40               # applied to the supplier net price
+    rounding: NINETY_NINE            # NONE | NINETY_NINE (round up to x.99)
+    map-floor: true                  # never price below the supplier list/MAP price
+  schedule:
+    enabled: false                   # master switch for all scheduled jobs
+    inventory-cron: "0 0/30 * * * *" # every 30 min
+    price-cron: "0 0 3 * * *"        # daily at 03:00
+    order-cron: "0 0/15 * * * *"     # every 15 min
+
+  # Extra product metafields written on every import. Each entry needs namespace/key/type matching
+  # an existing Shopify metafield definition, and either a constant `value` or a `source` naming a
+  # supplier field to copy: title | description | vendor | productType | productId | tags | supplierCode.
+  # (The app always also writes custom.ps_supplier, custom.ps_product_id, custom.ps_price_breaks,
+  #  custom.promo_standard_supplier — see supplier-metaobject above — and, on each VARIANT,
+  #  custom.promo_standard_id = the supplier product id.)
+  metafields: []
+  #  - { namespace: custom, key: country_of_origin, type: single_line_text_field, value: "China" }
+  #  - { namespace: custom, key: supplier_brand,    type: single_line_text_field, source: vendor }
+  #  - { namespace: custom, key: ps_categories,     type: list.single_line_text_field, source: tags }

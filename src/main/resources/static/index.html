@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>TrophyPartner · Product Sync</title>
+	<link rel="stylesheet" href="polaris-tokens.css">
+	<link rel="stylesheet" href="app.css">
+</head>
+<body>
+	<!-- Top bar -->
+	<header class="topbar">
+		<div class="brand">
+			<span class="brand__mark">◆</span>
+			<div class="brand__text">
+				<strong>TrophyPartner</strong>
+				<span>Product Sync</span>
+			</div>
+		</div>
+		<div class="topbar__right">
+			<span class="conn" id="shopifyStatus" title="Shopify connection">
+				<span class="conn__dot"></span><span id="shopifyStatusText">checking…</span>
+			</span>
+			<div class="field">
+				<label for="supplier">Supplier</label>
+				<select id="supplier" class="select"></select>
+			</div>
+		</div>
+	</header>
+
+	<main class="page">
+		<section class="card">
+			<!-- Card header + toolbar -->
+			<div class="card__head">
+				<div>
+					<h1 class="card__title">Products</h1>
+					<p class="card__sub" id="catalogMeta">Load the supplier catalog to begin.</p>
+				</div>
+				<div class="card__actions">
+					<button class="btn" id="reloadBtn">↻ Reload</button>
+				</div>
+			</div>
+
+			<div class="toolbar">
+				<div class="search">
+					<span class="search__icon" aria-hidden="true">⌕</span>
+					<input type="search" id="search" placeholder="Search products…" autocomplete="off" spellcheck="false">
+				</div>
+				<div class="segmented" id="statusFilter" role="tablist" aria-label="Status filter">
+					<button class="seg is-active" data-filter="all">All</button>
+					<button class="seg" data-filter="imported">Imported</button>
+					<button class="seg" data-filter="not-imported">Not imported</button>
+					<button class="seg" data-filter="low">Low / out</button>
+				</div>
+			</div>
+
+			<!-- Products table -->
+			<div class="table-wrap">
+				<table class="index-table" id="productsTable">
+					<thead>
+						<tr>
+							<th class="col-expand" aria-label="Expand"></th>
+							<th class="col-thumb" aria-label="Image"></th>
+							<th>Product</th>
+							<th>Vendor</th>
+							<th class="num">Variants</th>
+							<th>Inventory</th>
+							<th>Price</th>
+							<th>Status</th>
+							<th class="col-actions">Actions</th>
+						</tr>
+					</thead>
+					<tbody id="productsBody">
+						<tr class="row-state"><td colspan="9"><div class="state"><span class="spinner"></span> Loading products…</div></td></tr>
+					</tbody>
+				</table>
+			</div>
+
+			<div class="pager" id="pager" hidden>
+				<button class="btn btn--sm" id="prevPage">← Prev</button>
+				<span class="pager__info" id="pagerInfo">—</span>
+				<button class="btn btn--sm" id="nextPage">Next →</button>
+				<label class="pager__size">Rows
+					<select class="select" id="pageSize">
+						<option>25</option>
+						<option>50</option>
+						<option>100</option>
+					</select>
+				</label>
+			</div>
+		</section>
+	</main>
+
+	<!-- Metafield picker modal (shown when adding a product to Shopify) -->
+	<div class="modal" id="mfModal" hidden>
+		<div class="modal__overlay" data-mf-close></div>
+		<div class="modal__dialog" role="dialog" aria-modal="true" aria-labelledby="mfTitle">
+			<div class="modal__head">
+				<div>
+					<h2 class="modal__title" id="mfTitle">Add to Shopify</h2>
+					<p class="modal__sub" id="mfSub">Choose metafields to include in the import.</p>
+				</div>
+				<button class="modal__close" data-mf-close aria-label="Close">✕</button>
+			</div>
+			<div class="modal__body" id="mfBody">
+				<div class="state"><span class="spinner"></span> Loading metafields…</div>
+			</div>
+			<div class="modal__foot">
+				<span class="modal__note">Identity metafields (supplier, product id, price breaks) are always added.</span>
+				<div class="modal__actions">
+					<button class="btn" id="mfSkip">Skip &amp; import</button>
+					<button class="btn btn--primary" id="mfImport">Import</button>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<!-- Toast region -->
+	<div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+
+	<script src="app.js"></script>
+</body>
+</html>
