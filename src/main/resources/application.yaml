@@ -3,6 +3,25 @@ spring:
     name: promostandards
 
 # ---------------------------------------------------------------------------
+# App access protection (HTTP Basic)
+#
+# A single username/password gate over the whole app (console + REST API). Off by
+# default so local/stub development and the test suite need no credentials; the prod
+# profile turns it on (see application-prod.yaml). /actuator/health is always exempt
+# so the Docker healthcheck keeps working.
+#
+# The password is sensitive: supply it via APP_AUTH_PASSWORD (or an untracked
+# application-local.yaml) — never commit a real password. To try it locally run with
+# `--security.auth.enabled=true --security.auth.password=secret`.
+# ---------------------------------------------------------------------------
+security:
+  auth:
+    enabled: false
+    realm: PromoStandards
+    username: "${APP_AUTH_USERNAME:admin}"
+    password: "${APP_AUTH_PASSWORD:}"
+
+# ---------------------------------------------------------------------------
 # PromoStandards integration
 #
 # Each service runs against a swappable client. With mode=stub (the default)

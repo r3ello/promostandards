@@ -64,3 +64,13 @@ management:
 
 server:
   port: ${SERVER_PORT:8080}
+
+# HTTP Basic protection is ON in production (the app has no other auth and the console
+# is publicly reachable once nginx proxies it). Credentials come only from the environment
+# (.env on the server): APP_AUTH_USERNAME / APP_AUTH_PASSWORD. If the password is left blank
+# the filter fails closed (every request gets 401) — so the .env value must be set.
+security:
+  auth:
+    enabled: true
+    username: "${APP_AUTH_USERNAME:}"
+    password: "${APP_AUTH_PASSWORD:}"
