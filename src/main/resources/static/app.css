@@ -137,11 +137,14 @@ body {
 /* ---------- table ---------- */
 .table-wrap { width: 100%; overflow-x: auto; }
 .index-table { width: 100%; border-collapse: collapse; font-size: var(--p-font-size-325); }
+/* No sticky here: the .table-wrap overflow-x container would anchor it (a sticky element can't
+   stick to the viewport from inside a scroll container), and a top offset floats the header over
+   the first row. */
 .index-table thead th {
 	text-align: left; font-weight: var(--p-font-weight-medium); font-size: var(--p-font-size-300);
 	color: var(--p-color-text-secondary); background: var(--p-color-bg-surface-secondary);
 	padding: var(--p-space-300) var(--p-space-300); border-top: 1px solid var(--p-color-border);
-	border-bottom: 1px solid var(--p-color-border); position: sticky; top: 56px; z-index: 5;
+	border-bottom: 1px solid var(--p-color-border);
 }
 .index-table th.num, .index-table td.num { text-align: right; }
 .index-table tbody td { padding: var(--p-space-300); border-bottom: 1px solid var(--p-color-border-secondary); vertical-align: middle; }
@@ -207,6 +210,20 @@ body {
 .price-part__head { display: flex; align-items: center; gap: var(--p-space-200); margin-bottom: var(--p-space-200); font-size: var(--p-font-size-325); }
 .price-part__head .badge { margin-left: auto; }
 
+/* ---------- variant grouping ---------- */
+.group-toggle { display: inline-flex; align-items: center; gap: var(--p-space-150); font-size: var(--p-font-size-325); color: var(--p-color-text-secondary); cursor: pointer; user-select: none; }
+.group-toggle input { accent-color: var(--p-color-bg-fill-brand); cursor: pointer; }
+.fam-badge { margin-left: var(--p-space-200); vertical-align: middle; }
+
+.group-members { display: grid; gap: var(--p-space-500); }
+.group-member { border: 1px solid var(--p-color-border); border-radius: var(--p-border-radius-200); padding: var(--p-space-400); background: var(--p-color-bg-surface); }
+.group-member .detail { padding: var(--p-space-400) 0 0; }
+.group-member__head { display: flex; align-items: center; gap: var(--p-space-300); flex-wrap: wrap; }
+.group-member__id { display: flex; flex-direction: column; }
+.group-member__figs { display: inline-flex; align-items: center; gap: var(--p-space-300); margin-left: auto; }
+.group-member__figs .price-fig { font-variant-numeric: tabular-nums; }
+.group-member .row-actions { margin-left: var(--p-space-300); }
+
 /* ---------- pager ---------- */
 .pager {
 	display: flex; align-items: center; gap: var(--p-space-300);
@@ -222,11 +239,41 @@ body {
 .skel--num { width: 40px; } .skel--txt { width: 90px; } .skel--badge { width: 64px; height: 18px; border-radius: var(--p-border-radius-full); }
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
+/* ---------- decoration areas ---------- */
+/* Imprint locations from Pricing & Configuration: each card is a location, each item a method with
+   its area drawn to scale (against other areas in the same unit). */
+.deco-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--p-space-300); }
+.deco-card {
+	border: 1px solid var(--p-color-border); border-radius: var(--p-border-radius-200);
+	padding: var(--p-space-300) var(--p-space-400); background: var(--p-color-bg-surface);
+}
+.deco-card__head { display: flex; align-items: center; gap: var(--p-space-200); flex-wrap: wrap; margin-bottom: var(--p-space-300); }
+.deco-card__name { font-weight: 650; }
+.deco-items { display: flex; flex-direction: column; gap: var(--p-space-300); }
+.deco-item { display: flex; align-items: center; gap: var(--p-space-300); }
+.deco-shape { flex: 0 0 58px; height: 58px; display: grid; place-items: center; }
+.deco-shape__fig { fill: var(--p-color-bg-fill-info-secondary, rgba(80,120,200,.16)); stroke: var(--p-color-text-secondary); stroke-width: 1; }
+.deco-item__name { font-size: var(--p-font-size-325); }
+/* Suppliers that publish locations/methods but no dimensions (PaceSetter): chips, not empty boxes. */
+.deco-note { margin: calc(-1 * var(--p-space-200)) 0 var(--p-space-300); font-size: var(--p-font-size-325); }
+.deco-methods { display: flex; flex-wrap: wrap; gap: var(--p-space-200); }
+.deco-chip {
+	font-size: var(--p-font-size-325); padding: 2px var(--p-space-300);
+	border: 1px solid var(--p-color-border); border-radius: var(--p-border-radius-full, 20px);
+}
+.deco-item__dims { font-size: var(--p-font-size-325); color: var(--p-color-text-secondary); font-variant-numeric: tabular-nums; }
+
 /* ---------- states ---------- */
 .row-state td { padding: 0 !important; }
 .empty, .state { text-align: center; color: var(--p-color-text-secondary); padding: var(--p-space-1000) var(--p-space-500); }
 .empty p { margin-top: var(--p-space-300); font-size: var(--p-font-size-325); }
 .state--err { color: var(--p-color-text-critical); }
+/* Partial supplier data: the row still renders, with a note on which service had nothing. */
+.state--warn {
+	color: var(--p-color-text-caution); background: var(--p-color-bg-fill-caution-secondary);
+	border-radius: var(--p-border-radius-200); padding: var(--p-space-300) var(--p-space-400);
+	text-align: left; font-size: var(--p-font-size-325); margin-bottom: var(--p-space-400);
+}
 .spinner { display: inline-block; width: 13px; height: 13px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .6s linear infinite; vertical-align: -2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 

@@ -7,6 +7,7 @@ import com.trophy.promostandards.shopify.ShopifyProperties;
 import com.trophy.promostandards.shopify.ShopifyTokenService;
 import com.trophy.promostandards.sync.model.MetafieldDefinitionView;
 import com.trophy.promostandards.sync.model.MetafieldSample;
+import com.trophy.promostandards.shopify.ShopifyRetryProperties;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -17,6 +18,10 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class MetafieldCatalogServiceTest {
+
+    /** Retry fast in tests: the throttling backoff is behaviour, not something to wait out. */
+    private static final ShopifyRetryProperties TEST_RETRY =
+            new ShopifyRetryProperties(3, java.time.Duration.ofMillis(1), java.time.Duration.ofMillis(5));
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -56,7 +61,7 @@ class MetafieldCatalogServiceTest {
                 "whsec", "2026-04", "gid://shopify/Location/1");
         ShopifyTokenService tokens = mock(ShopifyTokenService.class);
         when(tokens.getToken()).thenReturn("token");
-        return new MetafieldCatalogService(new ShopifyGraphQLClient(http, tokens, shopify));
+        return new MetafieldCatalogService(new ShopifyGraphQLClient(http, tokens, shopify, TEST_RETRY));
     }
 
     @Test

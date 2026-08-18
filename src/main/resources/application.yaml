@@ -2,6 +2,31 @@ spring:
   application:
     name: promostandards
 
+  # ---------------------------------------------------------------------------
+  # Postgres (opt-in, see sync.persistence.enabled below)
+  #
+  # With persistence disabled — the default — PersistenceAutoConfigurationExcluder drops the
+  # DataSource/Flyway auto-configuration, so these blanks never fail startup and the app behaves
+  # exactly as it did before the database existed.
+  #
+  # With it enabled, a broken database SHOULD fail startup loudly: a sync running without its
+  # bookkeeping would treat "no state" as "push everything" and re-write the whole catalog.
+  #
+  # The password is sensitive: supply it via DB_PASSWORD (or an untracked application-local.yaml).
+  # ---------------------------------------------------------------------------
+  datasource:
+    url: "${DB_URL:}"
+    username: "${DB_USER:postgres}"
+    password: "${DB_PASSWORD:}"
+    hikari:
+      maximum-pool-size: 10
+      connection-timeout: 5000
+      pool-name: promostandards-pool
+  flyway:
+    locations: classpath:db/migration
+    # Applied migrations are immutable: every later change is a new V2__/V3__ file, never an edit.
+    validate-on-migrate: true
+
 # ---------------------------------------------------------------------------
 # App access protection (form login)
 #
@@ -113,12 +138,35 @@ shopify:
   webhook-secret: "${SHOPIFY_WEBHOOK_SECRET:}"
   api-version: "${SHOPIFY_API_VERSION:2026-04}"
   # Inventory location GID quantities are written to, e.g. gid://shopify/Location/123
-  location-id: "${SHOPIFY_LOCATION_ID:gid://shopify/Location/74343743582}"
+  location-id: "${SHOPIFY_LOCATION_ID:gid://shopify/Location/81537040495}"
+  # Shopify rate-limits by query COST and reports exhaustion as HTTP 200 + errors[].extensions.code
+  # = THROTTLED. Those calls are retried (waiting the bucket's own restore time when the response
+  # reports it, else exponential backoff) instead of failing the operation.
+  retry:
+    max-attempts: 4                  # 1 disables retrying
+    initial-backoff: 500ms
+    max-backoff: 8s
+#  location-id: "${SHOPIFY_LOCATION_ID:gid://shopify/Location/74343743582}"
 
 # ---------------------------------------------------------------------------
 # Supplier -> Shopify sync
 # ---------------------------------------------------------------------------
 sync:
+  # ---------------------------------------------------------------------------
+  # Postgres persistence master switch.
+  #
+  # false (default) = today's behaviour exactly: catalog indexes in memory + data/*.json, and the
+  # scheduler re-pushes every imported product. No database is contacted, none is required.
+  #
+  # true = the catalog mirror and the sync bookkeeping live in Postgres (spring.datasource above).
+  # Rolling back is setting this to false and restarting; the database is left untouched.
+  # ---------------------------------------------------------------------------
+  # Default MUST stay false: with it on, any environment without DB_URL (a fresh checkout, the test
+  # suite, a rollback) fails at startup on "Failed to determine a suitable driver class". Turn it on
+  # where the database actually is — .env on the server, application-local.yaml here.
+  persistence:
+    enabled: ${SYNC_PERSISTENCE_ENABLED:false}
+
   supplier-code: PaceSetter          # stamped on products + used in the deterministic handle
   # Store metaobject entry identifying this supplier. When handle is set, every import writes the
   # custom.promo_standard_supplier product metafield (metaobject_reference) pointing at this entry;
@@ -145,6 +193,40 @@ sync:
     inventory-cron: "0 0/30 * * * *" # every 30 min
     price-cron: "0 0 3 * * *"        # daily at 03:00
     order-cron: "0 0/15 * * * *"     # every 15 min
+    # Evaluate every product and log what WOULD be pushed, without writing to Shopify. Turn this on
+    # for the first scheduled runs after enabling persistence: pass one should report everything as
+    # due, and (after a real run) pass two almost nothing. That contrast is the proof the incremental
+    # logic works before it is allowed to write.
+    dry-run: ${SYNC_SCHEDULE_DRY_RUN:false}
+
+  # Catalog read model (the console table). Supplier data barely changes but the console re-reads it
+  # constantly (paging, filtering, reloads), so both reads are cached with a TTL; a product then costs
+  # its upstream calls once per window no matter how many rows/tabs/users ask. fetch-threads also caps
+  # how many supplier calls the catalog makes at once (each product detail fans out to 5 services in
+  # parallel), so raise it only as far as the supplier tolerates.
+  catalog:
+    detail-ttl: 15m                  # assembled per-product detail (0 disables detail caching)
+    list-ttl: 1h                     # discovered sellable-id list (0 disables it)
+    max-products: 2000               # cap on cached details, bounds memory on a large catalog
+    fetch-threads: 12
+
+  # Title index: product name + vendor for every catalog id, so the console's search box matches
+  # NAMES locally (without it, searching only matched ids and the rows already loaded). Built on
+  # demand in the background from the same shared catalog pass as the group index below — enabling
+  # both costs one pass, not two — and persisted so a restart doesn't repeat it.
+  title-index:
+    enabled: true                    # false = search matches product ids only
+    cache-file: data/catalog-titles.json
+    ttl: 24h
+
+  # "Group variants" index for the console table: collapses sibling product ids (one product the
+  # supplier split across ids, e.g. one per size) into one row, keyed on Common Grouping related
+  # products. Built ON DEMAND (never at startup) with one getProduct per product, throttled to 5
+  # concurrent, cached in memory AND persisted to cache-file so a restart doesn't repeat the pass.
+  group-index:
+    enabled: true                    # false = flat list only (no grouping)
+    cache-file: data/catalog-group-index.json   # persisted across restarts (working-dir relative)
+    ttl: 24h                         # freshness window; a stale index rebuilds in the background (0 = only on manual refresh)
 
   # Extra product metafields written on every import. Each entry needs namespace/key/type matching
   # an existing Shopify metafield definition, and either a constant `value` or a `source` naming a

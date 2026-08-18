@@ -1,6 +1,7 @@
 package com.trophy.promostandards.productdata.client;
 
 import com.trophy.promostandards.common.PromoStandardsClientException;
+import com.trophy.promostandards.common.PromoStandardsNotFoundException;
 import com.trophy.promostandards.common.ServiceMessage;
 import com.trophy.promostandards.productdata.model.Product;
 import com.trophy.promostandards.productdata.model.ProductCloseOut;
@@ -63,7 +64,11 @@ public class SoapProductDataClient implements ProductDataClient {
 		throwIfError(response.getErrorMessage());
 		var product = response.getProduct();
 		if (product == null) {
-			throw new PromoStandardsClientException("getProduct returned no product for productId=" + request.productId());
+			// Not a failure: the supplier's sellable catalog is wider than its Product Data records,
+			// so an id can be listed and still have no product here (PaceSetter: GI840). Typed so
+			// aggregating callers can degrade instead of failing the whole read.
+			throw new PromoStandardsNotFoundException(
+					"getProduct returned no product for productId=" + request.productId());
 		}
 		return toModel(product);
 	}
@@ -154,8 +159,19 @@ public class SoapProductDataClient implements ProductDataClient {
 			}
 		}
 
+		// Related products (Substitute / Companion Sell / Common Grouping). The catalog group index
+		// keeps only the Common Grouping links; we map them all and let callers filter.
+		List<Product.RelatedProduct> relatedProducts = new ArrayList<>();
+		if (product.getRelatedProductArray() != null) {
+			for (var related : product.getRelatedProductArray().getRelatedProduct()) {
+				String relationType = related.getRelationType() == null ? null : related.getRelationType().value();
+				relatedProducts.add(new Product.RelatedProduct(
+						relationType, related.getProductId(), related.getPartId()));
+			}
+		}
+
 		return new Product(product.getProductId(), product.getProductName(), joinText(product.getDescription()),
-				product.getProductBrand(), categories, parts);
+				product.getProductBrand(), categories, parts, relatedProducts);
 	}
 
 	private static String joinText(List<String> values) {

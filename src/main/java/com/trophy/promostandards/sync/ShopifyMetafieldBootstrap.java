@@ -42,16 +42,25 @@ public class ShopifyMetafieldBootstrap implements ApplicationRunner {
         if (shopify.storeDomain() == null || shopify.storeDomain().isBlank()) {
             return; // no store configured (tests / local without Shopify) — skip
         }
-        ensureDefinition(ShopifyProductMapper.MF_SUPPLIER, "PromoStandards Supplier");
-        ensureDefinition(ShopifyProductMapper.MF_PRODUCT_ID, "PromoStandards Product Id");
+        ensureDefinition(ShopifyProductMapper.MF_SUPPLIER, "PromoStandards Supplier",
+                "single_line_text_field");
+        ensureDefinition(ShopifyProductMapper.MF_PRODUCT_ID, "PromoStandards Product Id",
+                "single_line_text_field");
+        ensureDefinition(ShopifyProductMapper.MF_PRODUCT_IDS, "PromoStandards Product Ids",
+                "list.single_line_text_field");
+        ensureDefinition(ShopifyProductMapper.MF_SOURCE, "PromoStandards Source",
+                "single_line_text_field");
+        ensureDefinition(ShopifyProductMapper.MF_LAST_SYNC_AT, "PromoStandards Last Sync At",
+                "date_time");
+        enableUniqueValues(ShopifyProductMapper.MF_PRODUCT_ID);
     }
 
-    private void ensureDefinition(String key, String name) {
+    private void ensureDefinition(String key, String name, String type) {
         Map<String, Object> definition = Map.of(
                 "name", name,
                 "namespace", ShopifyProductMapper.METAFIELD_NAMESPACE,
                 "key", key,
-                "type", "single_line_text_field",
+                "type", type,
                 "ownerType", "PRODUCT");
         try {
             JsonNode data = gql.execute(ShopifyGraphQL.METAFIELD_DEFINITION_CREATE,
@@ -63,6 +72,30 @@ public class ShopifyMetafieldBootstrap implements ApplicationRunner {
             }
         } catch (RuntimeException e) {
             log.warn("Could not ensure metafield definition custom.{}: {}", key, e.getMessage());
+        }
+    }
+
+    /**
+     * Enables the unique-values capability on a definition so the store rejects two products
+     * claiming the same supplier id. Fails (with a WARN) while duplicate values exist — run the
+     * reconciliation/dedup first, then this succeeds on the next startup.
+     */
+    private void enableUniqueValues(String key) {
+        Map<String, Object> definition = Map.of(
+                "namespace", ShopifyProductMapper.METAFIELD_NAMESPACE,
+                "key", key,
+                "ownerType", "PRODUCT",
+                "capabilities", Map.of("uniqueValues", Map.of("enabled", true)));
+        try {
+            JsonNode data = gql.execute(ShopifyGraphQL.METAFIELD_DEFINITION_UPDATE,
+                    Map.of("definition", definition));
+            JsonNode userErrors = data.path("metafieldDefinitionUpdate").path("userErrors");
+            if (userErrors.isArray() && !userErrors.isEmpty()) {
+                log.warn("Could not enable uniqueValues on custom.{} (duplicate values in the store?): {}",
+                        key, userErrors);
+            }
+        } catch (RuntimeException e) {
+            log.warn("Could not enable uniqueValues on custom.{}: {}", key, e.getMessage());
         }
     }
 }

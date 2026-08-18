@@ -32,6 +32,9 @@ build/
 ### VS Code ###
 .vscode/
 
+### Generated runtime caches ###
+data/
+
 ### Local secrets / supplier credentials ###
 application-local.yaml
 application-local.yml

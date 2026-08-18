@@ -20,3 +20,13 @@ services:
       - .env
     environment:
       SPRING_PROFILES_ACTIVE: prod
+    # Postgres runs on the host, not in this compose file. On Linux `host.docker.internal` does
+    # not resolve unless it is mapped explicitly, so DB_URL in .env would fail without this.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Catalog indexes (titles + variant families) are cached here. Without this mount they live
+      # in the container's writable layer, so every `docker compose up -d` that recreates the
+      # container throws them away and the next console load rebuilds them with one getProduct per
+      # product — ~1,278 calls to the supplier per deploy.
+      - ./data:/app/data

@@ -84,6 +84,12 @@ public record SyncProperties(
      * @param priceCron     cron for the price refresh job
      * @param orderCron     cron for the order status/tracking job
      */
-    public record Schedule(boolean enabled, String inventoryCron, String priceCron, String orderCron) {
+    /**
+     * @param dryRun evaluate every product and log what would be pushed, without writing to Shopify.
+     *               The safe way to prove the incremental logic on real data: the first pass should
+     *               report everything as due, and — once run for real — the next one almost nothing.
+     */
+    public record Schedule(boolean enabled, String inventoryCron, String priceCron, String orderCron,
+                           boolean dryRun) {
     }
 }

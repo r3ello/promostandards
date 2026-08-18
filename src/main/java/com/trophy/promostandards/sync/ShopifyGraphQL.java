@@ -142,6 +142,22 @@ final class ShopifyGraphQL {
             """;
 
     /** Find a Shopify order (and its open fulfillment orders) matching a supplier PO query. */
+    /**
+     * Fetch an order by GID — used once a PO has been matched, so later runs resolve it exactly
+     * instead of re-running the {@code name:} search guess. Validated against 2026-04.
+     */
+    static final String ORDER_BY_ID = """
+            query OrderById($id: ID!) {
+              order(id: $id) {
+                id
+                name
+                fulfillmentOrders(first: 20) {
+                  nodes { id status }
+                }
+              }
+            }
+            """;
+
     static final String ORDER_BY_PO = """
             query OrderByPo($query: String!) {
               orders(first: 1, query: $query) {
@@ -176,7 +192,12 @@ final class ShopifyGraphQL {
             }
             """;
 
-    /** Page through products previously imported by this app (carry the ps_product_id metafield). */
+    /**
+     * Page through every PromoStandards-tagged product: those imported by this app AND those the
+     * one-shot trophypartner migration created (which carry the same tag + metafield contract).
+     * {@code ps_product_ids} is the full list of supplier ids a migrated product covers (canonical
+     * included); {@code ps_source} says who created the product ({@code app} | {@code migration}).
+     */
     static final String IMPORTED_PRODUCTS = """
             query ImportedProducts($cursor: String) {
               products(first: 100, after: $cursor, query: "tag:promostandards") {
@@ -184,8 +205,20 @@ final class ShopifyGraphQL {
                 nodes {
                   id
                   handle
-                  metafield(namespace: "custom", key: "ps_product_id") { value }
+                  psId: metafield(namespace: "custom", key: "ps_product_id") { value }
+                  psIds: metafield(namespace: "custom", key: "ps_product_ids") { value }
+                  psSource: metafield(namespace: "custom", key: "ps_source") { value }
                 }
+              }
+            }
+            """;
+
+    /** Update a metafield definition (used to enable the uniqueValues capability on ps_product_id). */
+    static final String METAFIELD_DEFINITION_UPDATE = """
+            mutation MetafieldDefinitionUpdate($definition: MetafieldDefinitionUpdateInput!) {
+              metafieldDefinitionUpdate(definition: $definition) {
+                updatedDefinition { id }
+                userErrors { field message code }
               }
             }
             """;

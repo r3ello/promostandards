@@ -42,6 +42,31 @@
 			<artifactId>spring-boot-starter-actuator</artifactId>
 		</dependency>
 
+		<!-- Persistence (Postgres). Only active when sync.persistence.enabled=true — see
+		     PersistenceAutoConfigurationExcluder: with the flag off, the DataSource/Flyway
+		     auto-configuration is excluded so a missing DB_URL cannot fail startup.
+		     JdbcClient rather than an ORM: nearly every write here is an `on conflict` merge. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-jdbc</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>org.postgresql</groupId>
+			<artifactId>postgresql</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+
+		<!-- Schema migrations. Flyway 10+ needs the per-database module alongside the core. -->
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-core</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-database-postgresql</artifactId>
+		</dependency>
+
 		<!-- PromoStandards SOAP clients: CXF JAX-WS runtime + JAXB databinding -->
 		<dependency>
 			<groupId>org.apache.cxf</groupId>

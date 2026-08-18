@@ -15,7 +15,7 @@ class PricingPolicyTest {
     private static PricingPolicy policy(Pricing pricing) {
         return new PricingPolicy(new SyncProperties("PaceSetter", "USD", "US", "en",
                 SyncProperties.SkuStrategy.PART_SIZE, pricing,
-                new SyncProperties.Schedule(false, "-", "-", "-"), List.of(), null));
+                new SyncProperties.Schedule(false, "-", "-", "-", false), List.of(), null));
     }
 
     @Test

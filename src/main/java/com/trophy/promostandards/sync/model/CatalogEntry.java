@@ -8,6 +8,9 @@ package com.trophy.promostandards.sync.model;
  *
  * @param productId supplier product id
  * @param imported  whether the product exists in Shopify; null when Shopify isn't connected
+ * @param closeOut  whether the supplier lists this product as close-out (being discontinued /
+ *                  sold off), per {@code getProductCloseOut} — the supplier's own signal, unlike
+ *                  {@code productDataMissing}, which only says its Product Data service has no record
  */
-public record CatalogEntry(String productId, Boolean imported) {
+public record CatalogEntry(String productId, Boolean imported, boolean closeOut) {
 }

@@ -30,7 +30,15 @@ public class ShopifyProductMapper {
     static final String METAFIELD_NAMESPACE = "custom";
     static final String MF_SUPPLIER = "ps_supplier";
     static final String MF_PRODUCT_ID = "ps_product_id";
+    /** List of every supplier id a product covers (migration N:1 grouping; canonical included). */
+    static final String MF_PRODUCT_IDS = "ps_product_ids";
     static final String MF_PRICE_BREAKS = "ps_price_breaks";
+    /** Provenance: who created the product. Immutable — never overwritten once set. */
+    static final String MF_SOURCE = "ps_source";
+    static final String SOURCE_APP = "app";
+    static final String SOURCE_MIGRATION = "migration";
+    /** Mutable companion to {@link #MF_SOURCE}: stamped on every successful sync. */
+    static final String MF_LAST_SYNC_AT = "ps_last_sync_at";
     /** Variant-level metafield carrying the supplier product id (e.g. {@code C0611}). */
     static final String MF_VARIANT_PROMO_STANDARD_ID = "promo_standard_id";
     private static final String COLOR = "Color";

@@ -45,7 +45,8 @@ class CatalogServicePlaceholderTest {
         when(pricing.getConfigurationAndPricing(eq("C1925"), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new Configuration("C1925", "USD", "Net", List.of(
                         new Configuration.PartPrice("C1925", "Star Award on Base", List.of(
-                                new Configuration.PriceBreak(1, new BigDecimal("58.26"), null, "BX"))))));
+                                new Configuration.PriceBreak(1, new BigDecimal("58.26"), null, "BX")))),
+                        List.of()));
         when(inventory.getInventoryLevels(eq("C1925"), any())).thenReturn(new InventoryLevels("C1925",
                 List.of(new InventoryLevels.PartInventory("C1925", "Star Award on Base", null,
                         5, "Clear", "5.75 X 5", null, null))));
@@ -54,7 +55,7 @@ class CatalogServicePlaceholderTest {
         SyncProperties props = new SyncProperties("PaceSetter", "USD", "US", "en",
                 SyncProperties.SkuStrategy.PART_SIZE,
                 new Pricing(Strategy.MARKUP, new BigDecimal("40"), Rounding.NONE, false),
-                new SyncProperties.Schedule(false, "-", "-", "-"), List.of(), null);
+                new SyncProperties.Schedule(false, "-", "-", "-", false), List.of(), null);
         CatalogService catalog = new CatalogService(productData, pricing, inventory, media, props);
 
         SupplierProduct product = catalog.aggregate("C1925");
@@ -81,7 +82,7 @@ class CatalogServicePlaceholderTest {
                 "C0500", "Plain Award", null, null, List.of(),
                 List.of(new Product.ProductPart("C0500", "Plain Award", "N/A", List.of()))));
         when(pricing.getConfigurationAndPricing(eq("C0500"), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new Configuration("C0500", "USD", "Net", List.of()));
+                .thenReturn(new Configuration("C0500", "USD", "Net", List.of(), List.of()));
         when(inventory.getInventoryLevels(eq("C0500"), any()))
                 .thenReturn(new InventoryLevels("C0500", List.of()));
         when(media.getMediaContent(eq("C0500"), any(), any())).thenReturn(List.of());
@@ -89,7 +90,7 @@ class CatalogServicePlaceholderTest {
         SyncProperties props = new SyncProperties("PaceSetter", "USD", "US", "en",
                 SyncProperties.SkuStrategy.PART_SIZE,
                 new Pricing(Strategy.MARKUP, new BigDecimal("40"), Rounding.NONE, false),
-                new SyncProperties.Schedule(false, "-", "-", "-"), List.of(), null);
+                new SyncProperties.Schedule(false, "-", "-", "-", false), List.of(), null);
         CatalogService catalog = new CatalogService(productData, pricing, inventory, media, props);
 
         // With no inventory rows there is nothing to merge into; the part must still yield a variant.

@@ -25,7 +25,7 @@ class ShopifyProductMapperTest {
         SyncProperties props = new SyncProperties("PaceSetter", "USD", "US", "en",
                 SyncProperties.SkuStrategy.PART_SIZE,
                 new Pricing(Strategy.MARKUP, new BigDecimal("40"), Rounding.NONE, false),
-                new SyncProperties.Schedule(false, "-", "-", "-"), List.of(), null);
+                new SyncProperties.Schedule(false, "-", "-", "-", false), List.of(), null);
         return new ShopifyProductMapper(props, new PricingPolicy(props), new ObjectMapper(), SHOPIFY);
     }
 
@@ -113,7 +113,7 @@ class ShopifyProductMapperTest {
         SyncProperties props = new SyncProperties("PaceSetter", "USD", "US", "en",
                 SyncProperties.SkuStrategy.PART_SIZE,
                 new Pricing(Strategy.MARKUP, new BigDecimal("40"), Rounding.NONE, false),
-                new SyncProperties.Schedule(false, "-", "-", "-"),
+                new SyncProperties.Schedule(false, "-", "-", "-", false),
                 List.of(
                         new SyncProperties.Metafield("custom", "country_of_origin", "single_line_text_field", "China", null),
                         new SyncProperties.Metafield("custom", "supplier_brand", "single_line_text_field", null, "vendor")),
@@ -140,7 +140,7 @@ class ShopifyProductMapperTest {
         SyncProperties props = new SyncProperties("PaceSetter", "USD", "US", "en",
                 SyncProperties.SkuStrategy.PART_SIZE,
                 new Pricing(Strategy.MARKUP, new BigDecimal("40"), Rounding.NONE, false),
-                new SyncProperties.Schedule(false, "-", "-", "-"),
+                new SyncProperties.Schedule(false, "-", "-", "-", false),
                 List.of(new SyncProperties.Metafield("custom", "season", "single_line_text_field", "Winter", null)),
                 null);
         ShopifyProductMapper mapper = new ShopifyProductMapper(props, new PricingPolicy(props), new ObjectMapper(), SHOPIFY);

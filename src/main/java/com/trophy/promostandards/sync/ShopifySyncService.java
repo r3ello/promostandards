@@ -1,27 +1,43 @@
 package com.trophy.promostandards.sync;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.trophy.promostandards.db.SyncStateStore;
+import com.trophy.promostandards.db.SyncStateStore.Kind;
 import com.trophy.promostandards.shopify.ShopifyGraphQLClient;
 import com.trophy.promostandards.shopify.ShopifyProperties;
 import com.trophy.promostandards.sync.model.SupplierProduct;
 import com.trophy.promostandards.sync.model.SupplierProduct.Variant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
  * Orchestrates supplier → Shopify sync: imports/updates products ({@code productSet}), pushes
  * inventory ({@code inventorySetQuantities}), and pushes prices ({@code productVariantsBulkUpdate}).
  *
- * <p>Identity is the deterministic handle from {@link ShopifyProductMapper#handle}: a lookup that
- * returns {@code null} means create, otherwise the returned product id drives an update — so re-sync
- * is idempotent and never duplicates products.
+ * <p>Identity is resolved in two steps. Products this app created carry the deterministic handle
+ * from {@link ShopifyProductMapper#handle} — found means update, missing means create. Products the
+ * one-shot trophypartner migration created have their own handles but share the metafield contract
+ * ({@code custom.ps_product_ids} lists every supplier id they cover, canonical first), so a handle
+ * miss falls back to a cached index over those lists before ever creating — re-sync is idempotent
+ * and never duplicates a migrated product.
+ *
+ * <p><b>Migrated products are never {@code productSet}:</b> that mutation is declarative — variants
+ * not listed would be <em>deleted</em> (fatal for N:1 grouped products whose other supplier ids own
+ * the sibling variants) and hand-migrated content would be replaced. They are updated per-variant
+ * only (inventory + price, matched by SKU), per the P1 adoption plan.
  */
 @Service
 public class ShopifySyncService {
@@ -31,24 +47,49 @@ public class ShopifySyncService {
     /** Product metafield ({@code metaobject_reference}) pointing at the supplier's metaobject entry. */
     static final String MF_SUPPLIER_METAOBJECT = "promo_standard_supplier";
 
+    /** How long the supplier-id → store-product index is trusted before repaging Shopify. */
+    private static final Duration INDEX_TTL = Duration.ofMinutes(5);
+
     private final ShopifyGraphQLClient gql;
     private final CatalogService catalog;
     private final ShopifyProductMapper mapper;
     private final PricingPolicy pricingPolicy;
     private final ShopifyProperties shopify;
     private final SyncProperties props;
+    private final ObjectMapper objectMapper;
+    /** Absent unless persistence is on; absent means "push everything", i.e. the pre-database behaviour. */
+    private final ObjectProvider<SyncStateStore> syncStates;
 
     /** GID of the configured supplier metaobject; resolved once (it never changes for a store). */
     private volatile String supplierMetaobjectGid;
 
+    /** UPPER-cased supplier id → tagged store product; rebuilt lazily after {@link #INDEX_TTL}. */
+    private volatile Map<String, ImportedProduct> supplierIdIndex;
+    private volatile Instant indexBuiltAt;
+
+    /** Serialises index rebuilds: a burst of catalog rows costs one Shopify pass, not one each. */
+    private final Object indexLock = new Object();
+
+    /** Striped per-product locks so a manual sync and a scheduled pass never overlap on one product. */
+    private final Object[] productLocks = new Object[32];
+
+    {
+        for (int i = 0; i < productLocks.length; i++) {
+            productLocks[i] = new Object();
+        }
+    }
+
     public ShopifySyncService(ShopifyGraphQLClient gql, CatalogService catalog, ShopifyProductMapper mapper,
-                              PricingPolicy pricingPolicy, ShopifyProperties shopify, SyncProperties props) {
+                              PricingPolicy pricingPolicy, ShopifyProperties shopify, SyncProperties props,
+                              ObjectMapper objectMapper, ObjectProvider<SyncStateStore> syncStates) {
         this.gql = gql;
         this.catalog = catalog;
         this.mapper = mapper;
         this.pricingPolicy = pricingPolicy;
         this.shopify = shopify;
         this.props = props;
+        this.objectMapper = objectMapper;
+        this.syncStates = syncStates;
     }
 
     /** Result of a sync operation. */
@@ -57,6 +98,11 @@ public class ShopifySyncService {
     }
 
     private record VariantRef(String variantId, String inventoryItemId) {
+    }
+
+    /** One PromoStandards-tagged store product, as listed by {@code IMPORTED_PRODUCTS}. */
+    record ImportedProduct(String gid, String handle, String canonicalId, List<String> supplierIds,
+                           String source) {
     }
 
     /** Create or update the Shopify product for {@code productId}, then push inventory. */
@@ -71,6 +117,12 @@ public class ShopifySyncService {
     public SyncResult importProduct(String productId, List<SyncProperties.Metafield> extraMetafields) {
         SupplierProduct product = catalog.aggregate(productId);
         JsonNode existing = findByHandle(mapper.handle(productId));
+        if (existing == null) {
+            JsonNode foreign = findForeign(productId);
+            if (foreign != null) {
+                return updateForeignInPlace(productId, product, foreign);
+            }
+        }
         String existingGid = existing == null ? null : existing.path("id").asText(null);
 
         JsonNode data = gql.execute(ShopifyGraphQL.PRODUCT_SET,
@@ -84,10 +136,39 @@ public class ShopifySyncService {
 
         // Inventory is set within productSet (per-variant inventoryQuantities), so no second call here.
         int inventoryUpdated = inventoryPushedCount(product);
+        stampSyncMetafields(gid, true);
+        // A product that did not exist a moment ago now does: drop the cached index so the catalog's
+        // "imported" badge reflects it on the next read instead of waiting out the TTL.
+        indexBuiltAt = null;
         log.info("Imported product {} -> {} ({} variants, {} inventory rows){}",
                 productId, gid, bySku.size(), inventoryUpdated, existingGid != null ? " [updated]" : "");
         return new SyncResult(productId, gid, productNode.path("handle").asText(),
                 existingGid != null, bySku.size(), inventoryUpdated);
+    }
+
+    /**
+     * Per-variant update for a product this app did not create (found via the ps_product_ids index,
+     * typically migrated). No {@code productSet}: only inventory and price of SKU-matched variants
+     * change; title/description/options/unmatched variants stay untouched. {@code ps_source} is
+     * never written here (it is the immutable provenance flag), only {@code ps_last_sync_at}.
+     */
+    private SyncResult updateForeignInPlace(String productId, SupplierProduct product, JsonNode node) {
+        String gid = node.path("id").asText();
+        String handle = node.path("handle").asText();
+        Map<String, VariantRef> bySku = parseVariants(node.path("variants").path("nodes"));
+        int inventoryUpdated = pushInventory(product, bySku);
+        int pricesUpdated = pushPrices(product, gid, bySku);
+        stampSyncMetafields(gid, false);
+        int matched = (int) product.variants().stream().filter(v -> bySku.containsKey(v.sku())).count();
+        if (matched == 0 && !product.variants().isEmpty()) {
+            log.warn("Product {} maps to existing store product {} ({}), but no variant SKU matches — "
+                    + "inventory/price untouched (legacy SKUs differ; variant-level mapping pending)",
+                    productId, gid, handle);
+        } else {
+            log.info("Updated product {} in place -> {} ({}): {} matched variants, {} inventory rows, "
+                    + "{} prices", productId, gid, handle, matched, inventoryUpdated, pricesUpdated);
+        }
+        return new SyncResult(productId, gid, handle, true, matched, inventoryUpdated);
     }
 
     /**
@@ -142,19 +223,122 @@ public class ShopifySyncService {
         return (int) product.variants().stream().filter(v -> v.onHand() != null).count();
     }
 
-    /** Refresh on-hand quantities for an already-imported product. */
+    /** Refresh on-hand quantities for an already-imported (or migrated) product. */
     public int syncInventory(String productId) {
-        SupplierProduct product = catalog.aggregate(productId);
-        return pushInventory(product, requireImported(productId));
+        return refresh(productId, Kind.INVENTORY, false, true).updated();
     }
 
-    /** Recompute and push variant prices for an already-imported product. */
+    /** Recompute and push variant prices for an already-imported (or migrated) product. */
     public int syncPricing(String productId) {
-        SupplierProduct product = catalog.aggregate(productId);
-        JsonNode existing = findByHandleOrThrow(productId);
+        int updated = refresh(productId, Kind.PRICE, false, true).updated();
+        log.info("Synced prices for {}: {} variants", productId, updated);
+        return updated;
+    }
+
+    /** What a refresh did, or why it did nothing. */
+    public enum Outcome {
+        /** Values differed and Shopify accepted the push. */
+        PUSHED,
+        /** The supplier's values match what was last pushed — nothing to do. */
+        UNCHANGED,
+        /** Would have pushed, but this was a dry run. */
+        WOULD_PUSH,
+        /** Previous attempts failed; still inside the retry backoff window. */
+        BACKING_OFF,
+        /** The push was attempted and failed; the product stays due. */
+        FAILED,
+        /** Sync bookkeeping is unreachable, so pushing would be flying blind. Skipped on purpose. */
+        STATE_UNAVAILABLE
+    }
+
+    /** @param updated variants actually written; zero for every outcome other than PUSHED. */
+    public record RefreshResult(String productId, Kind kind, Outcome outcome, int updated, String error) {
+    }
+
+    /**
+     * Pushes a product's inventory or prices <b>only when they differ from what was last pushed</b>.
+     *
+     * <p>This is what makes scheduled syncing affordable. The comparison is against the stored digest
+     * of the previous push, not against Shopify, so an unchanged product costs its supplier read and
+     * <em>zero</em> Shopify calls — where the old behaviour spent two or three mutations per product
+     * per run, on ~943 products, every 30 minutes.
+     *
+     * <p>Ordering matters for correctness: the digest is written only after Shopify accepts the
+     * mutation. Writing it earlier would mark a failed push as done and the product would never
+     * retry.
+     *
+     * @param force skip the digest check and push regardless — what a person clicking "Sync" means
+     */
+    public RefreshResult refresh(String productId, Kind kind, boolean dryRun, boolean force) {
+        // One instance runs the scheduler, so an in-process lock is enough to stop a manual sync and
+        // a cron pass from pushing the same product at once. A second instance would need a lease in
+        // the database (see POSTGRES-PLAN.md).
+        synchronized (lockFor(productId)) {
+            SyncStateStore store = syncStates.getIfAvailable();
+            SyncStateStore.State state = null;
+            if (store != null) {
+                try {
+                    state = store.find(productId, kind).orElse(null);
+                } catch (RuntimeException e) {
+                    // Never treat "cannot read state" as "nothing was ever pushed": that would turn a
+                    // database blip into a full-catalog write storm.
+                    log.warn("Sync state unavailable for {} ({}): {}", productId, kind, e.getMessage());
+                    return new RefreshResult(productId, kind, Outcome.STATE_UNAVAILABLE, 0, e.getMessage());
+                }
+            }
+            if (!force && state != null && state.isBackingOff(Instant.now())) {
+                return new RefreshResult(productId, kind, Outcome.BACKING_OFF, 0, null);
+            }
+
+            SupplierProduct product = catalog.aggregate(productId);
+            String digest = kind == Kind.PRICE
+                    ? SyncDigest.forPrices(product, pricingPolicy, props.currency())
+                    : SyncDigest.forInventory(product, shopify.locationId());
+
+            if (!force && state != null && digest.equals(state.payloadHash())) {
+                return new RefreshResult(productId, kind, Outcome.UNCHANGED, 0, null);
+            }
+            if (dryRun) {
+                return new RefreshResult(productId, kind, Outcome.WOULD_PUSH, 0, null);
+            }
+
+            try {
+                int updated = push(productId, product, kind);
+                if (store != null) {
+                    store.recordSuccess(productId, kind, digest);
+                }
+                return new RefreshResult(productId, kind, Outcome.PUSHED, updated, null);
+            } catch (RuntimeException e) {
+                if (store != null) {
+                    store.recordFailure(productId, kind, e.getMessage());
+                }
+                if (force) {
+                    throw e;    // a person asked for this one; surface the failure to them
+                }
+                return new RefreshResult(productId, kind, Outcome.FAILED, 0, e.getMessage());
+            }
+        }
+    }
+
+    /** Resolves the store product once and writes whichever side this refresh is responsible for. */
+    private int push(String productId, SupplierProduct product, Kind kind) {
+        JsonNode existing = resolveOrThrow(productId);
         String gid = existing.path("id").asText();
         Map<String, VariantRef> bySku = parseVariants(existing.path("variants").path("nodes"));
+        int updated = kind == Kind.PRICE
+                ? pushPrices(product, gid, bySku)
+                : pushInventory(product, bySku);
+        stampSyncMetafields(gid, false);
+        return updated;
+    }
 
+    /** Fixed set of locks striped by product id — bounded, unlike a lock per product id. */
+    private Object lockFor(String productId) {
+        int index = Math.floorMod(productId.toUpperCase(Locale.ROOT).hashCode(), productLocks.length);
+        return productLocks[index];
+    }
+
+    private int pushPrices(SupplierProduct product, String gid, Map<String, VariantRef> bySku) {
         List<Map<String, Object>> updates = new ArrayList<>();
         for (Variant v : product.variants()) {
             VariantRef ref = bySku.get(v.sku());
@@ -169,28 +353,208 @@ public class ShopifySyncService {
         JsonNode data = gql.execute(ShopifyGraphQL.VARIANTS_BULK_UPDATE,
                 Map.of("productId", gid, "variants", updates));
         checkUserErrors(require(data).path("productVariantsBulkUpdate"), "productVariantsBulkUpdate");
-        log.info("Synced prices for {}: {} variants", productId, updates.size());
         return updates.size();
     }
 
-    /** @return supplier product ids of every product this app has imported (paged via Shopify). */
+    /**
+     * @return every supplier product id covered by a PromoStandards-tagged store product: the
+     * canonical {@code ps_product_id} plus every member of {@code ps_product_ids} (migrated N:1
+     * products cover several). Backs the catalog "imported" badge and the scheduled refreshes.
+     */
     public List<String> listImportedProductIds() {
-        List<String> ids = new ArrayList<>();
+        Map<String, String> byKey = new LinkedHashMap<>();
+        for (ImportedProduct p : listImportedProducts()) {
+            for (String id : p.supplierIds()) {
+                byKey.putIfAbsent(id.toUpperCase(Locale.ROOT), id);
+            }
+        }
+        return new ArrayList<>(byKey.values());
+    }
+
+    /**
+     * Cheap "does the store already cover this supplier id?" for the catalog table: answered from
+     * the cached supplier-id index, which repages Shopify at most once per {@link #INDEX_TTL} (and
+     * once for the whole burst, not once per caller). The catalog list refreshes the index up front,
+     * so the per-row detail calls behind it normally cost <b>zero</b> Shopify requests.
+     *
+     * @return whether the id is imported, or {@code null} when Shopify isn't configured and no index
+     * could be built (the console renders that as "—", i.e. unknown).
+     */
+    public Boolean isImported(String productId) {
+        Map<String, ImportedProduct> index = cachedIndexOrNull();
+        return index == null ? null : index.containsKey(productId.toUpperCase(Locale.ROOT));
+    }
+
+    /** @return the supplier-id index (refreshed if stale), or null when unconfigured/never built. */
+    private Map<String, ImportedProduct> cachedIndexOrNull() {
+        if (shopify.storeDomain() == null || shopify.storeDomain().isBlank()) {
+            return null;
+        }
+        try {
+            return ensureIndex(false);
+        } catch (RuntimeException e) {
+            log.warn("Could not list imported products from Shopify: {}", e.getMessage());
+            return supplierIdIndex;  // a stale answer beats hammering a failing store per row
+        }
+    }
+
+    /**
+     * @return the supplier-id index, repaging Shopify only when it is missing, stale, or
+     * {@code force}d. Concurrent callers share a single pass rather than each starting their own.
+     */
+    private Map<String, ImportedProduct> ensureIndex(boolean force) {
+        if (!force && isIndexFresh()) {
+            return supplierIdIndex;
+        }
+        synchronized (indexLock) {
+            // Another thread may have rebuilt it while we waited on the lock.
+            if (!force && isIndexFresh()) {
+                return supplierIdIndex;
+            }
+            listImportedProducts();
+            return supplierIdIndex;
+        }
+    }
+
+    private boolean isIndexFresh() {
+        Map<String, ImportedProduct> index = supplierIdIndex;
+        Instant builtAt = indexBuiltAt;
+        return index != null && builtAt != null && builtAt.plus(INDEX_TTL).isAfter(Instant.now());
+    }
+
+    /**
+     * @return every tagged store product, or an empty list when Shopify is unconfigured or
+     * unreachable — for callers where store data is an enrichment, not a requirement (e.g. the
+     * catalog group index deriving families from migrated {@code ps_product_ids} lists).
+     */
+    List<ImportedProduct> importedProductsOrEmpty() {
+        if (shopify.storeDomain() == null || shopify.storeDomain().isBlank()) {
+            return List.of();
+        }
+        try {
+            return listImportedProducts();
+        } catch (RuntimeException e) {
+            log.warn("Could not list imported products from Shopify: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    /** Pages every tagged store product and refreshes the supplier-id index as a side effect. */
+    private List<ImportedProduct> listImportedProducts() {
+        List<ImportedProduct> products = new ArrayList<>();
         String cursor = null;
         do {
             Map<String, Object> vars = cursor == null ? Map.of() : Map.of("cursor", cursor);
-            JsonNode products = require(gql.execute(ShopifyGraphQL.IMPORTED_PRODUCTS, vars)).path("products");
-            for (JsonNode node : products.path("nodes")) {
-                String psId = node.path("metafield").path("value").asText(null);
-                if (psId != null && !psId.isBlank()) {
-                    ids.add(psId);
+            JsonNode page = require(gql.execute(ShopifyGraphQL.IMPORTED_PRODUCTS, vars)).path("products");
+            for (JsonNode node : page.path("nodes")) {
+                String canonical = node.path("psId").path("value").asText(null);
+                List<String> ids = new ArrayList<>();
+                if (canonical != null && !canonical.isBlank()) {
+                    ids.add(canonical);
                 }
+                for (String id : parseIdList(node.path("psIds").path("value").asText(null))) {
+                    if (ids.stream().noneMatch(id::equalsIgnoreCase)) {
+                        ids.add(id);
+                    }
+                }
+                if (ids.isEmpty()) {
+                    continue;
+                }
+                products.add(new ImportedProduct(node.path("id").asText(null),
+                        node.path("handle").asText(null), canonical, List.copyOf(ids),
+                        node.path("psSource").path("value").asText(null)));
             }
-            JsonNode pageInfo = products.path("pageInfo");
+            JsonNode pageInfo = page.path("pageInfo");
             cursor = pageInfo.path("hasNextPage").asBoolean(false)
                     ? pageInfo.path("endCursor").asText(null) : null;
         } while (cursor != null);
+
+        Map<String, ImportedProduct> index = new LinkedHashMap<>();
+        for (ImportedProduct p : products) {
+            for (String id : p.supplierIds()) {
+                index.putIfAbsent(id.toUpperCase(Locale.ROOT), p);
+            }
+        }
+        supplierIdIndex = index;
+        indexBuiltAt = Instant.now();
+        return products;
+    }
+
+    /** A list metafield value is a JSON array ({@code ["A","B"]}); tolerate a plain CSV string too. */
+    private List<String> parseIdList(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return List.of();
+        }
+        List<String> ids = new ArrayList<>();
+        if (raw.stripLeading().startsWith("[")) {
+            try {
+                for (JsonNode e : objectMapper.readTree(raw)) {
+                    if (e.isTextual() && !e.asText().isBlank()) {
+                        ids.add(e.asText().strip());
+                    }
+                }
+                return ids;
+            } catch (Exception e) {
+                log.warn("Unparseable ps_product_ids value {}: {}", raw, e.getMessage());
+            }
+        }
+        for (String part : raw.split(",")) {
+            if (!part.isBlank()) {
+                ids.add(part.strip());
+            }
+        }
         return ids;
+    }
+
+    /**
+     * @return the store product (with variants) covering {@code productId} per the supplier-id
+     * index — i.e. a product this app did not create under its own handle — or {@code null}.
+     * A stale index hit (product deleted since the last page) forces one rebuild before giving up.
+     */
+    private JsonNode findForeign(String productId) {
+        ImportedProduct match = indexLookup(productId, false);
+        if (match == null) {
+            return null;
+        }
+        JsonNode node = findByHandle(match.handle());
+        if (node == null) {
+            match = indexLookup(productId, true);
+            node = match == null ? null : findByHandle(match.handle());
+        }
+        return node;
+    }
+
+    private ImportedProduct indexLookup(String productId, boolean forceRebuild) {
+        return ensureIndex(forceRebuild).get(productId.toUpperCase(Locale.ROOT));
+    }
+
+    /**
+     * Stamps {@code custom.ps_last_sync_at} (every sync) and, for app-created products only,
+     * {@code custom.ps_source=app}. Never called with {@code appOwned} for foreign/migrated products
+     * — their {@code ps_source=migration} is immutable. Failures warn, never fail the sync.
+     */
+    private void stampSyncMetafields(String productGid, boolean appOwned) {
+        List<Map<String, Object>> metafields = new ArrayList<>();
+        metafields.add(Map.of(
+                "ownerId", productGid,
+                "namespace", ShopifyProductMapper.METAFIELD_NAMESPACE,
+                "key", ShopifyProductMapper.MF_LAST_SYNC_AT,
+                "type", "date_time",
+                "value", Instant.now().truncatedTo(ChronoUnit.SECONDS).toString()));
+        if (appOwned) {
+            metafields.add(Map.of(
+                    "ownerId", productGid,
+                    "namespace", ShopifyProductMapper.METAFIELD_NAMESPACE,
+                    "key", ShopifyProductMapper.MF_SOURCE,
+                    "type", "single_line_text_field",
+                    "value", ShopifyProductMapper.SOURCE_APP));
+        }
+        try {
+            JsonNode data = gql.execute(ShopifyGraphQL.METAFIELDS_SET, Map.of("metafields", metafields));
+            checkUserErrors(require(data).path("metafieldsSet"), "metafieldsSet");
+        } catch (RuntimeException e) {
+            log.warn("Could not stamp sync metafields on {}: {}", productGid, e.getMessage());
+        }
     }
 
     /** @return the existing product node by handle (exact match), or {@code null} if not found. */
@@ -207,16 +571,16 @@ public class ShopifySyncService {
         return null;
     }
 
-    private JsonNode findByHandleOrThrow(String productId) {
+    /** App handle first, then the migrated-product index; throws when neither knows the id. */
+    private JsonNode resolveOrThrow(String productId) {
         JsonNode existing = findByHandle(mapper.handle(productId));
+        if (existing == null) {
+            existing = findForeign(productId);
+        }
         if (existing == null) {
             throw new ShopifySyncException("product " + productId + " has not been imported yet");
         }
         return existing;
-    }
-
-    private Map<String, VariantRef> requireImported(String productId) {
-        return parseVariants(findByHandleOrThrow(productId).path("variants").path("nodes"));
     }
 
     private int pushInventory(SupplierProduct product, Map<String, VariantRef> bySku) {

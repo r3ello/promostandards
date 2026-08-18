@@ -39,7 +39,18 @@ public class StubPricingClient implements PricingClient {
 				new PartPrice(productId + "-BLU", "Blue colorway", List.of(
 						new PriceBreak(12, new BigDecimal("9.50"), new BigDecimal("12.00"), "EA"),
 						new PriceBreak(48, new BigDecimal("8.25"), new BigDecimal("12.00"), "EA"))));
-		return new Configuration(productId, currency, priceType, partPrices);
+		// Two imprint locations, mirroring the shapes the real service sends: a rectangular area
+		// (height x width) and a circular one (diameter), plus a stitch-count method.
+		List<Configuration.Location> locations = List.of(
+				new Configuration.Location(1, "Front Center", true, 1, 1, 2, List.of(
+						new Configuration.Decoration(10, "Screen Print", "Rectangular",
+								new BigDecimal("3.00"), new BigDecimal("4.50"), null, "Inches", true),
+						new Configuration.Decoration(11, "Embroidery", "Rectangular",
+								new BigDecimal("2.50"), new BigDecimal("3.50"), null, "Stitches", false))),
+				new Configuration.Location(2, "Left Sleeve", false, 0, 1, 1, List.of(
+						new Configuration.Decoration(12, "Laser Engrave", "Circle",
+								null, null, new BigDecimal("2.00"), "Inches", true))));
+		return new Configuration(productId, currency, priceType, partPrices, locations);
 	}
 
 	@Override

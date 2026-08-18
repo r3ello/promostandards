@@ -22,6 +22,14 @@ let statusFilter = 'all';
 let page = 0;
 let pageSize = 25;
 
+// --- variant grouping --------------------------------------------------
+// When on, sibling product ids the supplier split by size (linked via Common Grouping) collapse
+// into one row; the group index comes from GET /api/catalog/product-groups (cached server-side).
+let grouping = false;
+let primaryOf = new Map();       // memberId -> primaryId (present only for grouped ids)
+let membersOf = new Map();       // primaryId -> [memberIds...] (sorted, includes the primary)
+let groupPollTimer = null;
+
 // --- API ---------------------------------------------------------------
 async function api(url, method = 'GET', payload) {
 	const opts = { method, headers: { Accept: 'application/json' } };
@@ -129,16 +137,26 @@ async function doLogout() {
 	showLogin();
 }
 
-// concurrency-limited scheduler so lazy enrichment never floods the supplier
+// Concurrency-limited scheduler so lazy enrichment never floods the supplier.
+//
+// Row enrichment is also GENERATION-scoped: every render bumps `generation`, and queued-but-not-yet-
+// started row tasks from older generations are dropped instead of run. Without this, each keystroke
+// in the search box appended another page of products to a FIFO queue that only drains 5 at a time,
+// so the rows you were actually looking at waited behind dozens of obsolete requests. Tasks queued
+// without a generation (a user-opened detail panel) are never cancelled.
 const MAX_CONCURRENT = 5;
+const CANCELLED = Symbol('cancelled');
 let active = 0;
+let generation = 0;
 const waiting = [];
-function schedule(task) {
-	return new Promise((resolve, reject) => { waiting.push({ task, resolve, reject }); drain(); });
+
+function schedule(task, gen) {
+	return new Promise((resolve, reject) => { waiting.push({ task, gen, resolve, reject }); drain(); });
 }
 function drain() {
 	while (active < MAX_CONCURRENT && waiting.length) {
-		const { task, resolve, reject } = waiting.shift();
+		const { task, gen, resolve, reject } = waiting.shift();
+		if (gen !== undefined && gen !== generation) { reject(CANCELLED); continue; }
 		active++;
 		task().then(resolve, reject).finally(() => { active--; drain(); });
 	}
@@ -160,23 +178,108 @@ async function loadCatalog() {
 	meta.textContent = 'Querying supplier…';
 	try {
 		const data = await api('/api/catalog/products') || [];
-		entries = data.map((e) => ({ productId: e.productId, imported: e.imported }));
+		entries = data.map((e) => ({ productId: e.productId, imported: e.imported, closeOut: e.closeOut }));
 		loaded = true;
 		page = 0;
 		updateShopifyStatus();
 		renderTable();
+		ensureTitles();
+		if (grouping) ensureGroups();
 	} catch (e) {
 		body.innerHTML = `<tr class="row-state"><td colspan="9"><div class="state state--err">⚠ ${esc(e.message)}</div></td></tr>`;
 		meta.textContent = 'Error';
 	}
 }
 
+// --- title index -------------------------------------------------------
+// Names/vendors for the WHOLE catalog in one cached call, so the search box matches product names
+// locally instead of only the ids (and the names of rows you happened to scroll past). Rows also
+// show their real name immediately, before the expensive per-row detail arrives.
+let titlePollTimer = null;
+
+async function ensureTitles() {
+	try {
+		const v = await api('/api/catalog/product-titles');
+		applyTitles(v);
+		if (v.status === 'building') scheduleTitlePoll(); else renderTable({ enrich: false });
+	} catch (e) {
+		/* titles are an enrichment: on failure the search box still matches ids */
+	}
+}
+
+function applyTitles(v) {
+	const byId = new Map((v && v.titles || []).map((t) => [t.productId, t]));
+	entries.forEach((e) => {
+		const t = byId.get(e.productId);
+		if (t) { e.title = t.title; e.vendor = t.vendor; }
+	});
+}
+
+function scheduleTitlePoll() {
+	clearTimeout(titlePollTimer);
+	titlePollTimer = setTimeout(async () => {
+		try {
+			const v = await api('/api/catalog/product-titles');
+			applyTitles(v);
+			if (v.status === 'building') scheduleTitlePoll(); else renderTable({ enrich: false });
+		} catch (e) { /* stop polling on error */ }
+	}, 2500);
+}
+
+// --- group index -------------------------------------------------------
+function setGrouping(on) {
+	grouping = on;
+	page = 0;
+	if (on) ensureGroups(); else { clearTimeout(groupPollTimer); renderTable(); }
+}
+
+// Fetch the cached group index. The first call may return status=building (the server is doing the
+// one-getProduct-per-product pass); we poll until ready, showing the flat list meanwhile.
+async function ensureGroups() {
+	try {
+		const v = await api('/api/catalog/product-groups');
+		applyGroupView(v);
+		renderTable();
+		if (v.status === 'building') { meta.textContent = 'Building group index…'; scheduleGroupPoll(); }
+	} catch (e) {
+		toast('Grouping unavailable: ' + e.message, true);
+		grouping = false; const t = el('groupToggle'); if (t) t.checked = false;
+		renderTable();
+	}
+}
+
+function applyGroupView(v) {
+	primaryOf = new Map();
+	membersOf = new Map();
+	(v && v.groups || []).forEach((g) => {
+		membersOf.set(g.primaryId, g.memberIds);
+		g.memberIds.forEach((id) => primaryOf.set(id, g.primaryId));
+	});
+}
+
+function scheduleGroupPoll() {
+	clearTimeout(groupPollTimer);
+	groupPollTimer = setTimeout(async () => {
+		if (!grouping) return;
+		try {
+			const v = await api('/api/catalog/product-groups');
+			applyGroupView(v);
+			if (v.status === 'building') { meta.textContent = 'Building group index…'; scheduleGroupPoll(); }
+			else renderTable();
+		} catch (e) { /* stop polling on error */ }
+	}, 2500);
+}
+
 // --- filtering + pagination -------------------------------------------
 function filtered() {
 	const q = searchInput.value.trim().toLowerCase();
 	return entries.filter((e) => {
+		// In grouping mode, sibling members fold under their primary row and drop out of the list.
+		if (grouping && primaryOf.has(e.productId) && primaryOf.get(e.productId) !== e.productId) return false;
 		if (q) {
-			const hay = `${e.productId} ${e.detail ? e.detail.title : ''} ${e.detail ? e.detail.vendor : ''}`.toLowerCase();
+			// Name/vendor come from the catalog-wide title index, so searching by name works for
+			// every product — not just the rows whose detail happens to be loaded.
+			const hay = `${e.productId} ${titleOf(e)} ${vendorOf(e) || ''}`.toLowerCase();
 			if (!hay.includes(q)) return false;
 		}
 		if (statusFilter === 'imported') return e.imported === true;
@@ -186,7 +289,9 @@ function filtered() {
 	});
 }
 
-function renderTable() {
+// `enrich: false` paints the rows without queueing any fetches — used while the user is still typing
+// in the search box, so filtering feels instant and the network work waits until they stop.
+function renderTable({ enrich = true } = {}) {
 	if (!loaded) return;
 	const items = filtered();
 	const pages = Math.max(1, Math.ceil(items.length / pageSize));
@@ -203,28 +308,42 @@ function renderTable() {
 	}
 
 	body.innerHTML = slice.map((e) => `<tr class="prod-row ${expanded.has(e.productId) ? 'is-open' : ''}" id="row-${cssId(e.productId)}" data-pid="${esc(e.productId)}">${rowCells(e)}</tr>`).join('');
-	slice.forEach((e) => { if (expanded.has(e.productId)) { const tr = el(`row-${cssId(e.productId)}`); tr.insertAdjacentHTML('afterend', detailRowHtml(e.productId)); fillDetail(e.productId); } });
+	slice.forEach((e) => { if (expanded.has(e.productId)) insertExpansion(e.productId); });
 
 	pager.hidden = false;
 	el('pagerInfo').textContent = `Page ${page + 1} of ${pages} · showing ${slice.length}`;
 	el('prevPage').disabled = page === 0;
 	el('nextPage').disabled = page >= pages - 1;
 
-	enrichVisible(slice);
+	if (enrich) enrichVisible(slice);
 }
 
 // --- row rendering -----------------------------------------------------
+// Detail (loaded lazily per row) wins; the title index covers every other row; the id is the floor.
+const titleOf = (e) => (e.detail && e.detail.title) || e.title || e.productId;
+const vendorOf = (e) => (e.detail && e.detail.vendor) || e.vendor || null;
+
 function rowCells(e) {
 	const d = e.detail;
-	const title = d ? esc(d.title || e.productId) : esc(e.productId);
-	const vendor = d ? esc(d.vendor || '—') : '<span class="skel skel--txt"></span>';
+	const title = esc(titleOf(e));
+	const vendor = vendorOf(e) ? esc(vendorOf(e)) : (d ? '—' : '<span class="skel skel--txt"></span>');
 	const variants = d ? (d.inventory ? d.inventory.length : 0) : '<span class="skel skel--num"></span>';
 	const inv = d ? invCell(d) : '<span class="skel skel--num"></span>';
 	const price = d ? priceRange(d) : '<span class="skel skel--num"></span>';
+	const fam = grouping && membersOf.has(e.productId)
+		? ` <span class="badge badge--neutral fam-badge">◧ ${membersOf.get(e.productId).length} variants</span>` : '';
+	// The supplier lists ids as sellable that its Product Data service has no record for (e.g. GI840).
+	// The row still shows whatever inventory/pricing/media returned — flagged, not failed.
+	const noData = d && d.productDataMissing
+		? ` <span class="badge badge--caution" title="Listed as sellable, but the supplier's Product Data service has no record for this id">No product data</span>` : '';
+	// Close-out is the supplier's OWN discontinued/sell-off flag (getProductCloseOut), known from the
+	// catalog list — unlike "No product data", which only means its Product Data service is silent.
+	const closeOut = e.closeOut
+		? ` <span class="badge badge--critical" title="The supplier lists this product as close-out (being discontinued / sold off)">Close-out</span>` : '';
 	return `
 		<td class="col-expand"><span class="chev">▸</span></td>
 		<td class="col-thumb"><span class="thumb-cell ${d && d.imageUrls && d.imageUrls.length ? '' : 'is-empty'}">${d && d.imageUrls && d.imageUrls.length ? `<img src="${esc(d.imageUrls[0])}" alt="" loading="lazy" onerror="this.closest('.thumb-cell').classList.add('is-empty');this.remove()">` : ''}</span></td>
-		<td><div class="prod-name">${title}</div><div class="prod-id">${esc(e.productId)}</div></td>
+		<td><div class="prod-name">${title}${fam}${closeOut}${noData}</div><div class="prod-id">${esc(e.productId)}</div></td>
 		<td class="muted">${vendor}</td>
 		<td class="num">${variants}</td>
 		<td>${inv}</td>
@@ -239,37 +358,49 @@ function refreshRow(e) {
 }
 
 function actionsHtml(e) {
+	const pid = esc(e.productId);
 	if (e.imported === true) {
 		return `
 			<div class="row-actions">
 				<div class="menu" data-menu>
 					<button class="btn btn--sm" data-act="menu">Sync ▾</button>
 					<div class="menu__list">
-						<button class="menu__item" data-act="inv">Sync inventory</button>
-						<button class="menu__item" data-act="price">Sync price</button>
-						<button class="menu__item" data-act="reimport">Re-import</button>
+						<button class="menu__item" data-act="inv" data-pid="${pid}">Sync inventory</button>
+						<button class="menu__item" data-act="price" data-pid="${pid}">Sync price</button>
+						<button class="menu__item" data-act="reimport" data-pid="${pid}">Re-import</button>
 					</div>
 				</div>
 			</div>`;
 	}
-	return `<div class="row-actions"><button class="btn btn--primary btn--sm" data-act="add">Add to Shopify</button></div>`;
+	return `<div class="row-actions"><button class="btn btn--primary btn--sm" data-act="add" data-pid="${pid}">Add to Shopify</button></div>`;
 }
 
 // --- lazy enrichment ---------------------------------------------------
+// Bumping the generation first drops whatever earlier renders left queued: only the rows on screen
+// right now compete for the 5 slots. Cancelled rows keep their skeleton and re-queue if they come
+// back into view.
 function enrichVisible(slice) {
+	const gen = ++generation;
 	slice.forEach((e) => {
 		if (e.detail || e.inflight || e.error) return;
 		e.inflight = true;
-		schedule(() => api(`/api/catalog/products/${encodeURIComponent(e.productId)}`))
-			.then((d) => { e.detail = d; })
-			.catch((err) => { e.error = err.message; })
-			.finally(() => { e.inflight = false; refreshRow(e); });
+		schedule(() => api(`/api/catalog/products/${encodeURIComponent(e.productId)}`), gen)
+			.then((d) => { e.detail = d; refreshRow(e); })
+			.catch((err) => { if (err !== CANCELLED) { e.error = err.message; refreshRow(e); } })
+			.finally(() => { e.inflight = false; });
 	});
 }
 
 // --- expand/collapse ---------------------------------------------------
 function detailRowHtml(pid) {
 	return `<tr class="detail-row" data-detail="${esc(pid)}"><td colspan="9"><div class="detail" id="detail-${cssId(pid)}"><div class="state"><span class="spinner"></span> Loading detail…</div></div></td></tr>`;
+}
+// A group primary expands into the grouped-variants panel; every other row into its own detail.
+function insertExpansion(pid) {
+	const tr = body.querySelector(`tr.prod-row[data-pid="${cssAttr(pid)}"]`);
+	if (!tr) return;
+	tr.insertAdjacentHTML('afterend', detailRowHtml(pid));
+	if (grouping && membersOf.has(pid)) fillGroupPanel(pid); else fillDetail(pid);
 }
 async function fillDetail(pid) {
 	const node = el(`detail-${cssId(pid)}`);
@@ -291,9 +422,43 @@ function toggleRow(pid) {
 		if (d) d.remove();
 	} else {
 		expanded.add(pid); tr.classList.add('is-open');
-		tr.insertAdjacentHTML('afterend', detailRowHtml(pid));
-		fillDetail(pid);
+		insertExpansion(pid);
 	}
+}
+
+// --- grouped-variants panel -------------------------------------------
+// Shown when a group primary row is expanded: each sibling product id's full detail, stacked, so
+// the "one product split across ids" reads as a single grouped product.
+async function fillGroupPanel(pid) {
+	const node = el(`detail-${cssId(pid)}`);
+	if (!node) return;
+	const members = membersOf.get(pid) || [pid];
+	node.innerHTML = `<div class="sub-title">Grouped variants · ${members.length} product ids form one product</div>
+		<div class="group-members">${members.map((id) => `<div class="group-member" id="gm-${cssId(id)}"><div class="state"><span class="spinner"></span> ${esc(id)}…</div></div>`).join('')}</div>`;
+	members.forEach((id) => enrichMember(id));
+}
+
+async function enrichMember(id) {
+	const node = el(`gm-${cssId(id)}`);
+	if (!node) return;
+	let e = entries.find((x) => x.productId === id);
+	if (!e) { e = { productId: id }; }
+	try {
+		if (!e.detail) e.detail = await schedule(() => api(`/api/catalog/products/${encodeURIComponent(id)}`));
+		node.innerHTML = memberBlockHtml(e);
+	} catch (err) {
+		node.innerHTML = `<div class="state state--err">⚠ ${esc(id)}: ${esc(err.message)}</div>`;
+	}
+}
+
+function memberBlockHtml(e) {
+	const d = e.detail;
+	return `<div class="group-member__head">
+			<div class="group-member__id"><span class="prod-name">${esc(d.title || e.productId)}</span><span class="prod-id">${esc(e.productId)}</span></div>
+			<div class="group-member__figs">${invCell(d)}<span class="price-fig">${priceRange(d)}</span>${syncBadge(e.imported)}</div>
+			${actionsHtml(e)}
+		</div>
+		${detailHtml(d)}`;
 }
 
 function detailHtml(d) {
@@ -349,11 +514,102 @@ function detailHtml(d) {
 			<tbody>${d.charges.map((c) => `<tr><td>${esc(c.name || c.chargeId)}</td><td class="muted">${esc(c.type || '')}</td><td class="num">${c.firstPrice == null ? '—' : money(c.firstPrice)}</td></tr>`).join('')}</tbody>
 		</table></div>` : '';
 
+	const decorations = decorationsHtml(d);
+
+	// Which services came up empty, so a partial answer never reads as "the supplier has nothing".
+	const warnings = (d.warnings || []).length
+		? `<div class="state state--warn">⚠ Partial data — ${d.warnings.map(esc).join(' · ')}</div>` : '';
+
 	return `
+		${warnings}
 		<div class="detail__top">${gallery ? `<div><div class="sub-title">Images</div>${gallery}</div>` : ''}<div>${desc}</div></div>
 		${inventory}
+		${decorations}
 		${pricing}
 		${charges}`;
+}
+
+// --- decoration areas --------------------------------------------------
+// The supplier's imprint locations (Pricing & Configuration's LocationArray): where the product can
+// be decorated, by which method, and how big the area is. Drawn to scale, because "3 x 4.5 in" reads
+// as a number while a shape reads as an imprint area — the thing people otherwise open a PDF for.
+function decorationsHtml(d) {
+	const locations = d.decorationLocations || [];
+	if (!locations.length) return '';
+
+	// Scale shapes only against others measured in the SAME unit: drawing inches and stitches on one
+	// scale would be a lie. Each unit gets its own reference maximum.
+	const maxByUom = new Map();
+	locations.forEach((l) => (l.decorations || []).forEach((x) => {
+		const biggest = Math.max(x.height || 0, x.width || 0, x.diameter || 0);
+		if (biggest > 0) maxByUom.set(x.uom || '', Math.max(maxByUom.get(x.uom || '') || 0, biggest));
+	}));
+
+	// PaceSetter publishes locations and methods but leaves every dimension null (geometry "Other").
+	// With nothing to draw, shape boxes and a per-item "Area not specified" are just noise — fall
+	// back to a compact list and say once, plainly, that the supplier omits the sizes.
+	const hasAnyDimensions = maxByUom.size > 0;
+
+	const cards = locations.map((l) => {
+		const limits = [
+			l.included ? `${l.included} included` : null,
+			l.maxDecoration ? `max ${l.maxDecoration}` : null,
+		].filter(Boolean).join(' · ');
+		const head = `<div class="deco-card__head">
+				<span class="deco-card__name">${esc(l.name || `Location ${l.locationId}`)}</span>
+				${l.isDefault ? '<span class="badge badge--success"><span class="badge__dot"></span>Default</span>' : ''}
+				${limits ? `<span class="muted">${esc(limits)}</span>` : ''}
+			</div>`;
+		const methods = l.decorations || [];
+		const items = hasAnyDimensions
+			? methods.map((x) => {
+				const shape = areaShape(x, maxByUom.get(x.uom || '') || 0);
+				return `<div class="deco-item">
+					${shape ? `<div class="deco-shape">${shape}</div>` : ''}
+					<div class="deco-item__text">
+						<div class="deco-item__name">${methodName(x)}</div>
+						<div class="deco-item__dims">${areaText(x)}</div>
+					</div>
+				</div>`;
+			}).join('')
+			: `<div class="deco-methods">${methods.map((x) => `<span class="deco-chip">${methodName(x)}</span>`).join('')}</div>`;
+		return `<div class="deco-card">${head}
+			<div class="deco-items">${methods.length ? items : '<span class="muted">No decoration methods listed.</span>'}</div>
+		</div>`;
+	}).join('');
+
+	const note = hasAnyDimensions ? ''
+		: `<p class="muted deco-note">The supplier lists these locations and methods but publishes no imprint dimensions for them.</p>`;
+	return `<div><div class="sub-title">Decoration areas</div>${note}<div class="deco-grid">${cards}</div></div>`;
+}
+
+const methodName = (x) => `${esc(x.name || `#${x.decorationId}`)}${x.isDefault ? ' <span class="badge badge--neutral">Default</span>' : ''}`;
+
+/** "3 × 4.5 in" for rectangles, "⌀ 2 in" for circles, "—" when the supplier omits the dimensions. */
+function areaText(x) {
+	const uom = ({ Inches: 'in', SquareInches: 'sq in', Centimeters: 'cm' })[x.uom] || (x.uom || '');
+	const num = (v) => String(parseFloat(v));
+	if (x.diameter) return `⌀ ${num(x.diameter)} ${esc(uom)}`.trim();
+	if (x.height && x.width) return `${num(x.height)} × ${num(x.width)} ${esc(uom)}`.trim();
+	if (x.height || x.width) return `${num(x.height || x.width)} ${esc(uom)}`.trim();
+	return `<span class="muted">Area not specified${uom ? ` (${esc(uom)})` : ''}</span>`;
+}
+
+/** Inline SVG of the imprint area, scaled against the largest area in the same unit. */
+function areaShape(x, maxDim) {
+	const BOX = 58;
+	if (!maxDim) return '';
+	const px = (v) => Math.max(6, Math.round((v / maxDim) * (BOX - 6)));
+	const svg = (inner) => `<svg viewBox="0 0 ${BOX} ${BOX}" width="${BOX}" height="${BOX}" aria-hidden="true">${inner}</svg>`;
+	if (x.diameter) {
+		const r = px(x.diameter) / 2;
+		return svg(`<circle cx="${BOX / 2}" cy="${BOX / 2}" r="${r}" class="deco-shape__fig"/>`);
+	}
+	if (x.height && x.width) {
+		const w = px(x.width), h = px(x.height);
+		return svg(`<rect x="${(BOX - w) / 2}" y="${(BOX - h) / 2}" width="${w}" height="${h}" rx="1" class="deco-shape__fig"/>`);
+	}
+	return '';
 }
 
 // --- actions (sync) ----------------------------------------------------
@@ -611,7 +867,9 @@ body.addEventListener('click', (e) => {
 	const actBtn = e.target.closest('[data-act]');
 	if (actBtn) {
 		e.stopPropagation();
-		const pid = actBtn.closest('tr').dataset.pid;
+		// Buttons carry their own data-pid (needed inside the group panel, whose wrapping row is the
+		// primary's detail row); fall back to the row's pid for normal product rows.
+		const pid = actBtn.dataset.pid || (actBtn.closest('tr.prod-row') || {}).dataset?.pid;
 		const act = actBtn.dataset.act;
 		if (act === 'menu') { toggleMenu(actBtn.closest('[data-menu]')); return; }
 		closeMenus();
@@ -626,8 +884,20 @@ function toggleMenu(menu) { const open = menu.classList.contains('is-open'); clo
 function closeMenus() { document.querySelectorAll('.menu.is-open').forEach((m) => m.classList.remove('is-open')); }
 document.addEventListener('click', (e) => { if (!e.target.closest('[data-menu]')) closeMenus(); });
 
-searchInput.addEventListener('input', () => { page = 0; renderTable(); });
+// Typing filters instantly but defers the fetching: each keystroke cancels the queued enrichment
+// (generation bump) and repaints; only ~300ms after the last keystroke do the surviving rows load.
+// Otherwise "GI840" queued five pages' worth of detail requests to show one product.
+const SEARCH_DEBOUNCE_MS = 300;
+let searchTimer = null;
+searchInput.addEventListener('input', () => {
+	page = 0;
+	generation++;
+	clearTimeout(searchTimer);
+	renderTable({ enrich: false });
+	searchTimer = setTimeout(() => renderTable(), SEARCH_DEBOUNCE_MS);
+});
 el('reloadBtn').addEventListener('click', loadCatalog);
+el('groupToggle').addEventListener('change', (e) => setGrouping(e.target.checked));
 el('statusFilter').addEventListener('click', (e) => {
 	const seg = e.target.closest('.seg'); if (!seg) return;
 	statusFilter = seg.dataset.filter; page = 0;

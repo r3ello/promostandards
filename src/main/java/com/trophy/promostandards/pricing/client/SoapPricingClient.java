@@ -80,7 +80,41 @@ public class SoapPricingClient implements PricingClient {
 			}
 		}
 		String currency = config.getCurrency() != null ? config.getCurrency().value() : request.currency();
-		return new Configuration(config.getProductId(), currency, config.getPriceType(), partPrices);
+		return new Configuration(config.getProductId(), currency, config.getPriceType(), partPrices,
+				toLocations(config.getLocationArray()));
+	}
+
+	/**
+	 * Maps the {@code LocationArray}: the imprint locations and, per location, the decoration methods
+	 * valid there with their imprint-area geometry and dimensions. This is the structured form of
+	 * what suppliers otherwise only publish as a PDF spec sheet.
+	 */
+	private static List<Configuration.Location> toLocations(
+			com.trophy.promostandards.pricing.soap.Configuration.LocationArray locationArray) {
+		List<Configuration.Location> locations = new ArrayList<>();
+		if (locationArray == null) {
+			return locations;
+		}
+		for (var location : locationArray.getLocation()) {
+			List<Configuration.Decoration> decorations = new ArrayList<>();
+			if (location.getDecorationArray() != null) {
+				for (var decoration : location.getDecorationArray().getDecoration()) {
+					decorations.add(new Configuration.Decoration(
+							decoration.getDecorationId(),
+							decoration.getDecorationName(),
+							decoration.getDecorationGeometry(),
+							decoration.getDecorationHeight(),
+							decoration.getDecorationWidth(),
+							decoration.getDecorationDiameter(),
+							decoration.getDecorationUom() != null ? decoration.getDecorationUom().value() : null,
+							Boolean.TRUE.equals(decoration.isDefaultDecoration())));
+				}
+			}
+			locations.add(new Configuration.Location(location.getLocationId(), location.getLocationName(),
+					location.isDefaultLocation(), location.getDecorationsIncluded(),
+					location.getMinDecoration(), location.getMaxDecoration(), decorations));
+		}
+		return locations;
 	}
 
 	@Override

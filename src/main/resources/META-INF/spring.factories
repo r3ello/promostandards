@@ -1,0 +1,4 @@
+# Runs before auto-configuration is evaluated, so it can drop the DataSource/Flyway
+# auto-configurations when sync.persistence.enabled is false (the default).
+org.springframework.boot.env.EnvironmentPostProcessor=\
+com.trophy.promostandards.db.PersistenceAutoConfigurationExcluder

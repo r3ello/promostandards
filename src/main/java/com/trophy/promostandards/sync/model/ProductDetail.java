@@ -20,6 +20,13 @@ import java.util.List;
  * @param inventory   raw inventory variation rows
  * @param pricing     price-break matrix per part (supplier prices) + computed retail
  * @param charges     available charges (setup/run/etc.)
+ * @param decorationLocations imprint locations and the decoration methods valid at each, with their
+ *                    area geometry/dimensions (from Pricing &amp; Configuration's LocationArray)
+ * @param productDataMissing true when the supplier's Product Data service has no record for this id
+ *                    (it is still listed as sellable, and the other services may well have data) —
+ *                    the title then falls back to the product id
+ * @param warnings    human-readable note per service that could not be read, so a partial answer is
+ *                    never mistaken for "the supplier has nothing"
  */
 public record ProductDetail(
         String productId,
@@ -32,8 +39,51 @@ public record ProductDetail(
         Boolean imported,
         List<InventoryRow> inventory,
         List<PricePart> pricing,
-        List<ChargeRow> charges
+        List<ChargeRow> charges,
+        boolean productDataMissing,
+        List<String> warnings,
+        List<DecorationLocation> decorationLocations
 ) {
+
+    /** @return a copy carrying a freshly-read {@code imported} flag (the rest is cacheable). */
+    public ProductDetail withImported(Boolean imported) {
+        return new ProductDetail(productId, title, description, vendor, productType, tags, imageUrls,
+                imported, inventory, pricing, charges, productDataMissing, warnings, decorationLocations);
+    }
+
+    /**
+     * One imprint location and what can be decorated there. The supplier's structured answer to
+     * "where and how big can this be printed" — the data behind their PDF spec sheets.
+     *
+     * @param locationId   supplier location id
+     * @param name         location name (e.g. "Front Center")
+     * @param isDefault    the supplier's default location
+     * @param included     decorations included in the price here
+     * @param minDecoration minimum decorations orderable here
+     * @param maxDecoration maximum decorations orderable here
+     * @param decorations  the methods valid here, each with its imprint area
+     */
+    public record DecorationLocation(int locationId, String name, boolean isDefault, int included,
+                                     int minDecoration, int maxDecoration,
+                                     List<DecorationArea> decorations) {
+    }
+
+    /**
+     * A decoration method and its imprint area. Rectangular areas carry height/width, circular ones
+     * carry a diameter; {@code uom} is what those numbers are in (Inches, Stitches, Colors, …).
+     *
+     * @param decorationId supplier decoration id
+     * @param name         method name (e.g. "Laser Engrave")
+     * @param geometry     {@code Circle}, {@code Rectangular} or {@code Other}
+     * @param height       area height, or null
+     * @param width        area width, or null
+     * @param diameter     area diameter, or null
+     * @param uom          unit the dimensions are expressed in
+     * @param isDefault    the supplier's default method for this location
+     */
+    public record DecorationArea(int decorationId, String name, String geometry, BigDecimal height,
+                                 BigDecimal width, BigDecimal diameter, String uom, boolean isDefault) {
+    }
 
     /**
      * @param partId      supplier part id
