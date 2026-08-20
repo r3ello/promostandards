@@ -20,16 +20,23 @@ public class PricingPolicy {
     }
 
     /**
-     * @param supplierNet supplier net unit price (lowest quantity break)
-     * @param listPrice   supplier list/MAP unit price (may be null)
+     * @param supplierNet supplier net unit price (the price break being published from)
+     * @param listPrice   the supplier's own suggested retail for that same break, or null when it
+     *                    publishes none
      * @return the retail price to publish, or {@code null} if no supplier price is known
      */
     public BigDecimal retailPrice(BigDecimal supplierNet, BigDecimal listPrice) {
+        // The supplier's own retail price wins: it is a real figure (PaceSetter's is exactly what
+        // their public product page shows), and it is published untouched — rounding a stated retail
+        // price to x.99 would quietly disagree with the supplier over every product.
+        if (usesSupplierList() && listPrice != null) {
+            return listPrice.setScale(2, RoundingMode.HALF_UP);
+        }
         if (supplierNet == null) {
             return null;
         }
         BigDecimal price = supplierNet;
-        if (cfg != null && cfg.strategy() == SyncProperties.Pricing.Strategy.MARKUP && cfg.markupPercent() != null) {
+        if (cfg != null && cfg.markupPercent() != null) {
             price = supplierNet.multiply(BigDecimal.ONE.add(cfg.markupPercent().movePointLeft(2)));
         }
         if (cfg != null && cfg.mapFloor() && listPrice != null && price.compareTo(listPrice) < 0) {
@@ -39,6 +46,12 @@ public class PricingPolicy {
             price = roundToNinetyNine(price);
         }
         return price.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    /** @return whether a published supplier retail price should be preferred over the markup. */
+    private boolean usesSupplierList() {
+        return cfg == null || cfg.strategy() == null
+                || cfg.strategy() == SyncProperties.Pricing.Strategy.SUPPLIER_LIST;
     }
 
     /** Rounds to the nearest {@code x.99} at or above the input (e.g. 13.30 → 13.99, 13.00 → 12.99). */

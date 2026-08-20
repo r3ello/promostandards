@@ -1,6 +1,7 @@
 package com.trophy.promostandards.sync;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.trophy.promostandards.config.PromoStandardsProperties;
 import com.trophy.promostandards.db.CatalogRow;
 import com.trophy.promostandards.db.CatalogStore;
 import com.trophy.promostandards.productdata.model.Product;
@@ -50,18 +51,23 @@ public class CatalogTitleIndex {
     private final ObjectMapper objectMapper;
     private final ProductDataService productData;
     private final ObjectProvider<CatalogStore> stores;
+    private final SyncProperties sync;
+    private final PromoStandardsProperties promoStandards;
 
     private volatile Snapshot snapshot = Snapshot.EMPTY;
     private final AtomicBoolean building = new AtomicBoolean(false);
 
     public CatalogTitleIndex(SupplierProductScan scan, CatalogTitleProperties props,
                              ObjectMapper objectMapper, ProductDataService productData,
-                             ObjectProvider<CatalogStore> stores) {
+                             ObjectProvider<CatalogStore> stores, SyncProperties sync,
+                             PromoStandardsProperties promoStandards) {
         this.scan = scan;
         this.props = props;
         this.objectMapper = objectMapper;
         this.productData = productData;
         this.stores = stores;
+        this.sync = sync;
+        this.promoStandards = promoStandards;
     }
 
     /** Immutable point-in-time index; {@code builtAt == null} means "never built". */
@@ -73,8 +79,24 @@ public class CatalogTitleIndex {
         }
     }
 
-    /** Persisted cache shape (status/counts are derived, not stored). */
-    record Persisted(Instant builtAt, List<CatalogTitle> titles) {
+    /**
+     * Persisted cache shape (status/counts are derived, not stored).
+     *
+     * @param source which data this was built from — see {@link #currentSource()}. A cache whose
+     *               source no longer matches is discarded rather than served: without it, a file
+     *               written while running against the in-memory stubs is happily served to a live
+     *               console (four fake products presented as the supplier's catalog), because the
+     *               TTL alone says it is fresh.
+     */
+    record Persisted(String source, Instant builtAt, List<CatalogTitle> titles) {
+    }
+
+    /**
+     * Identifies the data behind a cache file: the supplier it was built for and whether the
+     * PromoStandards clients were the stubs or the real SOAP endpoints.
+     */
+    private String currentSource() {
+        return sync.supplierCode() + "/" + promoStandards.getProductData().getMode();
     }
 
     /**
@@ -115,6 +137,11 @@ public class CatalogTitleIndex {
         }
         try {
             Persisted p = objectMapper.readValue(file.toFile(), Persisted.class);
+            if (!currentSource().equals(p.source())) {
+                log.info("Ignoring catalog title index cache {}: built from '{}', now running '{}'",
+                        file, p.source(), currentSource());
+                return;
+            }
             snapshot = new Snapshot(p.builtAt(), p.titles() == null ? List.of() : p.titles());
             log.info("Loaded catalog title index from {} ({} titles)", file, snapshot.titles().size());
         } catch (IOException e) {
@@ -252,7 +279,8 @@ public class CatalogTitleIndex {
             if (file.getParent() != null) {
                 Files.createDirectories(file.getParent());
             }
-            objectMapper.writeValue(file.toFile(), new Persisted(snap.builtAt(), snap.titles()));
+            objectMapper.writeValue(file.toFile(),
+                    new Persisted(currentSource(), snap.builtAt(), snap.titles()));
         } catch (IOException e) {
             log.warn("Could not write catalog title index cache {}: {}", file, e.getMessage());
         }

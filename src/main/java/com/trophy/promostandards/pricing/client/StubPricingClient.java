@@ -5,6 +5,7 @@ import com.trophy.promostandards.common.ServiceMessage;
 import com.trophy.promostandards.pricing.model.Charge;
 import com.trophy.promostandards.pricing.model.Charge.ChargePrice;
 import com.trophy.promostandards.pricing.model.Configuration;
+import static com.trophy.promostandards.pricing.service.PricingService.PRICE_TYPE_LIST;
 import com.trophy.promostandards.pricing.model.Configuration.PartPrice;
 import com.trophy.promostandards.pricing.model.Configuration.PriceBreak;
 import com.trophy.promostandards.pricing.model.FobPoint;
@@ -26,19 +27,32 @@ import java.util.List;
 		matchIfMissing = true)
 public class StubPricingClient implements PricingClient {
 
+	/** One break at {@code net}, scaled by {@code factor} (1 for Net, 1/0.6 for List). */
+	private static PriceBreak priced(int minQuantity, String net, BigDecimal factor) {
+		BigDecimal price = new BigDecimal(net).multiply(factor)
+				.setScale(2, java.math.RoundingMode.HALF_UP);
+		// listPrice within a break stays null: PromoStandards carries the list price in its own
+		// priceType=List response, not as a second column here (the WSDL has no such field).
+		return new PriceBreak(minQuantity, price, null, "EA");
+	}
+
 	@Override
 	public Configuration getConfigurationAndPricing(GetConfigurationAndPricingRequest request) {
 		String productId = requireProductId(request.productId());
 		String currency = request.currency() == null || request.currency().isBlank() ? "USD" : request.currency();
 		String priceType = request.priceType() == null || request.priceType().isBlank() ? "Net" : request.priceType();
+		// priceType is honoured, as the real service does: Net is what the distributor pays and List
+		// the supplier's suggested retail. PaceSetter's discount is a flat 40% (net = list x 0.6), so
+		// the stub mirrors that ratio. A stub that answered both with the same figures would hide the
+		// worst failure this code can have — publishing the catalog at cost.
+		BigDecimal factor = PRICE_TYPE_LIST.equalsIgnoreCase(priceType)
+				? new BigDecimal("1.00").divide(new BigDecimal("0.60"), 4, java.math.RoundingMode.HALF_UP)
+				: BigDecimal.ONE;
 		List<PartPrice> partPrices = List.of(
 				new PartPrice(productId + "-RED", "Red colorway", List.of(
-						new PriceBreak(12, new BigDecimal("9.50"), new BigDecimal("12.00"), "EA"),
-						new PriceBreak(48, new BigDecimal("8.25"), new BigDecimal("12.00"), "EA"),
-						new PriceBreak(144, new BigDecimal("7.10"), new BigDecimal("12.00"), "EA"))),
+						priced(12, "9.50", factor), priced(48, "8.25", factor), priced(144, "7.10", factor))),
 				new PartPrice(productId + "-BLU", "Blue colorway", List.of(
-						new PriceBreak(12, new BigDecimal("9.50"), new BigDecimal("12.00"), "EA"),
-						new PriceBreak(48, new BigDecimal("8.25"), new BigDecimal("12.00"), "EA"))));
+						priced(12, "9.50", factor), priced(48, "8.25", factor))));
 		// Two imprint locations, mirroring the shapes the real service sends: a rectangular area
 		// (height x width) and a circular one (diameter), plus a stitch-count method.
 		List<Configuration.Location> locations = List.of(

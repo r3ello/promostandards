@@ -230,8 +230,8 @@ public class CatalogSummaryService {
                 List.of());
         // One Pricing call yields two sections: the price-break matrix and the imprint locations.
         CompletableFuture<Configuration> configFuture = section(warnings, "Pricing",
-                () -> pricing.getConfigurationAndPricing(
-                        productId, props.currency(), null, "Net", null, country, language),
+                () -> pricing.getConfigurationAndPricingWithList(
+                        productId, props.currency(), null, null, country, language),
                 null);
         CompletableFuture<List<ChargeRow>> chargesFuture = section(warnings, "Charges",
                 () -> pricing.getAvailableCharges(productId, country, language).stream()

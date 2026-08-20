@@ -42,7 +42,7 @@ class CatalogServicePlaceholderTest {
                 "C1925", "Star Award on Base", "5\" x 5 x 3/4\" Star Award on Base", "NULL",
                 List.of("Acrylic"),
                 List.of(new Product.ProductPart("C1925", "Star Award on Base", "N/A", List.of()))));
-        when(pricing.getConfigurationAndPricing(eq("C1925"), any(), any(), any(), any(), any(), any()))
+        when(pricing.getConfigurationAndPricingWithList(eq("C1925"), any(), any(), any(), any(), any()))
                 .thenReturn(new Configuration("C1925", "USD", "Net", List.of(
                         new Configuration.PartPrice("C1925", "Star Award on Base", List.of(
                                 new Configuration.PriceBreak(1, new BigDecimal("58.26"), null, "BX")))),
@@ -81,7 +81,7 @@ class CatalogServicePlaceholderTest {
         when(productData.getProduct(eq("C0500"), any(), any())).thenReturn(new Product(
                 "C0500", "Plain Award", null, null, List.of(),
                 List.of(new Product.ProductPart("C0500", "Plain Award", "N/A", List.of()))));
-        when(pricing.getConfigurationAndPricing(eq("C0500"), any(), any(), any(), any(), any(), any()))
+        when(pricing.getConfigurationAndPricingWithList(eq("C0500"), any(), any(), any(), any(), any()))
                 .thenReturn(new Configuration("C0500", "USD", "Net", List.of(), List.of()));
         when(inventory.getInventoryLevels(eq("C0500"), any()))
                 .thenReturn(new InventoryLevels("C0500", List.of()));

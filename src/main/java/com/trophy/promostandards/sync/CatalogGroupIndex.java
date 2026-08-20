@@ -1,6 +1,7 @@
 package com.trophy.promostandards.sync;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.trophy.promostandards.config.PromoStandardsProperties;
 import com.trophy.promostandards.db.CatalogStore;
 import com.trophy.promostandards.productdata.model.Product;
 import com.trophy.promostandards.productdata.model.Product.RelatedProduct;
@@ -64,18 +65,23 @@ public class CatalogGroupIndex {
     private final ObjectMapper objectMapper;
     private final ShopifySyncService shopifySync;
     private final ObjectProvider<CatalogStore> stores;
+    private final SyncProperties sync;
+    private final PromoStandardsProperties promoStandards;
 
     private volatile Snapshot snapshot = Snapshot.EMPTY;
     private final AtomicBoolean building = new AtomicBoolean(false);
 
     public CatalogGroupIndex(SupplierProductScan scan, CatalogGroupProperties props,
                              ObjectMapper objectMapper, ShopifySyncService shopifySync,
-                             ObjectProvider<CatalogStore> stores) {
+                             ObjectProvider<CatalogStore> stores, SyncProperties sync,
+                             PromoStandardsProperties promoStandards) {
         this.scan = scan;
         this.props = props;
         this.objectMapper = objectMapper;
         this.shopifySync = shopifySync;
         this.stores = stores;
+        this.sync = sync;
+        this.promoStandards = promoStandards;
     }
 
     /** Immutable point-in-time index; {@code builtAt == null} means "never built". */
@@ -87,8 +93,20 @@ public class CatalogGroupIndex {
         }
     }
 
-    /** Persisted cache shape (status/counts are derived, not stored). */
-    record Persisted(Instant builtAt, List<ProductGroup> groups) {
+    /**
+     * Persisted cache shape (status/counts are derived, not stored).
+     *
+     * @param source which data this was built from — see {@link #currentSource()}. A cache whose
+     *               source no longer matches is discarded: a file written against the in-memory
+     *               stubs would otherwise be served to a live console, since the TTL alone considers
+     *               it fresh.
+     */
+    record Persisted(String source, Instant builtAt, List<ProductGroup> groups) {
+    }
+
+    /** Supplier + client mode, so a stub-built cache is never served to a live run. */
+    private String currentSource() {
+        return sync.supplierCode() + "/" + promoStandards.getProductData().getMode();
     }
 
     /** Warms from the mirror when persistence is on, from the JSON cache otherwise. */
@@ -120,6 +138,11 @@ public class CatalogGroupIndex {
         }
         try {
             Persisted p = objectMapper.readValue(file.toFile(), Persisted.class);
+            if (!currentSource().equals(p.source())) {
+                log.info("Ignoring catalog group index cache {}: built from '{}', now running '{}'",
+                        file, p.source(), currentSource());
+                return;
+            }
             snapshot = new Snapshot(p.builtAt(), p.groups() == null ? List.of() : p.groups());
             log.info("Loaded catalog group index from {} ({} families)", file, snapshot.groups().size());
         } catch (IOException e) {
@@ -326,7 +349,8 @@ public class CatalogGroupIndex {
             if (file.getParent() != null) {
                 Files.createDirectories(file.getParent());
             }
-            objectMapper.writeValue(file.toFile(), new Persisted(snap.builtAt(), snap.groups()));
+            objectMapper.writeValue(file.toFile(),
+                    new Persisted(currentSource(), snap.builtAt(), snap.groups()));
         } catch (IOException e) {
             log.warn("Could not write catalog group index cache {}: {}", file, e.getMessage());
         }

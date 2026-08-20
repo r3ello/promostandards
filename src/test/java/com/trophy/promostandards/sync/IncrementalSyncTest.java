@@ -46,6 +46,8 @@ class IncrementalSyncTest {
     private final List<String> operations = new ArrayList<>();
     private RecordingSyncStateStore state;
     private boolean shopifyFails;
+    /** Payload of the last productVariantsBulkUpdate, so the pushed price can be asserted. */
+    private Object variantsUpdateVariables;
 
     @BeforeEach
     void setUp() {
@@ -92,7 +94,15 @@ class IncrementalSyncTest {
         }
     }
 
+    private ShopifySyncService service(SupplierProduct product, Strategy strategy) {
+        return service(product, strategy, new BigDecimal("40"));
+    }
+
     private ShopifySyncService service(SupplierProduct product) {
+        return service(product, Strategy.MARKUP, new BigDecimal("40"));
+    }
+
+    private ShopifySyncService service(SupplierProduct product, Strategy strategy, BigDecimal markup) {
         ShopifyHttp http = (path, body, headers) -> {
             String query = String.valueOf(((Map<?, ?>) body).get("query"));
             String response;
@@ -115,6 +125,7 @@ class IncrementalSyncTest {
                 }
             } else if (query.contains("VariantsUpdate")) {
                 operations.add("VariantsUpdate");
+                variantsUpdateVariables = ((Map<?, ?>) body).get("variables");
                 response = "{\"data\":{\"productVariantsBulkUpdate\":{\"productVariants\":[],\"userErrors\":[]}}}";
             } else if (query.contains("MetafieldsSet")) {
                 operations.add("MetafieldsSet");
@@ -138,7 +149,7 @@ class IncrementalSyncTest {
 
         SyncProperties props = new SyncProperties("PaceSetter", "USD", "US", "en",
                 SyncProperties.SkuStrategy.PART_SIZE,
-                new Pricing(Strategy.MARKUP, new BigDecimal("40"), Rounding.NONE, false),
+                new Pricing(strategy, markup, Rounding.NONE, false),
                 new SyncProperties.Schedule(false, "-", "-", "-", false), List.of(), null);
         PricingPolicy policy = new PricingPolicy(props);
         CatalogService catalog = mock(CatalogService.class);
@@ -154,6 +165,45 @@ class IncrementalSyncTest {
                 List.of(new Variant("SAMPLE-001-RED", "Red", "S", "SAMPLE-001-RED-S",
                         new BigDecimal("9.50"), new BigDecimal("12.00"), onHand, List.of())),
                 List.of(), List.of());
+    }
+
+    /**
+     * The price that reaches Shopify must be the supplier's retail, never its net.
+     *
+     * <p>The net is what the distributor pays; publishing it would put the whole catalog on sale at
+     * cost. This asserts the value in the actual {@code productVariantsBulkUpdate} payload, not just
+     * what the policy computes, because that is the number customers would have paid.
+     */
+    @Test
+    void pushesTheSupplierRetailPriceToShopifyNotTheNetPrice() {
+        SupplierProduct product = new SupplierProduct("SAMPLE-001", "Sample", null, null, null, List.of(),
+                List.of(new Variant("SAMPLE-001-RED", "Red", "S", "SAMPLE-001-RED-S",
+                        new BigDecimal("88.20"), new BigDecimal("147.00"), 10, List.of())),
+                List.of(), List.of());
+        ShopifySyncService service = service(product, Strategy.SUPPLIER_LIST);
+
+        service.refresh("SAMPLE-001", Kind.PRICE, false, false);
+
+        Map<?, ?> vars = (Map<?, ?>) variantsUpdateVariables;
+        List<?> updates = (List<?>) vars.get("variants");
+        assertThat(updates).singleElement().satisfies(update ->
+                assertThat(((Map<?, ?>) update).get("price")).isEqualTo("147.00"));
+    }
+
+    /** With MARKUP the supplier's retail is deliberately ignored, and the markup applies to the net. */
+    @Test
+    void pushesTheMarkedUpPriceWhenConfiguredForMarkup() {
+        SupplierProduct product = new SupplierProduct("SAMPLE-001", "Sample", null, null, null, List.of(),
+                List.of(new Variant("SAMPLE-001-RED", "Red", "S", "SAMPLE-001-RED-S",
+                        new BigDecimal("88.20"), new BigDecimal("147.00"), 10, List.of())),
+                List.of(), List.of());
+        ShopifySyncService service = service(product, Strategy.MARKUP);
+
+        service.refresh("SAMPLE-001", Kind.PRICE, false, false);
+
+        List<?> updates = (List<?>) ((Map<?, ?>) variantsUpdateVariables).get("variants");
+        assertThat(updates).singleElement().satisfies(update ->
+                assertThat(((Map<?, ?>) update).get("price")).isEqualTo("123.48"));
     }
 
     /** The whole point: the second run of unchanged data costs nothing at Shopify. */

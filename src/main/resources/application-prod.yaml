@@ -19,7 +19,7 @@ promostandards:
     endpoint-url: "${PROMOSTANDARDS_PRODUCT_ENDPOINT:https://pacesetterawards.com/ProductDataService/PaceSetterProductDataWCF.svc}"
     log-messages: false
 
-  # Pricing & Configuration Service 1.0.0
+  # Pricing & Configuration Service 1.0.0deplegue
   pricing:
     mode: soap
     endpoint-url: "${PROMOSTANDARDS_PRICING_ENDPOINT:https://pacesetterawards.com/ProductConfigurationPricing/PacesetterProductConfig_Pricing.svc}"

@@ -70,8 +70,30 @@ public record SyncProperties(
      * @param rounding      price rounding applied after markup
      * @param mapFloor      when true, never price below the supplier list/MAP price
      */
+    /**
+     * How the published retail price is decided.
+     *
+     * @param strategy      see {@link Strategy}
+     * @param markupPercent applied to the supplier's net price; the fallback, not the first choice
+     * @param rounding      applied to a marked-up price only — a supplier's own retail price is
+     *                      published exactly as the supplier states it
+     * @param mapFloor      never publish below the supplier's list price
+     */
     public record Pricing(Strategy strategy, BigDecimal markupPercent, Rounding rounding, boolean mapFloor) {
-        public enum Strategy {MARKUP}
+
+        public enum Strategy {
+            /**
+             * Publish the supplier's own suggested retail (PromoStandards {@code priceType=List})
+             * whenever it publishes one, and fall back to {@link #MARKUP} when it does not.
+             *
+             * <p>The default, because a supplier's published retail is a real number agreed with the
+             * supplier — for PaceSetter it is exactly what their public product page shows — whereas
+             * a markup percentage is a figure someone had to invent.
+             */
+            SUPPLIER_LIST,
+            /** Always compute from the supplier's net price, ignoring any published retail. */
+            MARKUP
+        }
 
         public enum Rounding {NONE, NINETY_NINE}
     }

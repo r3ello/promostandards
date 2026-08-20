@@ -183,11 +183,24 @@ sync:
   language: en
   # Variant SKU strategy: PART (partId) | PART_SIZE (partId-size)
   sku-strategy: PART_SIZE
+  # ---------------------------------------------------------------------------
+  # Retail pricing.
+  #
+  # SUPPLIER_LIST (default): publish the supplier's own suggested retail whenever it publishes one.
+  # PromoStandards returns it from getConfigurationAndPricing with priceType=List — for PaceSetter
+  # that is exactly the price on their public product page (GM668A: net 88.20 -> list 147.00). It is
+  # published untouched: rounding a price the supplier states would disagree with them on every
+  # product. The markup below is only the fallback, for suppliers that publish no retail price.
+  #
+  # MARKUP: ignore any published retail and always compute from the net price.
+  #
+  # Both are environment-overridable so pricing can be retuned without a rebuild.
+  # ---------------------------------------------------------------------------
   pricing:
-    strategy: MARKUP                 # MARKUP (supplier net * (1 + markup))
-    markup-percent: 40               # applied to the supplier net price
-    rounding: NINETY_NINE            # NONE | NINETY_NINE (round up to x.99)
-    map-floor: true                  # never price below the supplier list/MAP price
+    strategy: ${SYNC_PRICING_STRATEGY:SUPPLIER_LIST}   # SUPPLIER_LIST | MARKUP
+    markup-percent: ${SYNC_PRICING_MARKUP_PERCENT:40}  # fallback only: net * (1 + markup)
+    rounding: ${SYNC_PRICING_ROUNDING:NINETY_NINE}     # NONE | NINETY_NINE (applies to the markup path)
+    map-floor: ${SYNC_PRICING_MAP_FLOOR:true}          # never price below the supplier list price
   schedule:
     enabled: false                   # master switch for all scheduled jobs
     inventory-cron: "0 0/30 * * * *" # every 30 min

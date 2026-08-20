@@ -31,6 +31,10 @@ import static org.mockito.Mockito.when;
  */
 class CatalogGroupIndexTest {
 
+    /** Stub-mode properties: the cache fingerprint is "<supplier>/<mode>". */
+    private static final com.trophy.promostandards.config.PromoStandardsProperties PROMO =
+            new com.trophy.promostandards.config.PromoStandardsProperties();
+
     private static final SyncProperties SYNC = new SyncProperties("PaceSetter", "USD", "US", "en",
             SyncProperties.SkuStrategy.PART_SIZE,
             new Pricing(Strategy.MARKUP, new BigDecimal("40"), Rounding.NONE, false),
@@ -65,7 +69,7 @@ class CatalogGroupIndexTest {
         when(pd.getProduct(eq("A3"), any(), any())).thenReturn(product("A3"));
         when(pd.getProduct(eq("B1"), any(), any())).thenReturn(product("B1"));
 
-        CatalogGroupIndex index = new CatalogGroupIndex(new SupplierProductScan(pd, SYNC), PROPS, new ObjectMapper(), noStore(), providerOf(null));
+        CatalogGroupIndex index = new CatalogGroupIndex(new SupplierProductScan(pd, SYNC), PROPS, new ObjectMapper(), noStore(), providerOf(null), SYNC, PROMO);
         List<ProductGroup> groups = index.buildNow().groups();
 
         assertThat(groups).hasSize(1);
@@ -81,7 +85,7 @@ class CatalogGroupIndexTest {
                 new ProductSellable("A2", "A2-x", true)));
         when(pd.getProduct(any(), any(), any())).thenReturn(product("x"));
 
-        CatalogGroupIndex index = new CatalogGroupIndex(new SupplierProductScan(pd, SYNC), PROPS, new ObjectMapper(), noStore(), providerOf(null));
+        CatalogGroupIndex index = new CatalogGroupIndex(new SupplierProductScan(pd, SYNC), PROPS, new ObjectMapper(), noStore(), providerOf(null), SYNC, PROMO);
 
         assertThat(index.buildNow().groups()).isEmpty();
     }
@@ -103,7 +107,7 @@ class CatalogGroupIndexTest {
                 new ShopifySyncService.ImportedProduct("gid://shopify/Product/900", "p-8123-x",
                         "a1", List.of("a1", "a2", "ZZ"), "migration")));
 
-        CatalogGroupIndex index = new CatalogGroupIndex(new SupplierProductScan(pd, SYNC), PROPS, new ObjectMapper(), shopifySync, providerOf(null));
+        CatalogGroupIndex index = new CatalogGroupIndex(new SupplierProductScan(pd, SYNC), PROPS, new ObjectMapper(), shopifySync, providerOf(null), SYNC, PROMO);
         List<ProductGroup> groups = index.buildNow().groups();
 
         assertThat(groups).hasSize(1);

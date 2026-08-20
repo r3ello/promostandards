@@ -45,4 +45,58 @@ class PricingPolicyTest {
         PricingPolicy policy = policy(new Pricing(Strategy.MARKUP, new BigDecimal("40"), Rounding.NONE, false));
         assertThat(policy.retailPrice(null, new BigDecimal("12.00"))).isNull();
     }
+
+    // --- SUPPLIER_LIST: the supplier's own retail price wins ------------------------------------
+
+    /**
+     * Real PaceSetter figures for GM668A: net 88.20, and a published retail of 147.00 that matches
+     * their public product page exactly. The invented 40% markup would have published 123.99 —
+     * under the supplier's own suggested price.
+     */
+    @Test
+    void publishesTheSupplierRetailPriceWhenThereIsOne() {
+        PricingPolicy policy = policy(
+                new Pricing(Strategy.SUPPLIER_LIST, new BigDecimal("40"), Rounding.NINETY_NINE, true));
+
+        assertThat(policy.retailPrice(new BigDecimal("88.20"), new BigDecimal("147.00")))
+                .isEqualByComparingTo("147.00");
+    }
+
+    /** A stated retail price is published as stated: rounding it would disagree with the supplier. */
+    @Test
+    void doesNotRoundTheSupplierRetailPrice() {
+        PricingPolicy policy = policy(
+                new Pricing(Strategy.SUPPLIER_LIST, new BigDecimal("40"), Rounding.NINETY_NINE, false));
+
+        assertThat(policy.retailPrice(new BigDecimal("50.00"), new BigDecimal("123.00")))
+                .isEqualByComparingTo("123.00");
+    }
+
+    /** No published retail (PaceSetter leaves most of the catalog without one) -> the markup. */
+    @Test
+    void fallsBackToTheMarkupWhenTheSupplierPublishesNoRetailPrice() {
+        PricingPolicy policy = policy(
+                new Pricing(Strategy.SUPPLIER_LIST, new BigDecimal("40"), Rounding.NINETY_NINE, false));
+
+        assertThat(policy.retailPrice(new BigDecimal("9.50"), null)).isEqualByComparingTo("13.99");
+    }
+
+    /** MARKUP stays available for whoever wants to ignore the supplier's retail price. */
+    @Test
+    void markupStrategyIgnoresThePublishedRetailPrice() {
+        PricingPolicy policy = policy(
+                new Pricing(Strategy.MARKUP, new BigDecimal("40"), Rounding.NONE, false));
+
+        assertThat(policy.retailPrice(new BigDecimal("88.20"), new BigDecimal("147.00")))
+                .isEqualByComparingTo("123.48");
+    }
+
+    /** An unset strategy must not silently ignore the supplier's price. */
+    @Test
+    void defaultsToTheSupplierRetailPrice() {
+        PricingPolicy policy = policy(new Pricing(null, new BigDecimal("40"), Rounding.NONE, false));
+
+        assertThat(policy.retailPrice(new BigDecimal("88.20"), new BigDecimal("147.00")))
+                .isEqualByComparingTo("147.00");
+    }
 }

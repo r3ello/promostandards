@@ -66,8 +66,9 @@ public class CatalogService {
         String language = props.language();
 
         Product product = productData.getProduct(productId, country, language);
-        Configuration config = pricing.getConfigurationAndPricing(
-                productId, props.currency(), null, "Net", null, country, language);
+        // Net + the supplier's published retail, so PricingPolicy can prefer the latter.
+        Configuration config = pricing.getConfigurationAndPricingWithList(
+                productId, props.currency(), null, null, country, language);
         InventoryLevels levels = inventory.getInventoryLevels(productId, null);
 
         // Pricing: lowest-break price per part id, plus the single-entry fallback.
@@ -170,7 +171,7 @@ public class CatalogService {
     }
 
     private static String key(String color, String size) {
-        return (color == null ? "" : color) + " " + (size == null ? "" : size);
+        return (color == null ? "" : color) + " " + (size == null ? "" : size);
     }
 
     /** true when inventory-backed {@code b} carries at least {@code a}'s colour/size for the same part. */

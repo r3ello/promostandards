@@ -49,9 +49,11 @@ class CatalogApiTest {
                 // Raw inventory variation rows (3 from the stub), not collapsed.
                 .andExpect(jsonPath("$.inventory.length()").value(3))
                 .andExpect(jsonPath("$.inventory[?(@.partId=='SAMPLE-001-RED-S')].onHand").value(1200))
-                // Full price-break matrix per part, plus computed retail (9.50 net * 1.40 -> 13.30 -> .99 = 13.99).
+                // Full price-break matrix per part, plus the published retail. The supplier states one
+                // (stub: net 9.50 with a 40% distributor discount -> list 15.83), so it is published as
+                // stated rather than derived from the markup.
                 .andExpect(jsonPath("$.pricing[?(@.partId=='SAMPLE-001-RED')].breaks.length()").value(3))
-                .andExpect(jsonPath("$.pricing[?(@.partId=='SAMPLE-001-RED')].retail").value(13.99))
+                .andExpect(jsonPath("$.pricing[?(@.partId=='SAMPLE-001-RED')].retail").value(15.83))
                 // Charges from getAvailableCharges (stub returns SETUP-EMB, RUN-EMB).
                 .andExpect(jsonPath("$.charges.length()").value(2))
                 // Every service answered, so nothing is flagged as degraded.

@@ -37,7 +37,8 @@ class CatalogServiceTest {
         assertThat(redS.color()).isEqualTo("Red");
         assertThat(redS.size()).isEqualTo("S");
         assertThat(redS.supplierNet()).isEqualByComparingTo(new BigDecimal("9.50")); // lowest break
-        assertThat(redS.listPrice()).isEqualByComparingTo(new BigDecimal("12.00"));
+        // The supplier's own suggested retail, fetched with priceType=List (net 9.50 / 0.60).
+        assertThat(redS.listPrice()).isEqualByComparingTo(new BigDecimal("15.83"));
         assertThat(redS.onHand()).isEqualTo(1200);
         assertThat(redS.imageUrls()).containsExactly("https://cdn.example.com/SAMPLE-001/red-front.jpg");
 

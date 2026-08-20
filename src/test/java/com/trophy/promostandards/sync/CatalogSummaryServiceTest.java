@@ -83,7 +83,7 @@ class CatalogSummaryServiceTest {
                 List.of(new PartInventory(productId + "-CLR", "Clear acrylic", null, 42,
                         "Clear", "5.75 X 5", null, null))));
         when(media.getMediaContent(eq(productId), anyString(), any())).thenReturn(List.of());
-        when(pricing.getConfigurationAndPricing(eq(productId), anyString(), any(), anyString(), any(),
+        when(pricing.getConfigurationAndPricingWithList(eq(productId), anyString(), any(), any(),
                 anyString(), anyString()))
                 .thenReturn(new Configuration(productId, "USD", "Net", List.of(), List.of()));
         when(pricing.getAvailableCharges(eq(productId), anyString(), anyString())).thenReturn(List.of());
@@ -128,7 +128,7 @@ class CatalogSummaryServiceTest {
         when(inventory.getInventoryLevels(eq(productId), any()))
                 .thenReturn(new InventoryLevels(productId, List.of()));
         when(media.getMediaContent(eq(productId), anyString(), any())).thenReturn(List.of());
-        when(pricing.getConfigurationAndPricing(eq(productId), anyString(), any(), anyString(), any(),
+        when(pricing.getConfigurationAndPricingWithList(eq(productId), anyString(), any(), any(),
                 anyString(), anyString()))
                 .thenReturn(new Configuration(productId, "USD", "Net", List.of(), List.of()));
         when(pricing.getAvailableCharges(eq(productId), anyString(), anyString())).thenReturn(List.of());
@@ -152,8 +152,8 @@ class CatalogSummaryServiceTest {
 
         verify(productData, times(1)).getProduct(eq("GI840"), anyString(), anyString());
         verify(inventory, times(1)).getInventoryLevels(eq("GI840"), any());
-        verify(pricing, times(1)).getConfigurationAndPricing(eq("GI840"), anyString(), any(),
-                anyString(), any(), anyString(), anyString());
+        verify(pricing, times(1)).getConfigurationAndPricingWithList(eq("GI840"), anyString(), any(),
+                any(), anyString(), anyString());
     }
 
     // --- catalog mirror ------------------------------------------------------------------------
