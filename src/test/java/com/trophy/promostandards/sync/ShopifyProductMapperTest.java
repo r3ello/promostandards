@@ -49,14 +49,14 @@ class ShopifyProductMapperTest {
                                 new BigDecimal("10.00"), new BigDecimal("12.00"), 0,
                                 List.of("https://cdn.example.com/blue.jpg"))),
                 List.of("https://cdn.example.com/red.jpg", "https://cdn.example.com/blue.jpg"),
-                priceParts());
+                priceParts(), List.of());
     }
 
     private static SupplierProduct singleNullColorVariant() {
         return new SupplierProduct("C073A", "Walnut Plaque", null, null, null, List.of(),
                 List.of(new Variant("C073A", null, null, "C073A",
                         new BigDecimal("125.00"), new BigDecimal("125.00"), null, List.of())),
-                List.of(), List.of());
+                List.of(), List.of(), List.of());
     }
 
     @Test

@@ -28,7 +28,7 @@ class SyncDigestTest {
 
     private static SupplierProduct product(List<Variant> variants) {
         return new SupplierProduct("SAMPLE-001", "Sample", null, null, null, List.of(),
-                variants, List.of(), List.of());
+                variants, List.of(), List.of(), List.of());
     }
 
     private static Variant variant(String sku, String net, Integer onHand) {

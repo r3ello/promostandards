@@ -45,7 +45,7 @@ class SyncApiTest {
     @Test
     void importProductReturnsResult() throws Exception {
         when(sync.importProduct(eq("SAMPLE-001"), any())).thenReturn(
-                new SyncResult("SAMPLE-001", "gid://shopify/Product/1", "ps-pacesetter-sample-001", false, 7, 3));
+                new SyncResult("SAMPLE-001", "gid://shopify/Product/1", "ps-pacesetter-sample-001", false, 7, 3, java.util.List.of()));
 
         mockMvc.perform(post("/api/sync/products/SAMPLE-001"))
                 .andExpect(status().isOk())
@@ -57,7 +57,7 @@ class SyncApiTest {
     @Test
     void importProductPassesSelectedMetafields() throws Exception {
         when(sync.importProduct(eq("SAMPLE-001"), any())).thenReturn(
-                new SyncResult("SAMPLE-001", "gid://shopify/Product/1", "ps-pacesetter-sample-001", false, 7, 3));
+                new SyncResult("SAMPLE-001", "gid://shopify/Product/1", "ps-pacesetter-sample-001", false, 7, 3, java.util.List.of()));
 
         mockMvc.perform(post("/api/sync/products/SAMPLE-001")
                         .contentType("application/json")

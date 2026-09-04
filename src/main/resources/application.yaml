@@ -125,6 +125,37 @@ promostandards:
     log-messages: false
 
 # ---------------------------------------------------------------------------
+# Quantity-break discounts.
+#
+# A Shopify variant carries one price - the first break's - so every cheaper break is published as
+# JSON in ONE metafield, which the store's discount app reads:
+#
+#   {"currencyCode":"USD","tiers":[{"minQuantity":25,"discountAmount":0},
+#                                  {"minQuantity":75,"discountAmount":1},
+#                                  {"minQuantity":150,"discountAmount":4}]}
+#
+# discountAmount is HOW MUCH COMES OFF one unit from that quantity up (0 on the base tier = the
+# variant's own price); the example is CM373BS, whose table is 19.99 / 18.99 / 15.99. The base
+# tier's minQuantity is the supplier's first break. The value is written on every covered variant
+# and, when one ladder covers the whole product, on the product too - which the catalog badge reads.
+#
+# namespace/key must match the metafield the storefront app reads. Change them here (or via
+# DISCOUNTS_METAFIELD_NAMESPACE / DISCOUNTS_METAFIELD_KEY) - nothing else knows the name.
+#
+# trophy_discount is a MERCHANT-owned namespace. It has to be: the discount app's own
+# app--400283500545 is reserved for that app, and Shopify refused our writes into it outright
+# ("Access to this namespace and key on Metafields for this resource type is not allowed", CM373BS,
+# 2026-09-03). Check what a store holds with
+#   python tools/check_discount_metafield.py --store <shop>.myshopify.com --namespace trophy_discount
+# ---------------------------------------------------------------------------
+discounts:
+  enabled: ${DISCOUNTS_ENABLED:true}
+  namespace: "${DISCOUNTS_METAFIELD_NAMESPACE:trophy_discount}"
+  key: "${DISCOUNTS_METAFIELD_KEY:discount_tiers}"
+  # json unless the consuming app defined it otherwise (multi_line_text_field holds the same string).
+  type: "${DISCOUNTS_METAFIELD_TYPE:json}"
+
+# ---------------------------------------------------------------------------
 # Shopify Admin API (sync target)
 #
 # Secrets are sensitive: provide them via environment variables (or an untracked
@@ -188,9 +219,14 @@ sync:
   #
   # SUPPLIER_LIST (default): publish the supplier's own suggested retail whenever it publishes one.
   # PromoStandards returns it from getConfigurationAndPricing with priceType=List — for PaceSetter
-  # that is exactly the price on their public product page (GM668A: net 88.20 -> list 147.00). It is
-  # published untouched: rounding a price the supplier states would disagree with them on every
-  # product. The markup below is only the fallback, for suppliers that publish no retail price.
+  # that is exactly the price on their public product page (GM668A: net 88.20 -> list 147.00). The
+  # markup below is only the fallback, for suppliers that publish no retail price.
+  #
+  # Rounding applies to BOTH paths, in opposite directions, and that is deliberate: a price we
+  # computed ourselves is charm-priced UP (13.30 -> 13.99, keeping the margin), while a price the
+  # supplier states is charm-priced DOWN (208.00 -> 207.99) so the store never publishes above what
+  # the supplier itself asks. The .99 ending is a client requirement, and the quantity-break ladder
+  # is derived from these same rounded prices — see PLAN-DESCUENTOS.md.
   #
   # MARKUP: ignore any published retail and always compute from the net price.
   #
@@ -199,7 +235,7 @@ sync:
   pricing:
     strategy: ${SYNC_PRICING_STRATEGY:SUPPLIER_LIST}   # SUPPLIER_LIST | MARKUP
     markup-percent: ${SYNC_PRICING_MARKUP_PERCENT:40}  # fallback only: net * (1 + markup)
-    rounding: ${SYNC_PRICING_ROUNDING:NINETY_NINE}     # NONE | NINETY_NINE (applies to the markup path)
+    rounding: ${SYNC_PRICING_ROUNDING:NINETY_NINE}     # NONE | NINETY_NINE (both paths; see above)
     map-floor: ${SYNC_PRICING_MAP_FLOOR:true}          # never price below the supplier list price
   schedule:
     enabled: false                   # master switch for all scheduled jobs

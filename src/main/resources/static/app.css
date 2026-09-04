@@ -369,3 +369,25 @@ body {
 	.page { padding: var(--p-space-400); }
 	.col-thumb, .thumb-cell { display: none; }
 }
+
+/* --- quantity discounts block ------------------------------------------ */
+.disc-block { margin-top: var(--p-space-400); }
+.disc-table { max-width: 34rem; }
+.disc-note { margin: var(--p-space-200) 0 0; font-size: var(--p-font-size-300); }
+.disc-actions {
+	display: flex;
+	gap: var(--p-space-200);
+	margin-top: var(--p-space-300);
+}
+.disc-payload {
+	margin: var(--p-space-300) 0 0;
+	padding: var(--p-space-300);
+	max-height: 20rem;
+	overflow: auto;
+	background: var(--p-color-bg-surface-secondary);
+	border: var(--p-border-width-025) solid var(--p-color-border);
+	border-radius: var(--p-border-radius-200);
+	font-family: var(--font-mono, ui-monospace, monospace);
+	font-size: var(--p-font-size-275);
+	white-space: pre;
+}

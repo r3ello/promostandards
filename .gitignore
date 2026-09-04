@@ -44,3 +44,6 @@ application-secret.properties
 !application-local.yaml.example
 /CLAUDE.md
 /DEPLOY.md
+
+# Python bytecode from the tools/ scripts
+__pycache__/

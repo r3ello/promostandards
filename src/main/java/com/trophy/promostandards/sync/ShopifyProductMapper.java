@@ -41,9 +41,8 @@ public class ShopifyProductMapper {
     static final String MF_LAST_SYNC_AT = "ps_last_sync_at";
     /** Variant-level metafield carrying the supplier product id (e.g. {@code C0611}). */
     static final String MF_VARIANT_PROMO_STANDARD_ID = "promo_standard_id";
-    private static final String COLOR = "Color";
-    private static final String SIZE = "Size";
-    private static final String DEFAULT_COLOR = "Default";
+    private static final String COLOR = VariantOptions.COLOR;
+    private static final String SIZE = VariantOptions.SIZE;
 
     private final SyncProperties props;
     private final PricingPolicy pricingPolicy;
@@ -206,7 +205,7 @@ public class ShopifyProductMapper {
 
     private List<Map<String, Object>> productOptions(SupplierProduct product) {
         List<Map<String, Object>> options = new ArrayList<>();
-        options.add(optionDef(COLOR, 1, distinct(product, v -> defaultColor(v.color()))));
+        options.add(optionDef(COLOR, 1, distinct(VariantOptions.colorLabels(product.variants()))));
         if (hasSize(product)) {
             options.add(optionDef(SIZE, 2, distinct(product, v -> defaultSize(v.size()))));
         }
@@ -220,8 +219,12 @@ public class ShopifyProductMapper {
 
     private List<Map<String, Object>> variants(SupplierProduct product) {
         boolean hasSize = hasSize(product);
+        // Two parts of a family can share a colour name; the label carries the part id when they do,
+        // because Shopify rejects two variants claiming the same option combination.
+        List<String> colorLabels = VariantOptions.colorLabels(product.variants());
         List<Map<String, Object>> variants = new ArrayList<>();
-        for (Variant v : product.variants()) {
+        for (int i = 0; i < product.variants().size(); i++) {
+            Variant v = product.variants().get(i);
             Map<String, Object> variant = new LinkedHashMap<>();
             variant.put("sku", v.sku());
             BigDecimal price = pricingPolicy.retailPrice(v.supplierNet(), v.listPrice());
@@ -229,7 +232,7 @@ public class ShopifyProductMapper {
                 variant.put("price", price.toPlainString());
             }
             List<Map<String, String>> optionValues = new ArrayList<>();
-            optionValues.add(Map.of("optionName", COLOR, "name", defaultColor(v.color())));
+            optionValues.add(Map.of("optionName", COLOR, "name", colorLabels.get(i)));
             if (hasSize) {
                 optionValues.add(Map.of("optionName", SIZE, "name", defaultSize(v.size())));
             }
@@ -272,9 +275,12 @@ public class ShopifyProductMapper {
     }
 
     private List<String> distinct(SupplierProduct product, java.util.function.Function<Variant, String> f) {
+        return distinct(product.variants().stream().map(f).toList());
+    }
+
+    private List<String> distinct(List<String> raw) {
         Set<String> values = new LinkedHashSet<>();
-        for (Variant v : product.variants()) {
-            String value = f.apply(v);
+        for (String value : raw) {
             if (value != null && !value.isBlank()) {
                 values.add(value);
             }
@@ -282,12 +288,8 @@ public class ShopifyProductMapper {
         return new ArrayList<>(values);
     }
 
-    private static String defaultColor(String color) {
-        return color == null || color.isBlank() ? DEFAULT_COLOR : color;
-    }
-
     private static String defaultSize(String size) {
-        return size == null || size.isBlank() ? "One Size" : size;
+        return VariantOptions.size(size);
     }
 
     private static String slug(String raw) {

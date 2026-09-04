@@ -120,7 +120,7 @@ public class CatalogSummaryService {
             List<CatalogEntry> entries = new ArrayList<>();
             for (CatalogRow row : mirrored) {
                 entries.add(new CatalogEntry(row.productId(), imported(importedIds, row.productId()),
-                        row.closeOut()));
+                        row.closeOut(), sync.hasDiscounts(row.productId())));
             }
             return entries;
         }
@@ -128,7 +128,8 @@ public class CatalogSummaryService {
         List<CatalogEntry> entries = new ArrayList<>();
         for (String productId : discoverProductIds()) {
             entries.add(new CatalogEntry(productId, imported(importedIds, productId),
-                    closeOutIds.contains(productId.toUpperCase(Locale.ROOT))));
+                    closeOutIds.contains(productId.toUpperCase(Locale.ROOT)),
+                    sync.hasDiscounts(productId)));
         }
         return entries;
     }
@@ -302,12 +303,21 @@ public class CatalogSummaryService {
     }
 
     private PricePart toPricePart(Configuration.PartPrice pp) {
+        // The first break is the base: its published price is what the Shopify variant costs, and
+        // every later break is expressed as an amount off it — the shape the console shows and the
+        // one the shopper is shown ("order 6+ and pay $178.99 each").
         BigDecimal retail = pp.priceBreaks().stream()
                 .min(Comparator.comparingInt(Configuration.PriceBreak::minQuantity))
                 .map(b -> pricingPolicy.retailPrice(b.price(), b.listPrice()))
                 .orElse(null);
         List<PriceBreak> breaks = pp.priceBreaks().stream()
-                .map(b -> new PriceBreak(b.minQuantity(), b.price(), b.listPrice(), b.priceUom()))
+                .map(b -> {
+                    BigDecimal tier = pricingPolicy.retailPrice(b.price(), b.listPrice());
+                    BigDecimal discount = retail == null || tier == null || retail.compareTo(tier) <= 0
+                            ? null : retail.subtract(tier);
+                    return new PriceBreak(b.minQuantity(), b.price(), b.listPrice(), tier, discount,
+                            b.priceUom());
+                })
                 .toList();
         return new PricePart(pp.partId(), pp.description(), retail, breaks);
     }

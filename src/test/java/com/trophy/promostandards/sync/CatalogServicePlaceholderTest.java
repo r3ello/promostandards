@@ -31,6 +31,11 @@ import static org.mockito.Mockito.when;
  */
 class CatalogServicePlaceholderTest {
 
+    private static final SyncProperties PROPS = new SyncProperties("PaceSetter", "USD", "US", "en",
+            SyncProperties.SkuStrategy.PART_SIZE,
+            new Pricing(Strategy.MARKUP, new BigDecimal("40"), Rounding.NONE, false),
+            new SyncProperties.Schedule(false, "-", "-", "-", false), List.of(), null);
+
     @Test
     void placeholderPartMergesWithItsInventoryRow() {
         ProductDataService productData = mock(ProductDataService.class);
@@ -97,5 +102,54 @@ class CatalogServicePlaceholderTest {
         SupplierProduct product = catalog.aggregate("C0500");
         assertThat(product.variants()).hasSize(1);
         assertThat(product.variants().get(0).sku()).isEqualTo("C0500");
+    }
+
+    /**
+     * PaceSetter sells products its own Inventory service answers "ProductID not found" for, and its
+     * Media service faults outright on the GM8xx family. Before this, either of those took the whole
+     * import down — 18 products in the first full pass over the store, with complete product data,
+     * prices and discounts, lost to a service that had nothing to add.
+     *
+     * <p>The product must come through with its variants and prices, the missing side must be left
+     * <b>unknown</b> rather than zeroed ({@code onHand} null is what makes every inventory push skip
+     * it), and the reason must be reported instead of swallowed.
+     */
+    @Test
+    void survivesAServiceThatCannotAnswer() {
+        ProductDataService productData = mock(ProductDataService.class);
+        PricingService pricing = mock(PricingService.class);
+        InventoryService inventory = mock(InventoryService.class);
+        MediaService media = mock(MediaService.class);
+
+        when(productData.getProduct(eq("G0990"), any(), any())).thenReturn(new Product(
+                "G0990", "Star Tower Award", "Optic crystal star tower", "PaceSetter",
+                List.of("Awards"),
+                List.of(new Product.ProductPart("G0990", "Star Tower", "Clear", List.of("8 X 3")))));
+        when(pricing.getConfigurationAndPricingWithList(eq("G0990"), any(), any(), any(), any(), any()))
+                .thenReturn(new Configuration("G0990", "USD", "List", List.of(
+                        new Configuration.PartPrice("G0990", "Star Tower", List.of(
+                                new Configuration.PriceBreak(1, new BigDecimal("60.00"),
+                                        new BigDecimal("100.00"), "EA")))), List.of()));
+        when(inventory.getInventoryLevels(eq("G0990"), any())).thenThrow(
+                new IllegalStateException("PromoStandards inventory service returned an error: "
+                        + "200: ProductID not found"));
+        when(media.getMediaContent(eq("G0990"), any(), any())).thenThrow(
+                new IllegalStateException("getMediaContent call failed: SoapFault: Input string"));
+
+        SupplierProduct product = new CatalogService(productData, pricing, inventory, media, PROPS)
+                .aggregate("G0990");
+
+        assertThat(product.title()).isEqualTo("Star Tower Award");
+        assertThat(product.variants()).singleElement().satisfies(v -> {
+            assertThat(v.sku()).isEqualTo("G0990-8 X 3");
+            assertThat(v.listPrice()).isEqualByComparingTo("100.00");
+            // Unknown, NOT zero: every inventory push skips a null, so real stock cannot be wiped.
+            assertThat(v.onHand()).isNull();
+        });
+        assertThat(product.imageUrls()).isEmpty();
+        assertThat(product.warnings()).hasSize(2)
+                .anySatisfy(w -> assertThat(w).startsWith("Inventory:").contains("ProductID not found")
+                        .contains("stock is left"))
+                .anySatisfy(w -> assertThat(w).startsWith("Media:").contains("images are left"));
     }
 }

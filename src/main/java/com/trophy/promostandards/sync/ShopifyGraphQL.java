@@ -17,15 +17,36 @@ final class ShopifyGraphQL {
      * Look up an existing product (and its variants) by the deterministic handle. The Admin API's
      * {@code product} field only accepts {@code id}, so we search the products connection with a
      * {@code handle:} qualifier and exact-match the result.
+     *
+     * <p>Carries everything the write paths need about a product so they cost one lookup: variant
+     * identity and options (variant creation), stock state (inventory), price and title, and the
+     * per-variant {@code custom.promo_standard_id} that says which supplier id each variant is (the
+     * quantity-discount write matches on it).
      */
     static final String PRODUCT_BY_HANDLE = """
-            query ProductByHandle($query: String!) {
+            query ProductByHandle($query: String!, $locationId: ID!, $withLocation: Boolean!) {
               products(first: 1, query: $query) {
                 nodes {
                   id
                   handle
+                  title
+                  options { id name position optionValues { id name } }
                   variants(first: 100) {
-                    nodes { id sku inventoryItem { id } }
+                    nodes {
+                      id
+                      sku
+                      title
+                      price
+                      selectedOptions { name value }
+                      psId: metafield(namespace: "custom", key: "promo_standard_id") { value }
+                      inventoryItem {
+                        id
+                        tracked
+                        inventoryLevel(locationId: $locationId) @include(if: $withLocation) {
+                          quantities(names: ["available"]) { name quantity }
+                        }
+                      }
+                    }
                   }
                 }
               }
@@ -48,10 +69,18 @@ final class ShopifyGraphQL {
             }
             """;
 
-    /** Set on-hand quantities at a location for a batch of inventory items. */
+    /**
+     * Set available quantities at a location for a batch of inventory items.
+     *
+     * <p>Two API-2026-04 requirements are easy to miss and both reject the whole mutation: every
+     * quantity must carry {@code changeFromQuantity} (the compare-and-set baseline that replaced the
+     * old {@code ignoreCompareQuantity} input field), and the call must carry an idempotency key via
+     * the {@code @idempotent} directive — which is also what makes the client's throttling retry
+     * safe, since a retry resends the same key.
+     */
     static final String INVENTORY_SET_QUANTITIES = """
-            mutation InventorySet($input: InventorySetQuantitiesInput!) {
-              inventorySetQuantities(input: $input) {
+            mutation InventorySet($input: InventorySetQuantitiesInput!, $idempotencyKey: String!) {
+              inventorySetQuantities(input: $input) @idempotent(key: $idempotencyKey) {
                 inventoryAdjustmentGroup { createdAt }
                 userErrors { field message }
               }
@@ -196,10 +225,13 @@ final class ShopifyGraphQL {
      * Page through every PromoStandards-tagged product: those imported by this app AND those the
      * one-shot trophypartner migration created (which carry the same tag + metafield contract).
      * {@code ps_product_ids} is the full list of supplier ids a migrated product covers (canonical
-     * included); {@code ps_source} says who created the product ({@code app} | {@code migration}).
+     * included); {@code ps_source} says who created the product ({@code app} | {@code migration});
+     * {@code discounts} is the published quantity-break ladder, so the catalog can show which
+     * products already carry discounts without a second pass over the store. Its namespace and key
+     * are variables because the consuming app names that metafield — see {@code discounts.*}.
      */
     static final String IMPORTED_PRODUCTS = """
-            query ImportedProducts($cursor: String) {
+            query ImportedProducts($cursor: String, $discountNamespace: String!, $discountKey: String!) {
               products(first: 100, after: $cursor, query: "tag:promostandards") {
                 pageInfo { hasNextPage endCursor }
                 nodes {
@@ -208,6 +240,7 @@ final class ShopifyGraphQL {
                   psId: metafield(namespace: "custom", key: "ps_product_id") { value }
                   psIds: metafield(namespace: "custom", key: "ps_product_ids") { value }
                   psSource: metafield(namespace: "custom", key: "ps_source") { value }
+                  discounts: metafield(namespace: $discountNamespace, key: $discountKey) { value }
                 }
               }
             }
@@ -219,6 +252,68 @@ final class ShopifyGraphQL {
               metafieldDefinitionUpdate(definition: $definition) {
                 updatedDefinition { id }
                 userErrors { field message code }
+              }
+            }
+            """;
+
+    /**
+     * Rename a product option (and its values) in place. Used to turn a migrated product's default
+     * {@code Title / Default Title} option into the {@code Color} option the supplier variants need,
+     * without deleting the variant that carries the product's order history.
+     * {@code LEAVE_AS_IS} keeps Shopify from creating or deleting variants behind our back.
+     */
+    static final String PRODUCT_OPTION_UPDATE = """
+            mutation ProductOptionUpdate($productId: ID!, $option: OptionUpdateInput!,
+                                         $optionValuesToUpdate: [OptionValueUpdateInput!],
+                                         $variantStrategy: ProductOptionUpdateVariantStrategy) {
+              productOptionUpdate(productId: $productId, option: $option,
+                                  optionValuesToUpdate: $optionValuesToUpdate,
+                                  variantStrategy: $variantStrategy) {
+                product { id options { id name optionValues { id name } } }
+                userErrors { field message code }
+              }
+            }
+            """;
+
+    /** Add an option (e.g. Size) to an existing product without touching its variants. */
+    static final String PRODUCT_OPTIONS_CREATE = """
+            mutation ProductOptionsCreate($productId: ID!, $options: [OptionCreateInput!]!,
+                                          $variantStrategy: ProductOptionCreateVariantStrategy) {
+              productOptionsCreate(productId: $productId, options: $options,
+                                   variantStrategy: $variantStrategy) {
+                product { id options { id name optionValues { id name } } }
+                userErrors { field message code }
+              }
+            }
+            """;
+
+    /**
+     * Add variants to an existing product. {@code PRESERVE_STANDALONE_VARIANT} keeps the product's
+     * single existing variant — the migrated one we adopt — which the default strategy would delete.
+     */
+    static final String VARIANTS_BULK_CREATE = """
+            mutation VariantsCreate($productId: ID!, $variants: [ProductVariantsBulkInput!]!,
+                                    $strategy: ProductVariantsBulkCreateStrategy) {
+              productVariantsBulkCreate(productId: $productId, variants: $variants, strategy: $strategy) {
+                productVariants { id sku inventoryItem { id } }
+                userErrors { field message }
+              }
+            }
+            """;
+
+    /**
+     * Stock an inventory item at a location. A migrated variant is typically untracked and not
+     * stocked anywhere, and {@code inventorySetQuantities} refuses an item the location does not
+     * carry, so activation comes first. ({@code inventoryActivate} would need an idempotency key
+     * as of API 2026-04; this mutation does not.)
+     */
+    static final String INVENTORY_ACTIVATE = """
+            mutation InventoryActivate($inventoryItemId: ID!,
+                                       $updates: [InventoryBulkToggleActivationInput!]!) {
+              inventoryBulkToggleActivation(inventoryItemId: $inventoryItemId,
+                                            inventoryItemUpdates: $updates) {
+                inventoryItem { id }
+                userErrors { field message }
               }
             }
             """;

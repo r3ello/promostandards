@@ -24,6 +24,12 @@ import java.util.List;
  * @param variants        per (color, size) variants
  * @param imageUrls       distinct product-gallery image URLs
  * @param priceParts      raw quantity price-break matrix per part (preserved as a Shopify metafield)
+ * @param warnings        services that did not answer, and what that costs. A supplier whose
+ *                        Inventory service has no record of a product it sells, or whose Media
+ *                        service faults on it, must not cost the whole import — the missing side is
+ *                        left untouched in Shopify (variant stock stays as it is, because
+ *                        {@code onHand} is then null; images stay as they are) and the reason is
+ *                        reported here rather than thrown away
  */
 public record SupplierProduct(
         String productId,
@@ -34,7 +40,8 @@ public record SupplierProduct(
         List<String> tags,
         List<Variant> variants,
         List<String> imageUrls,
-        List<Configuration.PartPrice> priceParts
+        List<Configuration.PartPrice> priceParts,
+        List<String> warnings
 ) {
 
     /**

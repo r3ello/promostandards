@@ -1,0 +1,472 @@
+<title>PaceSetter Catalog Audit</title>
+<style>
+	:root {
+		--bg:        #F3F5F7;
+		--surface:   #FFFFFF;
+		--surface-2: #E9EDF1;
+		--ink:       #16202B;
+		--muted:     #58697A;
+		--line:      #D8E0E7;
+		--accent:    #1F5E6B;
+		--accent-ink:#174B56;
+		--accent-wash:#E3EEF0;
+		--loss:      #A32C2C;
+		--loss-wash: #F8EAEA;
+		--gain:      #2F6B4F;
+		--gain-wash: #E8F1EC;
+		--brass:     #8A6A22;
+		--code-bg:   #EDF1F4;
+
+		--sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
+		--serif: Cambria, Georgia, "Iowan Old Style", "Times New Roman", serif;
+		--mono: "Cascadia Mono", Consolas, ui-monospace, "SF Mono", monospace;
+	}
+	@media (prefers-color-scheme: dark) {
+		:root:not([data-theme="light"]) {
+			--bg:        #0F161D;
+			--surface:   #16202A;
+			--surface-2: #1C2833;
+			--ink:       #DFE7ED;
+			--muted:     #94A5B4;
+			--line:      #26343F;
+			--accent:    #6FB2BF;
+			--accent-ink:#8CC6D2;
+			--accent-wash:#122730;
+			--loss:      #E08585;
+			--loss-wash: #2A1718;
+			--gain:      #86C2A0;
+			--gain-wash: #16241D;
+			--brass:     #C9A653;
+			--code-bg:   #0D1720;
+		}
+	}
+	:root[data-theme="dark"] {
+		--bg:        #0F161D;
+		--surface:   #16202A;
+		--surface-2: #1C2833;
+		--ink:       #DFE7ED;
+		--muted:     #94A5B4;
+		--line:      #26343F;
+		--accent:    #6FB2BF;
+		--accent-ink:#8CC6D2;
+		--accent-wash:#122730;
+		--loss:      #E08585;
+		--loss-wash: #2A1718;
+		--gain:      #86C2A0;
+		--gain-wash: #16241D;
+		--brass:     #C9A653;
+		--code-bg:   #0D1720;
+	}
+
+	* { box-sizing: border-box; }
+	body {
+		background: var(--bg); color: var(--ink);
+		font-family: var(--serif); font-size: 17px; line-height: 1.62;
+		margin: 0; padding: 0 clamp(16px, 4vw, 40px) 90px;
+	}
+	.wrap { max-width: 1000px; margin: 0 auto; }
+
+	/* ---------- masthead ---------- */
+	.masthead { padding: clamp(40px, 7vw, 72px) 0 30px; border-bottom: 3px solid var(--ink); }
+	.eyebrow {
+		font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+		color: var(--brass); margin: 0 0 14px;
+	}
+	h1 {
+		font-family: var(--sans); font-weight: 700; letter-spacing: -.022em;
+		font-size: clamp(30px, 5.2vw, 48px); line-height: 1.06; margin: 0 0 18px; text-wrap: balance;
+	}
+	.standfirst { font-size: clamp(17px, 2vw, 20.5px); color: var(--muted); margin: 0; max-width: 60ch; }
+
+	/* ---------- headline figures ---------- */
+	.figures {
+		display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+		gap: 1px; background: var(--line); border: 1px solid var(--line);
+		margin: 34px 0 0; border-radius: 4px; overflow: hidden;
+	}
+	.fig { background: var(--surface); padding: 18px 20px; }
+	.fig__n {
+		font-family: var(--sans); font-size: 34px; font-weight: 700; line-height: 1;
+		letter-spacing: -.02em; font-variant-numeric: tabular-nums;
+	}
+	.fig__n.is-loss { color: var(--loss); }
+	.fig__n.is-gain { color: var(--gain); }
+	.fig__l { font-family: var(--sans); font-size: 13.5px; color: var(--muted); margin-top: 7px; line-height: 1.4; }
+
+	/* ---------- sections ---------- */
+	section { margin: 56px 0 0; }
+	h2 {
+		font-family: var(--sans); font-weight: 680; letter-spacing: -.016em;
+		font-size: clamp(22px, 3vw, 29px); line-height: 1.18; margin: 0 0 6px; text-wrap: balance;
+	}
+	.section-kicker {
+		font-family: var(--mono); font-size: 11.5px; letter-spacing: .12em; text-transform: uppercase;
+		color: var(--accent-ink); margin: 0 0 8px;
+	}
+	h3 { font-family: var(--sans); font-weight: 660; font-size: 18.5px; margin: 30px 0 8px; }
+	p { margin: 0 0 15px; max-width: 68ch; }
+	ul { margin: 0 0 15px; padding-left: 22px; max-width: 68ch; }
+	li { margin-bottom: 8px; }
+	strong { font-weight: 700; }
+	code { font-family: var(--mono); font-size: .86em; background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+	.lead { font-size: 18.5px; }
+
+	/* ---------- case cards ---------- */
+	.case {
+		background: var(--surface); border: 1px solid var(--line); border-radius: 6px;
+		padding: 22px 24px; margin: 0 0 20px;
+	}
+	.case__head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+	.case__id {
+		font-family: var(--mono); font-size: 12px; color: var(--surface);
+		background: var(--accent); padding: 3px 9px; border-radius: 3px; letter-spacing: .04em;
+	}
+	.case__title { font-family: var(--sans); font-weight: 660; font-size: 19px; }
+	.case__verdict { font-family: var(--sans); font-size: 14.5px; margin: 10px 0 16px; }
+	.case__verdict.is-loss { color: var(--loss); }
+	.case__verdict.is-gain { color: var(--gain); }
+
+	.compare { display: grid; grid-template-columns: 1fr; gap: 14px; }
+	@media (min-width: 720px) { .compare { grid-template-columns: 1fr 1fr; } }
+	.pane { border: 1px solid var(--line); border-radius: 5px; padding: 14px 16px; background: var(--surface-2); }
+	.pane__h {
+		font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+		color: var(--muted); margin: 0 0 10px;
+	}
+	.pane dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 5px 14px; }
+	.pane dt { font-family: var(--sans); font-size: 14px; color: var(--muted); }
+	.pane dd {
+		margin: 0; font-family: var(--sans); font-size: 14.5px; font-weight: 600;
+		font-variant-numeric: tabular-nums; text-align: right;
+	}
+	.pane dd.is-loss { color: var(--loss); }
+	.pane dd.is-gain { color: var(--gain); }
+
+	/* ---------- tables ---------- */
+	.table-scroll { overflow-x: auto; margin: 0 0 18px; border: 1px solid var(--line); border-radius: 5px; }
+	table { border-collapse: collapse; width: 100%; font-family: var(--sans); font-size: 14.5px; }
+	th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+	thead th {
+		font-family: var(--mono); font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase;
+		color: var(--muted); font-weight: 400; background: var(--surface-2); white-space: nowrap;
+	}
+	tbody tr:last-child td { border-bottom: none; }
+	td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+	td.loss { color: var(--loss); font-weight: 600; }
+
+	.callout { border-radius: 5px; padding: 16px 20px; margin: 0 0 20px; border: 1px solid var(--line); }
+	.callout--loss { background: var(--loss-wash); }
+	.callout--gain { background: var(--gain-wash); }
+	.callout--note { background: var(--accent-wash); }
+	.callout p { margin: 0; max-width: none; }
+	.callout p + p { margin-top: 10px; }
+
+	footer {
+		margin-top: 60px; padding-top: 24px; border-top: 1px solid var(--line);
+		font-family: var(--sans); font-size: 13.5px; color: var(--muted);
+	}
+	footer p { max-width: 74ch; }
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+	<p class="eyebrow">Catalog diagnosis · TrophyPartner &times; PaceSetter</p>
+	<h1>What the store sells and what the supplier stocks are two different catalogs</h1>
+	<p class="standfirst">A full cross-check between the store's database, PaceSetter's live catalog
+	and the products published on Shopify. Every figure in this report was measured against all three
+	live systems on August 20, 2026.</p>
+
+	<div class="figures">
+		<div class="fig">
+			<div class="fig__n">1,803</div>
+			<div class="fig__l">PaceSetter products in the store database</div>
+		</div>
+		<div class="fig">
+			<div class="fig__n">1,278</div>
+			<div class="fig__l">products PaceSetter actually sells today</div>
+		</div>
+		<div class="fig">
+			<div class="fig__n is-loss">144</div>
+			<div class="fig__l">of those connected to the store &mdash; 11%</div>
+		</div>
+		<div class="fig">
+			<div class="fig__n is-loss">85</div>
+			<div class="fig__l">of 145 products sell below the price the supplier itself
+			recommends</div>
+		</div>
+	</div>
+</header>
+
+<section>
+	<p class="section-kicker">Summary</p>
+	<h2>Three disconnects, all measurable</h2>
+	<p class="lead">The store and the supplier have run independently for years. The result is not one
+	broken thing: it is three separate problems, each with money attached.</p>
+	<ul>
+		<li><strong>Products that no longer exist.</strong> 174 of the 222 published products point at
+		codes PaceSetter no longer sells.</li>
+		<li><strong>Invisible stock.</strong> There is real inventory at the supplier that the store
+		shows as sold out, or does not show at all.</li>
+		<li><strong>Prices adrift.</strong> They were set by hand, product by product. Today 85 sit
+		below the recommended price and one sells below its own cost.</li>
+	</ul>
+</section>
+
+<section>
+	<p class="section-kicker">Problem 1</p>
+	<h2>The published catalog no longer matches the supplier's</h2>
+
+	<p>Of the 1,803 products carrying a PaceSetter code in the database, only <strong>554 have all of
+	their codes still live</strong> in the supplier's current catalog. Another 40 have some, and
+	<strong>1,140 have none at all</strong>.</p>
+
+	<p>Seen from the store it is starker still: of the 222 published products, <strong>174 do not have
+	a single live code</strong>. These are pages a customer can buy from, and every such order then has
+	to be resolved by hand, because the supplier no longer ships that code.</p>
+
+	<div class="table-scroll">
+		<table>
+			<thead>
+				<tr><th>Universe</th><th class="num">Products</th><th>Status</th></tr>
+			</thead>
+			<tbody>
+				<tr><td>Database, PaceSetter code</td><td class="num">1,803</td><td>starting point</td></tr>
+				<tr><td>&mdash; all codes live</td><td class="num">554</td><td>syncable today</td></tr>
+				<tr><td>&mdash; some codes live</td><td class="num">40</td><td>partly syncable</td></tr>
+				<tr><td>&mdash; no live code</td><td class="num loss">1,140</td><td>need review</td></tr>
+				<tr><td>&mdash; no readable code</td><td class="num">69</td><td>free text, not parseable</td></tr>
+			</tbody>
+		</table>
+	</div>
+
+	<p>And the other way round: PaceSetter sells <strong>1,134 products the store does not offer</strong>.
+	Available catalog, with stock and pricing, currently earning nothing.</p>
+
+	<div class="callout callout--note">
+		<p>The cause is identifiable: supplier codes were stored as free text typed by hand
+		(<code>CM700-05</code>, <code>CD561B, CD561C</code>, <code>G0713A (sm)</code>). A large share of
+		them are not dead, merely mis-recorded: 962 codes are a live product with a colour suffix
+		attached. Normalising those recovers roughly 499 more products.</p>
+	</div>
+</section>
+
+<section>
+	<p class="section-kicker">Problem 2</p>
+	<h2>There is stock the store does not know exists</h2>
+
+	<p>The supplier publishes inventory per colour and per size, kept current. The store never asks:
+	its variants were created once and have not been touched since.</p>
+
+	<div class="case">
+		<div class="case__head">
+			<span class="case__id">CM297</span>
+			<span class="case__title">Zipper Leatherette Portfolio</span>
+		</div>
+		<p class="case__verdict is-loss">522 units available at the supplier · 0 visible in the store</p>
+		<div class="compare">
+			<div class="pane">
+				<p class="pane__h">PaceSetter, right now</p>
+				<dl>
+					<dt>Colours available</dt><dd>12</dd>
+					<dt>Units in stock</dt><dd class="is-gain">522</dd>
+					<dt>Cost (24 units)</dt><dd>$46.89</dd>
+					<dt>Recommended price</dt><dd>$110.00</dd>
+				</dl>
+			</div>
+			<div class="pane">
+				<p class="pane__h">The store, right now</p>
+				<dl>
+					<dt>Published variants</dt><dd>11</dd>
+					<dt>Without a reference code</dt><dd class="is-loss">10 of 11</dd>
+					<dt>Stock shown</dt><dd class="is-loss">0</dd>
+					<dt>Price</dt><dd>$189.99</dd>
+				</dl>
+			</div>
+		</div>
+		<p style="margin-top:16px">Two of the supplier's twelve colours (Bamboo Black and White Marble)
+		do not appear on the page at all. And because 10 of the 11 variants carry no reference code, it
+		is currently <em>impossible</em> to connect them automatically to supplier inventory: there is
+		nothing to match them on.</p>
+	</div>
+
+	<div class="case">
+		<div class="case__head">
+			<span class="case__id">GM668</span>
+			<span class="case__title">Jade Glass Star Crescent</span>
+		</div>
+		<p class="case__verdict is-gain">601 units available · the product is not in the store</p>
+		<div class="compare">
+			<div class="pane">
+				<p class="pane__h">Size 5&Prime; &times; 7&Prime;</p>
+				<dl>
+					<dt>Stock</dt><dd class="is-gain">377</dd>
+					<dt>Cost (1 unit)</dt><dd>$88.20</dd>
+					<dt>Recommended price</dt><dd>$147.00</dd>
+					<dt>Margin</dt><dd class="is-gain">+67%</dd>
+				</dl>
+			</div>
+			<div class="pane">
+				<p class="pane__h">Size 6&Prime; &times; 8&Prime;</p>
+				<dl>
+					<dt>Stock</dt><dd class="is-gain">224</dd>
+					<dt>Cost (1 unit)</dt><dd>$90.00</dd>
+					<dt>Recommended price</dt><dd>$150.00</dd>
+					<dt>Margin</dt><dd class="is-gain">+67%</dd>
+				</dl>
+			</div>
+		</div>
+		<p style="margin-top:16px">Clean data at source: two sizes, consistent colour, healthy stock,
+		volume pricing. It is one of the 1,134 sellable products the store does not offer, and it could
+		be published automatically with no manual work.</p>
+	</div>
+</section>
+
+<section>
+	<p class="section-kicker">Problem 3</p>
+	<h2>Pricing follows no policy</h2>
+
+	<p>PaceSetter publishes two prices per product: the <strong>distributor cost</strong> and the
+	<strong>recommended retail price</strong>. The gap between them is constant &mdash; an exact 40%
+	discount, verified across 29 of 30 sampled products without a single exception.</p>
+
+	<p>Comparing the 145 products that are both live at the supplier and published in the store,
+	current margins run from <strong>&minus;47% to +366%</strong>, with a median of +100%. That is not
+	a pricing policy: it is 145 separate decisions made at different times.</p>
+
+	<div class="figures" style="margin-bottom:24px">
+		<div class="fig">
+			<div class="fig__n is-loss">85</div>
+			<div class="fig__l">sell below the recommended price</div>
+		</div>
+		<div class="fig">
+			<div class="fig__n">60</div>
+			<div class="fig__l">sell above the recommended price</div>
+		</div>
+		<div class="fig">
+			<div class="fig__n is-loss">1</div>
+			<div class="fig__l">sells below its own cost</div>
+		</div>
+		<div class="fig">
+			<div class="fig__n is-loss">$3,612</div>
+			<div class="fig__l">cumulative per-unit gap against the recommended price</div>
+		</div>
+	</div>
+
+	<h3>The five largest gaps</h3>
+	<div class="table-scroll">
+		<table>
+			<thead>
+				<tr><th>Product</th><th class="num">Store price</th><th class="num">PaceSetter RRP</th><th class="num">Gap</th></tr>
+			</thead>
+			<tbody>
+				<tr><td>Raised Lucite Silver Swirl Perpetual Plaque</td><td class="num">$742.79</td><td class="num">$1,328.75</td><td class="num loss">$585.96</td></tr>
+				<tr><td>Blue Steel Beveled Lucite</td><td class="num">$493.79</td><td class="num">$952.40</td><td class="num loss">$458.61</td></tr>
+				<tr><td>Scroll Border Photo Plaque</td><td class="num">$346.09</td><td class="num">$635.65</td><td class="num loss">$289.56</td></tr>
+				<tr><td>Ebony Finish 12-Plate Layered</td><td class="num">$352.59</td><td class="num">$639.65</td><td class="num loss">$287.06</td></tr>
+				<tr><td>Blue and Optic Crystal Arch</td><td class="num">$303.99</td><td class="num">$509.00</td><td class="num loss">$205.01</td></tr>
+			</tbody>
+		</table>
+	</div>
+
+	<div class="case">
+		<div class="case__head">
+			<span class="case__id">CM288BS</span>
+			<span class="case__title">Leatherette Wine Bag</span>
+		</div>
+		<p class="case__verdict is-loss">Sells at $11.79 &middot; costs $22.11 &middot; loses $10.32 on every sale</p>
+		<div class="compare">
+			<div class="pane">
+				<p class="pane__h">PaceSetter</p>
+				<dl>
+					<dt>Cost (10 units)</dt><dd>$27.06</dd>
+					<dt>Cost (60 units)</dt><dd>$22.11</dd>
+					<dt>Recommended price</dt><dd>$45.10</dd>
+					<dt>Stock</dt><dd>25</dd>
+				</dl>
+			</div>
+			<div class="pane">
+				<p class="pane__h">The store</p>
+				<dl>
+					<dt>Selling price</dt><dd class="is-loss">$11.79</dd>
+					<dt>Result per unit</dt><dd class="is-loss">&minus;$10.32</dd>
+					<dt>Against RRP</dt><dd class="is-loss">&minus;74%</dd>
+				</dl>
+			</div>
+		</div>
+		<p style="margin-top:16px">This product loses money on every order, today, and will keep doing
+		so until someone reviews it by hand. With pricing connected to the supplier, a case like this
+		becomes impossible by construction.</p>
+	</div>
+
+	<div class="callout callout--note">
+		<p><strong>An important qualification:</strong> selling below the recommended price is not
+		necessarily a mistake &mdash; it can be a deliberate commercial decision. What this report
+		demonstrates is not that those 85 prices are wrong, but that <em>nobody can tell which ones
+		are</em>: there is no way to distinguish an intentional discount from a price forgotten three
+		years ago.</p>
+	</div>
+</section>
+
+<section>
+	<p class="section-kicker">Problem 4</p>
+	<h2>Published products the supplier no longer carries</h2>
+
+	<div class="case">
+		<div class="case__head">
+			<span class="case__id">CD1017</span>
+			<span class="case__title">Water Drop Award</span>
+		</div>
+		<p class="case__verdict is-loss">6 supplier codes &middot; none of them exist at PaceSetter today</p>
+		<p>The page is still published and buyable, priced between $125.69 and $147.69. Its six codes
+		(<code>CD1017ABL</code>, <code>CD1017ARD</code>, <code>CD1017BBL</code>, <code>CD1017BRD</code>,
+		<code>CD1017CBL</code>, <code>CD1017CRD</code>) do not appear in the supplier's current catalog.
+		It is one of 174 products in that position.</p>
+		<p>Every order for one of these turns into manual work: find an equivalent, contact the
+		customer, or cancel.</p>
+	</div>
+</section>
+
+<section>
+	<p class="section-kicker">Solution</p>
+	<h2>What synchronisation changes</h2>
+
+	<p>The system being built connects the store directly to PaceSetter's services (PromoStandards),
+	the same standard the supplier uses to publish catalog, stock and pricing.</p>
+
+	<div class="table-scroll">
+		<table>
+			<thead><tr><th>Today</th><th>With synchronisation</th></tr></thead>
+			<tbody>
+				<tr><td>Stock updated by hand, or not at all</td><td>Refreshed automatically from the supplier</td></tr>
+				<tr><td>Prices set one by one, with no policy</td><td>Supplier RRP published; selling below cost becomes impossible</td></tr>
+				<tr><td>Discontinued products stay on sale</td><td>Detected and flagged</td></tr>
+				<tr><td>1,134 available products unpublished</td><td>Can be published with complete data</td></tr>
+				<tr><td>Nobody knows what is out of sync</td><td>Every product shows its status</td></tr>
+			</tbody>
+		</table>
+	</div>
+
+	<div class="callout callout--gain">
+		<p>The system is already built and running against PaceSetter's live services: it reads
+		catalog, stock, pricing, images and decoration areas, and pushes to Shopify only what has
+		actually changed.</p>
+		<p>One piece of groundwork remains and cannot be skipped: <strong>reconciling the historical
+		codes</strong> in the database against the supplier's. That cross-check is prepared and awaiting
+		review, and it determines how many of the 1,803 products end up connected.</p>
+	</div>
+</section>
+
+<footer>
+	<p><strong>Sources and method.</strong> Store database (SQL Server, 8,734 live products, 1,803
+	carrying a PaceSetter code); PaceSetter's production PromoStandards services (Product Data 1.0.0,
+	Inventory 1.2.1, Pricing &amp; Configuration 1.0.0); the production Shopify store via the Admin
+	API. Data captured on August 20, 2026.</p>
+	<p>Cost and recommended prices come from the same supplier call requested with both price types
+	(<code>Net</code> and <code>List</code>). The margin comparison covers the 145 products that are
+	simultaneously live at PaceSetter and published in the store; the rest are not comparable because
+	one of the two halves is missing. The $3,612 figure is the sum of <em>per-unit</em> gaps against
+	the recommended price, not an estimate of lost revenue.</p>
+</footer>
+
+</div>

@@ -49,11 +49,16 @@ class CatalogApiTest {
                 // Raw inventory variation rows (3 from the stub), not collapsed.
                 .andExpect(jsonPath("$.inventory.length()").value(3))
                 .andExpect(jsonPath("$.inventory[?(@.partId=='SAMPLE-001-RED-S')].onHand").value(1200))
-                // Full price-break matrix per part, plus the published retail. The supplier states one
-                // (stub: net 9.50 with a 40% distributor discount -> list 15.83), so it is published as
-                // stated rather than derived from the markup.
+                // Full price-break matrix per part, plus the published retail: the supplier's own
+                // stated price (stub: net 9.50 with a 40% distributor discount -> list 15.83), charm-
+                // priced down to the x.99 below it, not derived from the markup.
                 .andExpect(jsonPath("$.pricing[?(@.partId=='SAMPLE-001-RED')].breaks.length()").value(3))
-                .andExpect(jsonPath("$.pricing[?(@.partId=='SAMPLE-001-RED')].retail").value(15.83))
+                .andExpect(jsonPath("$.pricing[?(@.partId=='SAMPLE-001-RED')].retail").value(14.99))
+                // Every break also carries what the shopper pays there and how much off the base it
+                // is — the quantity ladder the discount metafield is built from.
+                .andExpect(jsonPath("$.pricing[0].breaks[0].retail").value(14.99))
+                .andExpect(jsonPath("$.pricing[0].breaks[0].discount").doesNotExist())
+                .andExpect(jsonPath("$.pricing[0].breaks[1].discount").exists())
                 // Charges from getAvailableCharges (stub returns SETUP-EMB, RUN-EMB).
                 .andExpect(jsonPath("$.charges.length()").value(2))
                 // Every service answered, so nothing is flagged as degraded.

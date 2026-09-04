@@ -13,6 +13,8 @@ import java.math.RoundingMode;
 @Component
 public class PricingPolicy {
 
+    private static final BigDecimal NINETY_NINE_CENTS = new BigDecimal("0.99");
+
     private final SyncProperties.Pricing cfg;
 
     public PricingPolicy(SyncProperties props) {
@@ -26,11 +28,13 @@ public class PricingPolicy {
      * @return the retail price to publish, or {@code null} if no supplier price is known
      */
     public BigDecimal retailPrice(BigDecimal supplierNet, BigDecimal listPrice) {
-        // The supplier's own retail price wins: it is a real figure (PaceSetter's is exactly what
-        // their public product page shows), and it is published untouched — rounding a stated retail
-        // price to x.99 would quietly disagree with the supplier over every product.
+        // The supplier's own retail price wins: it is a real figure — PaceSetter's is exactly what
+        // their public product page shows. Under NINETY_NINE it is charm-priced *down* to the next
+        // x.99 (208.00 -> 207.99), which is the store's house style and stays at or below the price
+        // the supplier states, never above it.
         if (usesSupplierList() && listPrice != null) {
-            return listPrice.setScale(2, RoundingMode.HALF_UP);
+            BigDecimal price = roundsToNinetyNine() ? charmDown(listPrice) : listPrice;
+            return price.setScale(2, RoundingMode.HALF_UP);
         }
         if (supplierNet == null) {
             return null;
@@ -42,10 +46,14 @@ public class PricingPolicy {
         if (cfg != null && cfg.mapFloor() && listPrice != null && price.compareTo(listPrice) < 0) {
             price = listPrice;
         }
-        if (cfg != null && cfg.rounding() == SyncProperties.Pricing.Rounding.NINETY_NINE) {
-            price = roundToNinetyNine(price);
+        if (roundsToNinetyNine()) {
+            price = charmUp(price);
         }
         return price.setScale(2, RoundingMode.HALF_UP);
+    }
+
+    private boolean roundsToNinetyNine() {
+        return cfg != null && cfg.rounding() == SyncProperties.Pricing.Rounding.NINETY_NINE;
     }
 
     /** @return whether a published supplier retail price should be preferred over the markup. */
@@ -54,12 +62,25 @@ public class PricingPolicy {
                 || cfg.strategy() == SyncProperties.Pricing.Strategy.SUPPLIER_LIST;
     }
 
-    /** Rounds to the nearest {@code x.99} at or above the input (e.g. 13.30 → 13.99, 13.00 → 12.99). */
-    private static BigDecimal roundToNinetyNine(BigDecimal price) {
-        BigDecimal candidate = price.setScale(0, RoundingMode.FLOOR).add(new BigDecimal("0.99"));
-        if (candidate.compareTo(price) < 0) {
-            candidate = candidate.add(BigDecimal.ONE);
+    /**
+     * The nearest {@code x.99} at or <b>above</b> a price we computed ourselves (13.30 → 13.99).
+     * A marked-up price is an internal figure, so charm pricing rounds it up and keeps the margin.
+     */
+    private static BigDecimal charmUp(BigDecimal price) {
+        BigDecimal candidate = price.setScale(0, RoundingMode.FLOOR).add(NINETY_NINE_CENTS);
+        return candidate.compareTo(price) < 0 ? candidate.add(BigDecimal.ONE) : candidate;
+    }
+
+    /**
+     * The nearest {@code x.99} at or <b>below</b> a price the supplier states (208.00 → 207.99,
+     * 346.10 → 345.99, 84.99 → 84.99). Rounding a stated retail price the other way would publish
+     * above what the supplier itself asks. A price under 1.00 has no x.99 below it and is left alone.
+     */
+    private static BigDecimal charmDown(BigDecimal price) {
+        BigDecimal candidate = price.setScale(0, RoundingMode.FLOOR).add(NINETY_NINE_CENTS);
+        if (candidate.compareTo(price) > 0) {
+            candidate = candidate.subtract(BigDecimal.ONE);
         }
-        return candidate;
+        return candidate.signum() <= 0 ? price : candidate;
     }
 }

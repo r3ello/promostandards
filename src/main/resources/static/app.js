@@ -348,7 +348,7 @@ function rowCells(e) {
 		<td class="num">${variants}</td>
 		<td>${inv}</td>
 		<td>${price}</td>
-		<td>${syncBadge(e.imported)}</td>
+		<td>${syncBadge(e.imported)}${discountBadge(e)}</td>
 		<td class="col-actions">${actionsHtml(e)}</td>`;
 }
 
@@ -367,6 +367,7 @@ function actionsHtml(e) {
 					<div class="menu__list">
 						<button class="menu__item" data-act="inv" data-pid="${pid}">Sync inventory</button>
 						<button class="menu__item" data-act="price" data-pid="${pid}">Sync price</button>
+						<button class="menu__item" data-act="discounts" data-pid="${pid}">Sync discounts</button>
 						<button class="menu__item" data-act="reimport" data-pid="${pid}">Re-import</button>
 					</div>
 				</div>
@@ -494,13 +495,15 @@ function detailHtml(d) {
 			<td class="num">${(b.minQuantity ?? 0).toLocaleString()}</td>
 			<td class="num">${b.price == null ? '—' : money(b.price)}</td>
 			<td class="num">${b.listPrice == null ? '—' : money(b.listPrice)}</td>
+			<td class="num"><strong>${b.retail == null ? '—' : money(b.retail)}</strong></td>
+			<td class="num">${b.discount == null ? '—' : `−${money(b.discount)}`}</td>
 			<td class="muted">${esc(b.uom || '')}</td>
 		</tr>`).join('');
 		return `<div class="price-part">
 			<div class="price-part__head"><span class="sku">${esc(p.partId)}</span>${p.description ? `<span class="muted"> · ${esc(p.description)}</span>` : ''}${p.retail != null ? `<span class="badge badge--neutral">Retail ${money(p.retail)}</span>` : ''}</div>
 			<table class="variants">
-				<thead><tr><th class="num">Min qty</th><th class="num">Unit (net)</th><th class="num">List</th><th>UOM</th></tr></thead>
-				<tbody>${breaks || '<tr><td colspan="4" class="muted">No price breaks.</td></tr>'}</tbody>
+				<thead><tr><th class="num">Min qty</th><th class="num">Unit (net)</th><th class="num">List</th><th class="num">Sale price</th><th class="num">Discount</th><th>UOM</th></tr></thead>
+				<tbody>${breaks || '<tr><td colspan="6" class="muted">No price breaks.</td></tr>'}</tbody>
 			</table>
 		</div>`;
 	}).join('');
@@ -526,6 +529,7 @@ function detailHtml(d) {
 		${inventory}
 		${decorations}
 		${pricing}
+		${discountsHtml(d)}
 		${charges}`;
 }
 
@@ -623,6 +627,11 @@ async function runAction(pid, act, btn) {
 		} else if (act === 'price') {
 			const r = await api(`/api/sync/products/${encodeURIComponent(pid)}/pricing`, 'POST');
 			toast(`Prices synced for ${pid}: ${r.pricesUpdated} updated`); restore(btn, label);
+		} else if (act === 'discounts') {
+			const r = await api(`/api/discounts/products/${encodeURIComponent(pid)}`, 'POST');
+			toast(discountMessage(pid, r), discountFailed(r));
+			applyDiscountResult(pid, r);
+			restore(btn, label);
 		}
 	} catch (e) { toast(e.message, true); restore(btn, label); }
 }
@@ -833,6 +842,15 @@ async function doImport(metafields) {
 		toast(`${r.updated ? 'Updated' : 'Added'} ${pid}: ${r.variantCount} variants, ${r.inventoryUpdated} inventory${mfNote}`);
 		setImported(pid, true);
 		closeMetafieldModal();
+		// A service the supplier could not answer for: the import went through, but a part of it did
+		// not, and "Added X" alone would read as a complete sync.
+		for (const w of r.warnings || []) toast(`${pid}: ${w}`, true);
+		// The import publishes the discounts too, server-side, and reports what happened to them.
+		if (r.discountError) toast(`Discounts for ${pid}: ${r.discountError}`, true);
+		else if (r.discounts) {
+			if (r.discounts.outcome !== 'NO_DISCOUNTS') toast(discountMessage(pid, r.discounts), discountFailed(r.discounts));
+			applyDiscountResult(pid, r.discounts);
+		}
 	} catch (e) { toast(e.message, true); }
 	finally { btn.disabled = false; skip.disabled = false; btn.innerHTML = orig; }
 }
@@ -912,3 +930,149 @@ el('loginForm').addEventListener('submit', doLogin);
 el('signOutBtn').addEventListener('click', doLogout);
 
 bootstrap();
+
+// --- quantity discounts -------------------------------------------------
+// A published discount is one JSON metafield on the product and on each covered variant, so there is
+// nothing to authenticate and nothing to reconcile: publishing is a write that can simply be
+// repeated. The ladder shown here is the one that gets written — read straight out of the detail the
+// row already loaded (each price break carries its published price and the amount off), so opening a
+// row costs nothing extra. Only "View payload" goes back to the server, and only when clicked.
+const discountMoney = currency('USD');
+
+// Only PUBLISHED means something was written; the other outcomes are why nothing was.
+function discountFailed(r) { return r && r.outcome !== 'PUBLISHED' && r.outcome !== 'NO_DISCOUNTS'; }
+
+function discountMessage(pid, r) {
+	if (r.outcome === 'SKIPPED') return `Discounts for ${pid} skipped: ${r.reason || 'disabled'}`;
+	if (r.outcome === 'NOT_WRITTEN') return `Discounts for ${pid} not written: ${r.reason || 'nowhere to write them'}`;
+	if (r.outcome === 'NO_DISCOUNTS') return `${pid} has no quantity discounts to publish`;
+	const tiers = (r.tiers || []).length;
+	const where = r.productWide ? 'the product and its variants' : `${(r.variants || []).length} variant group(s)`;
+	return `Published ${tiers} discount tier${tiers === 1 ? '' : 's'} for ${pid} from ${discountMoney(r.basePrice)} on ${where}`;
+}
+
+function discountBadge(e) {
+	if (!e.discountsPublished) return '';
+	return ` <span class="badge badge--success" title="Quantity ladder published in the discount metafield">% Discounts</span>`;
+}
+
+function discountLadder(d) {
+	// The ladder published for this id: the part the supplier priced under it, else the first part it
+	// did price. A grouped product whose parts differ publishes one value per part, per variant.
+	const parts = d.pricing || [];
+	if (!parts.length) return null;
+	const part = parts.find((p) => (p.partId || '').toUpperCase() === (d.productId || '').toUpperCase()) || parts[0];
+	const breaks = (part.breaks || []).slice().sort((a, b) => (a.minQuantity || 0) - (b.minQuantity || 0));
+	if (!breaks.length) return null;
+	return { part, breaks, tiers: breaks.filter((b) => b.discount != null && Number(b.discount) > 0) };
+}
+
+function discountsHtml(d) {
+	const pid = d.productId;
+	const entry = entries.find((x) => x.productId === pid);
+	const published = !!(entry && entry.discountsPublished);
+	const money = currency('USD');
+	const ladder = discountLadder(d);
+
+	const status = published
+		? `<span class="badge badge--success">Published</span>`
+		: `<span class="badge badge--neutral">Not published</span>`;
+
+	if (!ladder || !ladder.tiers.length) {
+		return `<div class="disc-block" id="disc-block-${cssId(pid)}"><div class="sub-title">Quantity discounts ${status}</div>
+			<p class="muted">The supplier gives no cheaper price at higher quantities, so there is no
+			quantity ladder to publish for this product.</p></div>`;
+	}
+
+	const base = ladder.breaks[0];
+	const minQty = base.minQuantity || 1;
+	// Each tier runs until the next one starts — the range the shopper actually sees on the page.
+	const rows = ladder.breaks.map((b, i) => {
+		const next = ladder.breaks[i + 1];
+		const from = b.minQuantity || 1;
+		const range = next ? `${from} – ${(next.minQuantity || 1) - 1}` : `${from}+`;
+		return `<tr>
+			<td>Order ${range} pieces</td>
+			<td class="num"><strong>${b.retail == null ? '—' : money(b.retail)}</strong> each</td>
+			<td class="num">${b.discount == null || Number(b.discount) <= 0 ? '—' : `−${money(b.discount)}`}</td>
+		</tr>`;
+	}).join('');
+
+	const notes = [];
+	if (minQty > 1) notes.push(`The supplier's table starts at ${minQty}, so this product has a minimum order of ${minQty} — the ladder says so, but enforcing it is the storefront's job.`);
+	if ((d.pricing || []).length > 1) notes.push('This product has several priced parts; parts priced differently get their own value on their own variants.');
+	const noteHtml = notes.length ? `<p class="muted disc-note">⚠ ${notes.map(esc).join(' · ')}</p>` : '';
+
+	return `<div class="disc-block" id="disc-block-${cssId(pid)}">
+		<div class="sub-title">Quantity discounts ${status}</div>
+		<table class="variants disc-table">
+			<thead><tr><th>Quantity</th><th class="num">Price each</th><th class="num">Discount / unit</th></tr></thead>
+			<tbody>${rows}</tbody>
+		</table>
+		${noteHtml}
+		<div class="disc-actions">
+			<button class="btn btn--primary btn--sm" data-disc="publish" data-pid="${esc(pid)}">${published ? 'Update discounts' : 'Publish discounts'}</button>
+			<button class="btn btn--sm" data-disc="payload" data-pid="${esc(pid)}">View payload</button>
+		</div>
+		<pre class="disc-payload" id="disc-payload-${cssId(pid)}" hidden></pre>
+	</div>`;
+}
+
+// A published ladder shows up in three places — the row badge, the expanded block's status, and the
+// button's own label — and all three read the catalog entry, which is loaded once per page. So the
+// result is written back to it and both views repainted; otherwise the block keeps saying "Not
+// published" about a ladder that is already live in Shopify, which is exactly what it did.
+function applyDiscountResult(pid, r) {
+	const published = !!(r && r.outcome === 'PUBLISHED');
+	// A grouped product publishes one value per group of ids (EP2 at $345.99, EP2PK at $634.99), so
+	// every supplier id it covers gets its own row updated — not just the one clicked.
+	const touched = new Set([pid]);
+	for (const v of (r && r.variants) || []) {
+		for (const id of v.supplierIds || []) {
+			const e = entries.find((x) => x.productId === id);
+			if (e && published) { e.discountsPublished = true; touched.add(id); }
+		}
+	}
+	const entry = entries.find((x) => x.productId === pid);
+	if (entry && published) entry.discountsPublished = true;
+	for (const id of touched) {
+		const e = entries.find((x) => x.productId === id);
+		if (e) refreshRow(e);
+		refreshDiscountBlock(id);
+	}
+}
+
+function refreshDiscountBlock(pid) {
+	const block = el(`disc-block-${cssId(pid)}`);
+	const entry = entries.find((x) => x.productId === pid);
+	if (block && entry && entry.detail) block.outerHTML = discountsHtml(entry.detail);
+}
+
+document.addEventListener('click', async (e) => {
+	const btn = e.target.closest('[data-disc]');
+	if (!btn) return;
+	const pid = btn.getAttribute('data-pid');
+	const act = btn.getAttribute('data-disc');
+
+	if (act === 'payload') {
+		const pre = el(`disc-payload-${cssId(pid)}`);
+		if (!pre) return;
+		if (!pre.hidden) { pre.hidden = true; return; }
+		pre.hidden = false;
+		pre.textContent = 'Loading…';
+		try {
+			const preview = await api(`/api/discounts/preview/${encodeURIComponent(pid)}`);
+			pre.textContent = `${preview.metafield} (${preview.metafieldType})\n${JSON.stringify(preview.payload, null, 2)}`;
+		} catch (err) { pre.textContent = err.message; }
+		return;
+	}
+
+	const label = btn.textContent;
+	btn.disabled = true; btn.innerHTML = `<span class="spinner"></span>`;
+	try {
+		const r = await api(`/api/discounts/products/${encodeURIComponent(pid)}`, 'POST');
+		toast(discountMessage(pid, r), discountFailed(r));
+		applyDiscountResult(pid, r);
+	} catch (err) { toast(err.message, true); }
+	finally { btn.disabled = false; btn.innerHTML = label; }
+});

@@ -2,6 +2,7 @@ package com.trophy.promostandards.sync;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.trophy.promostandards.discount.DiscountProperties;
 import com.trophy.promostandards.shopify.ShopifyGraphQLClient;
 import com.trophy.promostandards.shopify.ShopifyHttp;
 import com.trophy.promostandards.shopify.ShopifyProperties;
@@ -35,9 +36,24 @@ class ShopifySyncServiceTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    /** Defaults: the store index reads the ladder from the discount app's own metafield. */
+    private static final DiscountProperties DISCOUNTS = new DiscountProperties(null, null, null, null);
+
     private final List<String> operations = new ArrayList<>();
+    private final Map<String, Map<?, ?>> variablesByOperation = new java.util.LinkedHashMap<>();
     private Map<?, ?> productSetVariables;
     private Map<?, ?> metafieldsSetVariables;
+
+    /** The variables the last call of one GraphQL operation was made with. */
+    private Map<?, ?> varsOf(String operation) {
+        return variablesByOperation.get(operation);
+    }
+
+    /** A GraphQL variable list, typed so AssertJ's extracting/containsExactly stay usable. */
+    @SuppressWarnings("unchecked")
+    private static List<Object> objects(Object value) {
+        return (List<Object>) value;
+    }
 
     /** Routes by the GraphQL operation name embedded in the query string. */
     private ShopifyHttp routingHttp() {
@@ -101,9 +117,14 @@ class ShopifySyncServiceTest {
 
         CatalogService catalog = mock(CatalogService.class);
         when(catalog.aggregate("SAMPLE-001")).thenReturn(sample());
+        // A grouped migrated product: the sibling id answers for its whole family, CM778 included.
+        when(catalog.aggregate("CM777")).thenReturn(sibling());
+        when(catalog.aggregate("CM778")).thenReturn(new SupplierProduct("CM778", "Sample Cap", null,
+                null, null, List.of(), List.of(new Variant("CM778", "Forest", "S", "CM778-S",
+                new BigDecimal("4.00"), null, 7, List.of())), List.of(), List.of(), List.of()));
 
         return new ShopifySyncService(gql, catalog, mapper, policy, shopify, syncProps, new ObjectMapper(),
-                CatalogTestSupport.providerOf(syncState));
+                CatalogTestSupport.providerOf(syncState), DISCOUNTS);
     }
 
     private static SupplierProduct sample() {
@@ -114,7 +135,19 @@ class ShopifySyncServiceTest {
                                 new BigDecimal("9.50"), new BigDecimal("12.00"), 1200, List.of()),
                         new Variant("SAMPLE-001-RED", "Red", "M", "SAMPLE-001-RED-M",
                                 new BigDecimal("9.50"), new BigDecimal("12.00"), 350, List.of())),
-                List.of(), List.of());
+                List.of(), List.of(), List.of());
+    }
+
+    /** What PaceSetter answers for a sibling id: its own part plus the rest of its family. */
+    private static SupplierProduct sibling() {
+        return new SupplierProduct("CM777", "Sample Cap", "<p>c</p>", "Trophy Apparel", "Caps",
+                List.of("Caps"),
+                List.of(
+                        new Variant("CM777", "Navy", "S", "CM777-S",
+                                new BigDecimal("4.00"), null, 5, List.of()),
+                        new Variant("CM778", "Forest", "S", "CM778-S",
+                                new BigDecimal("4.00"), null, 0, List.of())),
+                List.of(), List.of(), List.of());
     }
 
     @Test
@@ -157,51 +190,72 @@ class ShopifySyncServiceTest {
     }
 
     /**
-     * Store state for the migrated-product tests: nothing under the app handle, one migration-created
-     * product ({@code p-8123-sample-polo}) whose {@code ps_product_ids} covers SAMPLE-001 (metafield
-     * values deliberately lower-cased to prove case-insensitive resolution) plus a sibling CM777.
+     * Store state for the migrated-product tests: nothing under the app handle, and one
+     * migration-created product ({@code p-8123-sample-polo}) exactly as Matrixify left it — the
+     * default {@code Title / Default Title} option, one legacy variant with a {@code PS} SKU and
+     * untracked inventory, no variant identity metafield. Its {@code ps_product_ids} covers
+     * SAMPLE-001 (deliberately lower-cased, to prove case-insensitive resolution) plus a sibling
+     * CM777.
      */
     private ShopifyHttp migratedStoreHttp() {
         return (path, body, headers) -> {
             String query = String.valueOf(((Map<?, ?>) body).get("query"));
             Map<?, ?> variables = (Map<?, ?>) ((Map<?, ?>) body).get("variables");
             String response;
+            String operation;
             if (query.contains("ProductByHandle")) {
-                operations.add("ProductByHandle");
+                operation = "ProductByHandle";
                 response = String.valueOf(variables.get("query")).contains("p-8123-sample-polo") ? """
                         {"data":{"products":{"nodes":[{
                           "id":"gid://shopify/Product/900",
                           "handle":"p-8123-sample-polo",
+                          "options":[{"id":"gid://shopify/ProductOption/1","name":"Title","position":1,
+                            "optionValues":[{"id":"gid://shopify/ProductOptionValue/1","name":"Default Title"}]}],
                           "variants":{"nodes":[
-                            {"id":"gid://shopify/ProductVariant/91","sku":"SAMPLE-001-RED-S","inventoryItem":{"id":"gid://shopify/InventoryItem/191"}},
-                            {"id":"gid://shopify/ProductVariant/92","sku":"SAMPLE-001-RED-M","inventoryItem":{"id":"gid://shopify/InventoryItem/192"}},
-                            {"id":"gid://shopify/ProductVariant/93","sku":"PSLEGACY-XL","inventoryItem":{"id":"gid://shopify/InventoryItem/193"}}
+                            {"id":"gid://shopify/ProductVariant/93","sku":"PSLEGACY-XL",
+                             "selectedOptions":[{"name":"Title","value":"Default Title"}],
+                             "inventoryItem":{"id":"gid://shopify/InventoryItem/193","tracked":false}}
                           ]}
                         }]}}}"""
                         : "{\"data\":{\"products\":{\"nodes\":[]}}}";
             } else if (query.contains("ImportedProducts")) {
-                operations.add("ImportedProducts");
+                operation = "ImportedProducts";
                 response = """
                         {"data":{"products":{"pageInfo":{"hasNextPage":false},"nodes":[{
                           "id":"gid://shopify/Product/900",
                           "handle":"p-8123-sample-polo",
                           "psId":{"value":"sample-001"},
                           "psIds":{"value":"[\\"sample-001\\",\\"CM777\\"]"},
-                          "psSource":{"value":"migration"}
+                          "psSource":{"value":"migration"},
+                          "discounts":{"value":"{\\"currencyCode\\":\\"USD\\",\\"tiers\\":[]}"}
                         }]}}}""";
-            } else if (query.contains("InventorySet")) {
-                operations.add("InventorySet");
-                response = "{\"data\":{\"inventorySetQuantities\":{\"inventoryAdjustmentGroup\":{\"createdAt\":\"now\"},\"userErrors\":[]}}}";
+            } else if (query.contains("ProductOptionUpdate")) {
+                operation = "ProductOptionUpdate";
+                response = "{\"data\":{\"productOptionUpdate\":{\"product\":{\"id\":\"gid://shopify/Product/900\"},\"userErrors\":[]}}}";
+            } else if (query.contains("ProductOptionsCreate")) {
+                operation = "ProductOptionsCreate";
+                response = "{\"data\":{\"productOptionsCreate\":{\"product\":{\"id\":\"gid://shopify/Product/900\"},\"userErrors\":[]}}}";
+            } else if (query.contains("VariantsCreate")) {
+                operation = "VariantsCreate";
+                response = "{\"data\":{\"productVariantsBulkCreate\":{\"productVariants\":[],\"userErrors\":[]}}}";
             } else if (query.contains("VariantsUpdate")) {
-                operations.add("VariantsUpdate");
+                operation = "VariantsUpdate";
                 response = "{\"data\":{\"productVariantsBulkUpdate\":{\"productVariants\":[],\"userErrors\":[]}}}";
+            } else if (query.contains("InventoryActivate")) {
+                operation = "InventoryActivate";
+                response = "{\"data\":{\"inventoryBulkToggleActivation\":{\"inventoryItem\":{\"id\":\"gid://shopify/InventoryItem/193\"},\"userErrors\":[]}}}";
+            } else if (query.contains("InventorySet")) {
+                operation = "InventorySet";
+                response = "{\"data\":{\"inventorySetQuantities\":{\"inventoryAdjustmentGroup\":{\"createdAt\":\"now\"},\"userErrors\":[]}}}";
             } else if (query.contains("MetafieldsSet")) {
-                operations.add("MetafieldsSet");
+                operation = "MetafieldsSet";
                 metafieldsSetVariables = (Map<?, ?>) ((Map<?, ?>) body).get("variables");
                 response = "{\"data\":{\"metafieldsSet\":{\"metafields\":[],\"userErrors\":[]}}}";
             } else {
                 throw new IllegalStateException("unexpected query: " + query);
             }
+            operations.add(operation);
+            variablesByOperation.put(operation, (Map<?, ?>) ((Map<?, ?>) body).get("variables"));
             try {
                 return MAPPER.readTree(response);
             } catch (Exception e) {
@@ -210,8 +264,14 @@ class ShopifySyncServiceTest {
         };
     }
 
+    /**
+     * A migrated product carries none of the supplier's variants, so syncing one used to match
+     * nothing and do nothing. It now adopts the legacy variant and creates the rest — never with
+     * {@code productSet}, which is declarative and would delete the sibling ids' variants along with
+     * the migrated title, body and images.
+     */
     @Test
-    void importUpdatesMigratedProductInPlaceWithoutProductSet() {
+    void importAdoptsTheMigratedVariantAndCreatesTheMissingOnes() {
         ShopifySyncService service = service(migratedStoreHttp());
 
         SyncResult result = service.importProduct("SAMPLE-001");
@@ -219,14 +279,113 @@ class ShopifySyncServiceTest {
         assertThat(result.shopifyProductId()).isEqualTo("gid://shopify/Product/900");
         assertThat(result.handle()).isEqualTo("p-8123-sample-polo");
         assertThat(result.updated()).isTrue();
-        assertThat(result.variantCount()).isEqualTo(2); // SKU-matched variants only, not PSLEGACY-XL
-        assertThat(result.inventoryUpdated()).isEqualTo(2);
-
-        // Never productSet a migrated product: declarative, it would delete the sibling ids'
-        // variants and replace migrated content. Inventory + price per matched variant only.
+        // SAMPLE-001 {Red S, Red M} + the sibling family {CM777 Navy S, CM778 Forest S}
+        assertThat(result.variantCount()).isEqualTo(4);
         assertThat(operations).doesNotContain("ProductSet", "MetaobjectByHandle");
-        assertThat(operations).contains("ImportedProducts", "InventorySet", "VariantsUpdate", "MetafieldsSet");
 
+        // The default Title option becomes Color, and Size is added, before any variant is written.
+        assertThat(operations).containsSubsequence("ProductOptionUpdate", "ProductOptionsCreate",
+                "VariantsUpdate", "VariantsCreate");
+        Map<?, ?> renamed = (Map<?, ?>) varsOf("ProductOptionUpdate").get("option");
+        assertThat(renamed.get("name")).isEqualTo("Color");
+        assertThat((List<?>) varsOf("ProductOptionUpdate").get("optionValuesToUpdate")).singleElement()
+                .satisfies(v -> assertThat(((Map<?, ?>) v).get("name")).isEqualTo("Red"));
+
+        // The legacy variant is kept (same id) and rewritten as the supplier's first variant.
+        List<?> updated = (List<?>) varsOf("VariantsUpdate").get("variants");
+        assertThat(updated).singleElement().satisfies(v -> {
+            Map<?, ?> variant = (Map<?, ?>) v;
+            assertThat(variant.get("id")).isEqualTo("gid://shopify/ProductVariant/93");
+            Map<?, ?> inventoryItem = (Map<?, ?>) variant.get("inventoryItem");
+            assertThat(inventoryItem.get("sku")).isEqualTo("SAMPLE-001-RED-S");
+            assertThat(inventoryItem.get("tracked")).isEqualTo(true);
+            List<Object> optionValues = objects(variant.get("optionValues"));
+            assertThat(optionValues).extracting(o -> String.valueOf(((Map<?, ?>) o).get("name")))
+                    .containsExactly("Red", "S");
+        });
+
+        // The other three are created, each carrying its own supplier id as the variant metafield.
+        assertThat(varsOf("VariantsCreate").get("strategy")).isEqualTo("PRESERVE_STANDALONE_VARIANT");
+        List<Object> created = objects(varsOf("VariantsCreate").get("variants"));
+        assertThat(created).hasSize(3);
+        assertThat(created).extracting(v -> {
+            List<?> metafields = (List<?>) ((Map<?, ?>) v).get("metafields");
+            return String.valueOf(((Map<?, ?>) metafields.get(0)).get("value"));
+        }).containsExactly("SAMPLE-001-RED", "CM777", "CM778");
+
+        // The adopted variant is untracked and stocked nowhere, so it is activated before its
+        // quantity is set; the created ones get theirs inside productVariantsBulkCreate.
+        assertThat(operations).containsSubsequence("InventoryActivate", "InventorySet");
+        assertThat(result.inventoryUpdated()).isEqualTo(1);
+
+        // CM778 is a product of its own that ps_product_ids never listed: the list grows to cover it
+        // (one MetafieldsSet), on top of the ps_last_sync_at stamp (another).
+        assertThat(operations.stream().filter("MetafieldsSet"::equals).toList()).hasSize(2);
+    }
+
+    /** A store product built on options this app does not model keeps its variants untouched. */
+    @Test
+    void importLeavesUnmodelledOptionsAlone() {
+        ShopifyHttp http = (path, body, headers) -> {
+            String query = String.valueOf(((Map<?, ?>) body).get("query"));
+            Map<?, ?> variables = (Map<?, ?>) ((Map<?, ?>) body).get("variables");
+            String response;
+            String operation;
+            if (query.contains("ProductByHandle")) {
+                operation = "ProductByHandle";
+                response = String.valueOf(variables.get("query")).contains("p-8123-sample-polo") ? """
+                        {"data":{"products":{"nodes":[{
+                          "id":"gid://shopify/Product/900",
+                          "handle":"p-8123-sample-polo",
+                          "options":[{"id":"gid://shopify/ProductOption/1","name":"Material","position":1,
+                            "optionValues":[{"id":"gid://shopify/ProductOptionValue/1","name":"Oak"}]}],
+                          "variants":{"nodes":[
+                            {"id":"gid://shopify/ProductVariant/93","sku":"SAMPLE-001-RED-S",
+                             "selectedOptions":[{"name":"Material","value":"Oak"}],
+                             "inventoryItem":{"id":"gid://shopify/InventoryItem/193","tracked":true}}
+                          ]}
+                        }]}}}"""
+                        : "{\"data\":{\"products\":{\"nodes\":[]}}}";
+            } else if (query.contains("ImportedProducts")) {
+                operation = "ImportedProducts";
+                response = """
+                        {"data":{"products":{"pageInfo":{"hasNextPage":false},"nodes":[{
+                          "id":"gid://shopify/Product/900",
+                          "handle":"p-8123-sample-polo",
+                          "psId":{"value":"SAMPLE-001"},
+                          "psIds":{"value":"[\\"SAMPLE-001\\"]"},
+                          "psSource":{"value":"migration"}
+                        }]}}}""";
+            } else if (query.contains("VariantsUpdate")) {
+                operation = "VariantsUpdate";
+                response = "{\"data\":{\"productVariantsBulkUpdate\":{\"productVariants\":[],\"userErrors\":[]}}}";
+            } else if (query.contains("InventorySet")) {
+                operation = "InventorySet";
+                response = "{\"data\":{\"inventorySetQuantities\":{\"inventoryAdjustmentGroup\":{\"createdAt\":\"now\"},\"userErrors\":[]}}}";
+            } else if (query.contains("MetafieldsSet")) {
+                operation = "MetafieldsSet";
+                metafieldsSetVariables = (Map<?, ?>) ((Map<?, ?>) body).get("variables");
+                response = "{\"data\":{\"metafieldsSet\":{\"metafields\":[],\"userErrors\":[]}}}";
+            } else {
+                throw new IllegalStateException("unexpected query: " + query);
+            }
+            operations.add(operation);
+            variablesByOperation.put(operation, (Map<?, ?>) ((Map<?, ?>) body).get("variables"));
+            try {
+                return MAPPER.readTree(response);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        };
+        ShopifySyncService service = service(http);
+
+        SyncResult result = service.importProduct("SAMPLE-001");
+
+        // No option is rewritten and no variant created; the SKU-matched one is still refreshed.
+        assertThat(operations).doesNotContain("ProductOptionUpdate", "ProductOptionsCreate",
+                "VariantsCreate", "ProductSet");
+        assertThat(operations).contains("VariantsUpdate", "InventorySet");
+        assertThat(result.inventoryUpdated()).isEqualTo(1);
         // Only the mutable ps_last_sync_at is stamped; ps_source=migration stays untouched.
         List<?> stamped = (List<?>) metafieldsSetVariables.get("metafields");
         assertThat(stamped).extracting(m -> String.valueOf(((Map<?, ?>) m).get("key")))
@@ -241,6 +400,68 @@ class ShopifySyncServiceTest {
 
         // Canonical + every list member, deduped case-insensitively.
         assertThat(ids).containsExactly("sample-001", "CM777");
+    }
+
+    /**
+     * The way this store is actually run: products are migrated in with Matrixify and imported from
+     * the console minutes later. If the create path trusted a five-minute-old index, it would decide
+     * the product is not in the store and create a duplicate under the app's own handle — so on a
+     * miss it repages before creating, and finds it.
+     */
+    @Test
+    void repagesTheStoreBeforeCreatingRatherThanTrustingAStaleIndex() {
+        // The store gains the migrated product between the two listings: the first answers as it did
+        // before the migration ran, the second as it is now.
+        ShopifyHttp migratedAfterFirstListing = new ShopifyHttp() {
+            private final ShopifyHttp real = migratedStoreHttp();
+            private boolean listed;
+
+            @Override
+            public JsonNode postJson(String path, Object body, Map<String, String> headers) {
+                String query = String.valueOf(((Map<?, ?>) body).get("query"));
+                if (query.contains("ImportedProducts") && !listed) {
+                    listed = true;
+                    operations.add("ImportedProducts");
+                    try {
+                        return MAPPER.readTree(
+                                "{\"data\":{\"products\":{\"pageInfo\":{\"hasNextPage\":false},\"nodes\":[]}}}");
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                }
+                return real.postJson(path, body, headers);
+            }
+        };
+        ShopifySyncService service = service(migratedAfterFirstListing);
+
+        // The catalog warms the index while the product is not in the store yet.
+        assertThat(service.isImported("SAMPLE-001")).isFalse();
+        operations.clear();
+
+        SyncResult result = service.importProduct("SAMPLE-001");
+
+        assertThat(operations).contains("ImportedProducts");   // it looked again before creating
+        assertThat(operations).doesNotContain("ProductSet");   // so it adopted instead of duplicating
+        assertThat(result.shopifyProductId()).isEqualTo("gid://shopify/Product/900");
+    }
+
+    /**
+     * The discounts badge, like the imported one, is answered from the cached index — the published
+     * ladder rides along on the same listing rather than costing a lookup per row.
+     */
+    @Test
+    void readsThePublishedDiscountsFromTheSameIndex() {
+        ShopifySyncService service = service(migratedStoreHttp());
+
+        assertThat(service.hasDiscounts("SAMPLE-001")).isTrue();
+        assertThat(service.hasDiscounts("cm777")).isTrue();   // sibling id of the same product
+        assertThat(service.hasDiscounts("NOT-IN-STORE")).isFalse();
+
+        // The namespace and key it asked Shopify for are the configured ones, not hard-coded.
+        assertThat(varsOf("ImportedProducts").get("discountNamespace")).isEqualTo("trophy_discount");
+        assertThat(varsOf("ImportedProducts").get("discountKey")).isEqualTo("discount_tiers");
+
+        assertThat(operations).containsExactly("ImportedProducts");
     }
 
     /**
