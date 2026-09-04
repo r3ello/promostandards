@@ -23,9 +23,11 @@ import java.util.Set;
 public class MetafieldCatalogService {
 
     /** Keys the importer always writes itself — never offered for manual selection. */
+    @SuppressWarnings("deprecation")     // the migration's keys are managed too, and still around
     private static final Set<String> MANAGED_KEYS = Set.of(
             ShopifyProductMapper.MF_SUPPLIER, ShopifyProductMapper.MF_PRODUCT_ID,
-            ShopifyProductMapper.MF_PRICE_BREAKS);
+            ShopifyProductMapper.MF_PRICE_BREAKS, ShopifyProductMapper.MF_VENDOR,
+            ShopifyProductMapper.MF_SOURCE_NEW, ShopifyProductMapper.MF_LAST_SYNC_AT_NEW);
 
     private final ShopifyGraphQLClient gql;
 

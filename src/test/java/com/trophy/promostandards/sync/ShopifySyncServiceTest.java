@@ -39,6 +39,9 @@ class ShopifySyncServiceTest {
     /** Defaults: the store index reads the ladder from the discount app's own metafield. */
     private static final DiscountProperties DISCOUNTS = new DiscountProperties(null, null, null, null);
 
+    /** Defaults: the supplier's images replace the product's, and each variant gets its colour's. */
+    private static final ImageProperties IMAGES = new ImageProperties(null, null);
+
     private final List<String> operations = new ArrayList<>();
     private final Map<String, Map<?, ?>> variablesByOperation = new java.util.LinkedHashMap<>();
     private Map<?, ?> productSetVariables;
@@ -124,7 +127,7 @@ class ShopifySyncServiceTest {
                 new BigDecimal("4.00"), null, 7, List.of())), List.of(), List.of(), List.of()));
 
         return new ShopifySyncService(gql, catalog, mapper, policy, shopify, syncProps, new ObjectMapper(),
-                CatalogTestSupport.providerOf(syncState), DISCOUNTS);
+                CatalogTestSupport.providerOf(syncState), DISCOUNTS, IMAGES);
     }
 
     private static SupplierProduct sample() {
@@ -209,6 +212,7 @@ class ShopifySyncServiceTest {
                         {"data":{"products":{"nodes":[{
                           "id":"gid://shopify/Product/900",
                           "handle":"p-8123-sample-polo",
+                          "legacySku":{"value":"PS11592"},
                           "options":[{"id":"gid://shopify/ProductOption/1","name":"Title","position":1,
                             "optionValues":[{"id":"gid://shopify/ProductOptionValue/1","name":"Default Title"}]}],
                           "variants":{"nodes":[
@@ -282,6 +286,10 @@ class ShopifySyncServiceTest {
         // SAMPLE-001 {Red S, Red M} + the sibling family {CM777 Navy S, CM778 Forest S}
         assertThat(result.variantCount()).isEqualTo(4);
         assertThat(operations).doesNotContain("ProductSet", "MetaobjectByHandle");
+        // The supplier sent no images for this product, so its own are left exactly as they are.
+        // Deleting first and finding nothing to publish would strip a product over a supplier fault
+        // — PaceSetter's Media service faults outright on whole families.
+        assertThat(operations).doesNotContain("FileDelete", "ProductAddMedia", "VariantAppendMedia");
 
         // The default Title option becomes Color, and Size is added, before any variant is written.
         assertThat(operations).containsSubsequence("ProductOptionUpdate", "ProductOptionsCreate",
@@ -297,8 +305,18 @@ class ShopifySyncServiceTest {
             Map<?, ?> variant = (Map<?, ?>) v;
             assertThat(variant.get("id")).isEqualTo("gid://shopify/ProductVariant/93");
             Map<?, ?> inventoryItem = (Map<?, ?>) variant.get("inventoryItem");
-            assertThat(inventoryItem.get("sku")).isEqualTo("SAMPLE-001-RED-S");
+            // The store's own numbering: migration.legacy_sku + what tells the parts apart. These
+            // fixture ids share no prefix, so each keeps its whole part id (and its size, because
+            // SAMPLE-001-RED is sold in two).
+            assertThat(inventoryItem.get("sku")).isEqualTo("PS11592-SAMPLE-001-RED-S");
             assertThat(inventoryItem.get("tracked")).isEqualTo(true);
+            // The join back to the supplier moved to a metafield, since the SKU no longer carries it.
+            assertThat(objects(variant.get("metafields"))).anySatisfy(m -> {
+                Map<?, ?> field = (Map<?, ?>) m;
+                assertThat(field.get("namespace")).isEqualTo("trophy_sync");
+                assertThat(field.get("key")).isEqualTo("vendor_sku");
+                assertThat(field.get("value")).isEqualTo("SAMPLE-001-RED");
+            });
             List<Object> optionValues = objects(variant.get("optionValues"));
             assertThat(optionValues).extracting(o -> String.valueOf(((Map<?, ?>) o).get("name")))
                     .containsExactly("Red", "S");
@@ -386,10 +404,19 @@ class ShopifySyncServiceTest {
                 "VariantsCreate", "ProductSet");
         assertThat(operations).contains("VariantsUpdate", "InventorySet");
         assertThat(result.inventoryUpdated()).isEqualTo(1);
-        // Only the mutable ps_last_sync_at is stamped; ps_source=migration stays untouched.
+        // The sync's own bookkeeping is stamped in its namespace — including source=migration, which
+        // is what this product is; the migration's custom.ps_* keys are never touched.
         List<?> stamped = (List<?>) metafieldsSetVariables.get("metafields");
+        assertThat(stamped).allSatisfy(m ->
+                assertThat(((Map<?, ?>) m).get("namespace")).isEqualTo("trophy_sync"));
         assertThat(stamped).extracting(m -> String.valueOf(((Map<?, ?>) m).get("key")))
-                .containsExactly("ps_last_sync_at");
+                .containsExactlyInAnyOrder("last_sync_at", "vendor", "source");
+        assertThat(stamped).anySatisfy(m -> {
+            Map<?, ?> field = (Map<?, ?>) m;
+            if ("source".equals(field.get("key"))) {
+                assertThat(field.get("value")).isEqualTo("migration");
+            }
+        });
     }
 
     @Test

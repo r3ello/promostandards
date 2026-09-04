@@ -28,19 +28,85 @@ public class ShopifyProductMapper {
     /** Tag applied to every imported product so the app can discover what it owns. */
     static final String OWNER_TAG = "promostandards";
     static final String METAFIELD_NAMESPACE = "custom";
+    /**
+     * @deprecated the migration's key. The app writes {@link #MF_VENDOR} now; this one is only ever
+     * read, as the fallback for a product that has not been synced since.
+     */
+    @Deprecated
     static final String MF_SUPPLIER = "ps_supplier";
     static final String MF_PRODUCT_ID = "ps_product_id";
     /** List of every supplier id a product covers (migration N:1 grouping; canonical included). */
     static final String MF_PRODUCT_IDS = "ps_product_ids";
     static final String MF_PRICE_BREAKS = "ps_price_breaks";
-    /** Provenance: who created the product. Immutable — never overwritten once set. */
+    /**
+     * Provenance: who created the product. Immutable — never overwritten once set.
+     *
+     * @deprecated the migration's key; {@link #MF_SOURCE_NEW} is what the app writes. Read as a
+     * fallback so a product carries provenance from its first sync, not only after it.
+     */
+    @Deprecated
     static final String MF_SOURCE = "ps_source";
     static final String SOURCE_APP = "app";
     static final String SOURCE_MIGRATION = "migration";
-    /** Mutable companion to {@link #MF_SOURCE}: stamped on every successful sync. */
+    /**
+     * Mutable companion to {@link #MF_SOURCE}: stamped on every successful sync.
+     *
+     * @deprecated the migration's key; the app writes {@link #MF_LAST_SYNC_AT_NEW}.
+     */
+    @Deprecated
     static final String MF_LAST_SYNC_AT = "ps_last_sync_at";
+
+    /**
+     * The bookkeeping the sync owns, in its own namespace — the {@code custom.ps_*} equivalents came
+     * from the one-shot migration and are read-only fallbacks from here on. Splitting them apart is
+     * what makes "what the migration said" and "what the sync knows" two different questions, which
+     * matters while both are true of the same product.
+     */
+    static final String MF_VENDOR = "vendor";
+    static final String MF_SOURCE_NEW = "source";
+    static final String MF_LAST_SYNC_AT_NEW = "last_sync_at";
     /** Variant-level metafield carrying the supplier product id (e.g. {@code C0611}). */
     static final String MF_VARIANT_PROMO_STANDARD_ID = "promo_standard_id";
+
+    /**
+     * Namespace for facts this sync publishes for the storefront to read, as opposed to the
+     * {@code custom} identity metafields the app matches on.
+     */
+    static final String SYNC_NAMESPACE = "trophy_sync";
+
+    /**
+     * The supplier's colour name, verbatim, per variant. It is a <b>name</b> and nothing else:
+     * PromoStandards models {@code Color} with {@code colorName}, {@code hex} and
+     * {@code approximatePms}, but PaceSetter answers "N/A" to all three in Product Data — the real
+     * colour only ever arrives as {@code attributeColor} on an Inventory row (verified live,
+     * 2026-09-04). The theme gets the string; any swatch has to be mapped from it downstream.
+     *
+     * <p>Not the option value: that one is disambiguated when a family reuses a colour across parts
+     * ("Dark Brown (BL)" — see {@link VariantOptions}), while this is what the supplier said.
+     */
+    static final String MF_VARIANT_COLOR = "color";
+
+    /**
+     * The supplier's own part id, verbatim — {@code CM2541LB}. This is the join back to PaceSetter,
+     * and it exists because the SKU stopped being one: a migrated product's variants are numbered
+     * from the legacy catalogue ({@code PS1298-LB}), which means nothing upstream. Identity for
+     * matching therefore lives in metafields, and the SKU is free to be whatever the shop wants.
+     */
+    static final String MF_VARIANT_VENDOR_SKU = "vendor_sku";
+
+    /** @return the per-variant vendor SKU metafield, or null when the supplier named no part. */
+    static Map<String, Object> vendorSkuMetafield(String supplierPartId) {
+        return supplierPartId == null || supplierPartId.isBlank() ? null
+                : Map.of("namespace", SYNC_NAMESPACE, "key", MF_VARIANT_VENDOR_SKU,
+                         "type", "single_line_text_field", "value", supplierPartId);
+    }
+
+    /** @return the per-variant colour metafield, or null when the supplier named no colour. */
+    static Map<String, Object> colorMetafield(String supplierColor) {
+        return supplierColor == null || supplierColor.isBlank() ? null
+                : Map.of("namespace", SYNC_NAMESPACE, "key", MF_VARIANT_COLOR,
+                         "type", "single_line_text_field", "value", supplierColor);
+    }
     private static final String COLOR = VariantOptions.COLOR;
     private static final String SIZE = VariantOptions.SIZE;
 
@@ -113,7 +179,7 @@ public class ShopifyProductMapper {
     private List<Map<String, Object>> metafields(SupplierProduct product,
                                                  List<SyncProperties.Metafield> extraMetafields) {
         List<Map<String, Object>> metafields = new ArrayList<>();
-        metafields.add(metafield(MF_SUPPLIER, props.supplierCode()));
+        metafields.add(syncMetafield(MF_VENDOR, props.supplierCode()));
         metafields.add(metafield(MF_PRODUCT_ID, product.productId()));
         // Shopify variants carry a single price, so preserve the full quantity price-break matrix here.
         if (product.priceParts() != null && !product.priceParts().isEmpty()) {
@@ -237,12 +303,29 @@ public class ShopifyProductMapper {
                 optionValues.add(Map.of("optionName", SIZE, "name", defaultSize(v.size())));
             }
             variant.put("optionValues", optionValues);
-            variant.put("metafields", List.of(Map.of(
+            List<Map<String, Object>> variantMetafields = new ArrayList<>();
+            variantMetafields.add(Map.of(
                     "namespace", METAFIELD_NAMESPACE,
                     "key", MF_VARIANT_PROMO_STANDARD_ID,
                     "type", "single_line_text_field",
-                    "value", product.productId())));
+                    "value", product.productId()));
+            Map<String, Object> color = colorMetafield(v.color());
+            if (color != null) {
+                variantMetafields.add(color);
+            }
+            Map<String, Object> vendorSku = vendorSkuMetafield(v.supplierPartId());
+            if (vendorSku != null) {
+                variantMetafields.add(vendorSku);
+            }
+            variant.put("metafields", variantMetafields);
             variant.put("inventoryItem", Map.of("tracked", true));
+            // The variant's own photo, so the storefront swaps it when a colour is picked. It has to
+            // be one of the product's files (Shopify rejects a variant file that is not), which it is:
+            // the gallery is the union of every variant's images.
+            if (!v.imageUrls().isEmpty()) {
+                variant.put("file", Map.of("originalSource", v.imageUrls().get(0),
+                        "contentType", "IMAGE"));
+            }
             // Set on-hand at import time (activates the item at the location + sets quantity atomically).
             String locationId = shopify.locationId();
             if (locationId != null && !locationId.isBlank() && v.onHand() != null) {
@@ -260,6 +343,12 @@ public class ShopifyProductMapper {
             files.add(Map.of("originalSource", url, "contentType", "IMAGE"));
         }
         return files;
+    }
+
+    /** A metafield in the sync's own namespace ({@code trophy_sync}). */
+    private static Map<String, Object> syncMetafield(String key, String value) {
+        return Map.of("namespace", SYNC_NAMESPACE, "key", key, "type", "single_line_text_field",
+                "value", value == null ? "" : value);
     }
 
     private Map<String, Object> metafield(String key, String value) {

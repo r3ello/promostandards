@@ -30,6 +30,8 @@ final class ShopifyGraphQL {
                   id
                   handle
                   title
+                  media(first: 100) { nodes { id alt } }
+                  legacySku: metafield(namespace: "migration", key: "legacy_sku") { value }
                   options { id name position optionValues { id name } }
                   variants(first: 100) {
                     nodes {
@@ -39,6 +41,7 @@ final class ShopifyGraphQL {
                       price
                       selectedOptions { name value }
                       psId: metafield(namespace: "custom", key: "promo_standard_id") { value }
+                      vendorSku: metafield(namespace: "trophy_sync", key: "vendor_sku") { value }
                       inventoryItem {
                         id
                         tracked
@@ -240,8 +243,47 @@ final class ShopifyGraphQL {
                   psId: metafield(namespace: "custom", key: "ps_product_id") { value }
                   psIds: metafield(namespace: "custom", key: "ps_product_ids") { value }
                   psSource: metafield(namespace: "custom", key: "ps_source") { value }
+                  syncSource: metafield(namespace: "trophy_sync", key: "source") { value }
                   discounts: metafield(namespace: $discountNamespace, key: $discountKey) { value }
                 }
+              }
+            }
+            """;
+
+    /**
+     * Replace a product's images with the supplier's. Media is the one thing {@code productSet} would
+     * be right for and cannot be used on: migrated products must never see it (it is declarative over
+     * variants). {@code productUpdate} takes media without touching anything else.
+     *
+     * <p>The response returns the media it just created with their {@code alt} text, which is how a
+     * variant is then matched to its own image — Shopify rewrites every URL on ingest, so the source
+     * URL cannot be the join.
+     */
+    static final String PRODUCT_ADD_MEDIA = """
+            mutation ProductAddMedia($id: ID!, $media: [CreateMediaInput!]) {
+              productUpdate(product: {id: $id}, media: $media) {
+                product { id media(first: 100) { nodes { id alt } } }
+                userErrors { field message }
+              }
+            }
+            """;
+
+    /** Deletes files (product images included). The only way to drop media in 2026-04. */
+    static final String FILE_DELETE = """
+            mutation FileDelete($fileIds: [ID!]!) {
+              fileDelete(fileIds: $fileIds) {
+                deletedFileIds
+                userErrors { field message }
+              }
+            }
+            """;
+
+    /** Points a variant at one of the product's images. */
+    static final String VARIANT_APPEND_MEDIA = """
+            mutation VariantAppendMedia($productId: ID!, $variantMedia: [ProductVariantAppendMediaInput!]!) {
+              productVariantAppendMedia(productId: $productId, variantMedia: $variantMedia) {
+                productVariants { id }
+                userErrors { field message }
               }
             }
             """;

@@ -107,7 +107,15 @@ CASES: dict[str, dict] = {
     "METAFIELDS_SET": {"metafields": [{"ownerId": GHOST["product"], "namespace": "custom",
                                        "key": "ps_last_sync_at", "type": "date_time",
                                        "value": "2026-01-01T00:00:00Z"}]},
-    "IMPORTED_PRODUCTS": {},
+    "IMPORTED_PRODUCTS": {"discountNamespace": "trophy_discount", "discountKey": "discount_tiers"},
+    # Media: all three run against ids that cannot exist, so nothing is added or deleted for real.
+    "PRODUCT_ADD_MEDIA": {"id": GHOST["product"],
+                          "media": [{"originalSource": "https://example.invalid/probe.jpg",
+                                     "mediaContentType": "IMAGE", "alt": "probe"}]},
+    "FILE_DELETE": {"fileIds": ["gid://shopify/MediaImage/999999999999"]},
+    "VARIANT_APPEND_MEDIA": {"productId": GHOST["product"],
+                             "variantMedia": [{"variantId": GHOST["variant"],
+                                               "mediaIds": ["gid://shopify/MediaImage/999999999999"]}]},
 }
 
 # Mutations that would really write if the ghost ids ever resolved. Skipped unless --include-writes:

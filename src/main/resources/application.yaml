@@ -184,6 +184,22 @@ shopify:
 # ---------------------------------------------------------------------------
 sync:
   # ---------------------------------------------------------------------------
+  # Images. The supplier is the source of truth: the shop must show what PaceSetter actually sells,
+  # so its images REPLACE whatever a product had (the migrated photos are older, and a known batch
+  # of them belongs to the wrong product entirely).
+  #
+  # Two things this never does: replace images with nothing (a supplier that answers no media leaves
+  # the product untouched), and fail an import over a photo.
+  #
+  # NOTE: deleting the old images needs the `write_files` scope, which this app does NOT have today.
+  # Without it the supplier's images are added on top and a WARN says so.
+  # ---------------------------------------------------------------------------
+  images:
+    replace-existing: ${SYNC_IMAGES_REPLACE:true}
+    # Point each variant at the image of its own colour, so the storefront swaps the photo.
+    attach-to-variants: ${SYNC_IMAGES_PER_VARIANT:true}
+
+  # ---------------------------------------------------------------------------
   # Postgres persistence master switch.
   #
   # false (default) = today's behaviour exactly: catalog indexes in memory + data/*.json, and the
