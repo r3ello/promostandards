@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.trophy.promostandards.db.SyncStateStore;
 import com.trophy.promostandards.db.SyncStateStore.Kind;
+import com.trophy.promostandards.discount.DiscountProperties;
 import com.trophy.promostandards.shopify.ShopifyGraphQLClient;
 import com.trophy.promostandards.shopify.ShopifyProperties;
 import com.trophy.promostandards.sync.model.SupplierProduct;
@@ -22,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Orchestrates supplier → Shopify sync: imports/updates products ({@code productSet}), pushes
@@ -50,6 +52,7 @@ public class ShopifySyncService {
     /** How long the supplier-id → store-product index is trusted before repaging Shopify. */
     private static final Duration INDEX_TTL = Duration.ofMinutes(5);
 
+
     private final ShopifyGraphQLClient gql;
     private final CatalogService catalog;
     private final ShopifyProductMapper mapper;
@@ -59,6 +62,11 @@ public class ShopifySyncService {
     private final ObjectMapper objectMapper;
     /** Absent unless persistence is on; absent means "push everything", i.e. the pre-database behaviour. */
     private final ObjectProvider<SyncStateStore> syncStates;
+    /** Only for the metafield the quantity ladder is published in: the store index reads it per row. */
+    private final DiscountProperties discounts;
+
+    /** Variant-level sync for store products this app did not create (migrated). */
+    private final ForeignProductSync foreignSync;
 
     /** GID of the configured supplier metaobject; resolved once (it never changes for a store). */
     private volatile String supplierMetaobjectGid;
@@ -81,7 +89,9 @@ public class ShopifySyncService {
 
     public ShopifySyncService(ShopifyGraphQLClient gql, CatalogService catalog, ShopifyProductMapper mapper,
                               PricingPolicy pricingPolicy, ShopifyProperties shopify, SyncProperties props,
-                              ObjectMapper objectMapper, ObjectProvider<SyncStateStore> syncStates) {
+                              ObjectMapper objectMapper, ObjectProvider<SyncStateStore> syncStates,
+                              DiscountProperties discounts) {
+        this.discounts = discounts;
         this.gql = gql;
         this.catalog = catalog;
         this.mapper = mapper;
@@ -90,19 +100,37 @@ public class ShopifySyncService {
         this.props = props;
         this.objectMapper = objectMapper;
         this.syncStates = syncStates;
+        this.foreignSync = new ForeignProductSync(gql, catalog, pricingPolicy, shopify, props, objectMapper);
     }
 
-    /** Result of a sync operation. */
+    /**
+     * Result of a sync operation.
+     *
+     * @param warnings what the supplier could not answer for, carried up from
+     *                 {@link CatalogService#aggregate}: an import that went through without stock or
+     *                 without images has to say so, or it reads as a complete sync
+     */
     public record SyncResult(String productId, String shopifyProductId, String handle,
-                             boolean updated, int variantCount, int inventoryUpdated) {
+                             boolean updated, int variantCount, int inventoryUpdated,
+                             List<String> warnings) {
     }
 
-    private record VariantRef(String variantId, String inventoryItemId) {
+    /**
+     * A store variant as the app needs it for a push. {@code available} is the quantity Shopify
+     * currently holds at the configured location — {@code null} when the item is not stocked there
+     * — and is required by {@code inventorySetQuantities} as the compare-and-set baseline.
+     */
+    private record VariantRef(String variantId, String inventoryItemId, Integer available) {
     }
 
-    /** One PromoStandards-tagged store product, as listed by {@code IMPORTED_PRODUCTS}. */
+    /**
+     * One PromoStandards-tagged store product, as listed by {@code IMPORTED_PRODUCTS}.
+     *
+     * @param discountsJson the published quantity-break ladder, or null — read here rather than per
+     *                      row, because this index is the catalog's only store listing
+     */
     record ImportedProduct(String gid, String handle, String canonicalId, List<String> supplierIds,
-                           String source) {
+                           String source, String discountsJson) {
     }
 
     /** Create or update the Shopify product for {@code productId}, then push inventory. */
@@ -118,7 +146,9 @@ public class ShopifySyncService {
         SupplierProduct product = catalog.aggregate(productId);
         JsonNode existing = findByHandle(mapper.handle(productId));
         if (existing == null) {
-            JsonNode foreign = findForeign(productId);
+            // Creating is the irreversible half: a wrong "not in the store" duplicates the product,
+            // so this lookup is allowed to pay for a fresh index.
+            JsonNode foreign = findForeign(productId, true);
             if (foreign != null) {
                 return updateForeignInPlace(productId, product, foreign);
             }
@@ -143,32 +173,29 @@ public class ShopifySyncService {
         log.info("Imported product {} -> {} ({} variants, {} inventory rows){}",
                 productId, gid, bySku.size(), inventoryUpdated, existingGid != null ? " [updated]" : "");
         return new SyncResult(productId, gid, productNode.path("handle").asText(),
-                existingGid != null, bySku.size(), inventoryUpdated);
+                existingGid != null, bySku.size(), inventoryUpdated, product.warnings());
     }
 
     /**
-     * Per-variant update for a product this app did not create (found via the ps_product_ids index,
-     * typically migrated). No {@code productSet}: only inventory and price of SKU-matched variants
-     * change; title/description/options/unmatched variants stay untouched. {@code ps_source} is
-     * never written here (it is the immutable provenance flag), only {@code ps_last_sync_at}.
+     * Variant-level sync for a product this app did not create (found via the {@code ps_product_ids}
+     * index, typically migrated). Never {@code productSet}: that is declarative and would delete the
+     * variants of the other supplier ids a grouped product covers, along with the migrated title,
+     * body and images. {@link ForeignProductSync} adopts the product's legacy variant, creates the
+     * supplier variants it is missing, and pushes price + stock. {@code ps_source} is never written
+     * here (it is the immutable provenance flag), only {@code ps_last_sync_at}.
      */
     private SyncResult updateForeignInPlace(String productId, SupplierProduct product, JsonNode node) {
         String gid = node.path("id").asText();
         String handle = node.path("handle").asText();
-        Map<String, VariantRef> bySku = parseVariants(node.path("variants").path("nodes"));
-        int inventoryUpdated = pushInventory(product, bySku);
-        int pricesUpdated = pushPrices(product, gid, bySku);
+        ForeignProductSync.Result result =
+                foreignSync.sync(productId, product, node, indexLookup(productId, false));
         stampSyncMetafields(gid, false);
-        int matched = (int) product.variants().stream().filter(v -> bySku.containsKey(v.sku())).count();
-        if (matched == 0 && !product.variants().isEmpty()) {
-            log.warn("Product {} maps to existing store product {} ({}), but no variant SKU matches — "
-                    + "inventory/price untouched (legacy SKUs differ; variant-level mapping pending)",
-                    productId, gid, handle);
-        } else {
-            log.info("Updated product {} in place -> {} ({}): {} matched variants, {} inventory rows, "
-                    + "{} prices", productId, gid, handle, matched, inventoryUpdated, pricesUpdated);
+        if (!result.supplierIdsAdded().isEmpty()) {
+            // The product now covers ids the cached index has never seen: let the badge catch up.
+            indexBuiltAt = null;
         }
-        return new SyncResult(productId, gid, handle, true, matched, inventoryUpdated);
+        return new SyncResult(productId, gid, handle, true, result.variants(), result.inventoryUpdated(),
+                product.warnings());
     }
 
     /**
@@ -385,6 +412,21 @@ public class ShopifySyncService {
         return index == null ? null : index.containsKey(productId.toUpperCase(Locale.ROOT));
     }
 
+    /**
+     * @return whether this supplier id's store product carries a published quantity-break ladder
+     * (false when it has none, or when Shopify is not connected). Answered from the cached
+     * supplier-id index — the catalog asks this once per row, so it must not cost a request.
+     */
+    public boolean hasDiscounts(String productId) {
+        Map<String, ImportedProduct> index = cachedIndexOrNull();
+        if (index == null) {
+            return false;
+        }
+        ImportedProduct match = index.get(productId.toUpperCase(Locale.ROOT));
+        String json = match == null ? null : match.discountsJson();
+        return json != null && !json.isBlank();
+    }
+
     /** @return the supplier-id index (refreshed if stale), or null when unconfigured/never built. */
     private Map<String, ImportedProduct> cachedIndexOrNull() {
         if (shopify.storeDomain() == null || shopify.storeDomain().isBlank()) {
@@ -444,7 +486,12 @@ public class ShopifySyncService {
         List<ImportedProduct> products = new ArrayList<>();
         String cursor = null;
         do {
-            Map<String, Object> vars = cursor == null ? Map.of() : Map.of("cursor", cursor);
+            Map<String, Object> vars = new LinkedHashMap<>();
+            vars.put("discountNamespace", discounts.namespace());
+            vars.put("discountKey", discounts.key());
+            if (cursor != null) {
+                vars.put("cursor", cursor);
+            }
             JsonNode page = require(gql.execute(ShopifyGraphQL.IMPORTED_PRODUCTS, vars)).path("products");
             for (JsonNode node : page.path("nodes")) {
                 String canonical = node.path("psId").path("value").asText(null);
@@ -462,7 +509,8 @@ public class ShopifySyncService {
                 }
                 products.add(new ImportedProduct(node.path("id").asText(null),
                         node.path("handle").asText(null), canonical, List.copyOf(ids),
-                        node.path("psSource").path("value").asText(null)));
+                        node.path("psSource").path("value").asText(null),
+                        node.path("discounts").path("value").asText(null)));
             }
             JsonNode pageInfo = page.path("pageInfo");
             cursor = pageInfo.path("hasNextPage").asBoolean(false)
@@ -512,7 +560,27 @@ public class ShopifySyncService {
      * A stale index hit (product deleted since the last page) forces one rebuild before giving up.
      */
     private JsonNode findForeign(String productId) {
+        return findForeign(productId, false);
+    }
+
+    /**
+     * @param rebuildOnMiss repage Shopify when the cached index has never heard of this id, instead
+     *                      of trusting a five-minute-old "no". Only the create path asks for it, and
+     *                      it matters because of how this store is actually run: products are
+     *                      migrated in with Matrixify and imported from here minutes later, so a
+     *                      stale index would answer "not in the store" for a product that is, and
+     *                      the import would create a duplicate under the app's own handle. It costs
+     *                      one pagination, and only on the path that is about to create a product —
+     *                      already the most expensive thing this app does.
+     */
+    private JsonNode findForeign(String productId, boolean rebuildOnMiss) {
+        Instant builtBefore = indexBuiltAt;
         ImportedProduct match = indexLookup(productId, false);
+        // Only worth looking again when the "no" came from a cached index: if the lookup above built
+        // it just now, that answer is as fresh as a second pass would be.
+        if (match == null && rebuildOnMiss && builtBefore != null && builtBefore.equals(indexBuiltAt)) {
+            match = indexLookup(productId, true);
+        }
         if (match == null) {
             return null;
         }
@@ -523,6 +591,7 @@ public class ShopifySyncService {
         }
         return node;
     }
+
 
     private ImportedProduct indexLookup(String productId, boolean forceRebuild) {
         return ensureIndex(forceRebuild).get(productId.toUpperCase(Locale.ROOT));
@@ -559,7 +628,7 @@ public class ShopifySyncService {
 
     /** @return the existing product node by handle (exact match), or {@code null} if not found. */
     JsonNode findByHandle(String handle) {
-        JsonNode data = gql.execute(ShopifyGraphQL.PRODUCT_BY_HANDLE, Map.of("query", "handle:" + handle));
+        JsonNode data = gql.execute(ShopifyGraphQL.PRODUCT_BY_HANDLE, productByHandleVariables(handle));
         JsonNode nodes = require(data).path("products").path("nodes");
         if (nodes.isArray()) {
             for (JsonNode node : nodes) {
@@ -569,6 +638,83 @@ public class ShopifySyncService {
             }
         }
         return null;
+    }
+
+    /**
+     * Variables for {@code PRODUCT_BY_HANDLE}. The per-location stock is only asked for when a
+     * location is configured; {@code $locationId} is non-null in the schema, so an unused-but-valid
+     * GID rides along with {@code @include(if:)} switched off rather than splitting the document.
+     */
+    private Map<String, Object> productByHandleVariables(String handle) {
+        String locationId = shopify.locationId();
+        boolean configured = locationId != null && !locationId.isBlank();
+        return Map.of("query", "handle:" + handle,
+                "locationId", configured ? locationId : "gid://shopify/Location/0",
+                "withLocation", configured);
+    }
+
+    /**
+     * The store product covering {@code productId} — app handle first, then the migrated-product
+     * index. Public because the discount sync needs the same resolution (and the same node: its
+     * variants, their prices and their {@code custom.promo_standard_id} all come from this one query).
+     *
+     * @throws ShopifySyncException when the product has not been imported yet
+     */
+    public JsonNode storeProduct(String productId) {
+        return resolveOrThrow(productId);
+    }
+
+    /**
+     * @return every supplier id the store product covering {@code productId} stands for — a grouped
+     * product covers several ({@code ps_product_ids}) — or just {@code productId} when nothing in the
+     * store claims it. Answered from the cached index, so it costs no request.
+     */
+    public List<String> supplierIdsFor(String productId) {
+        Map<String, ImportedProduct> index = cachedIndexOrNull();
+        ImportedProduct match = index == null ? null : index.get(productId.toUpperCase(Locale.ROOT));
+        return match == null || match.supplierIds().isEmpty() ? List.of(productId) : match.supplierIds();
+    }
+
+    /**
+     * Writes one metafield on a set of variants of a product, in a single mutation. The discount sync
+     * writes each variant's quantity ladder this way — a grouped product can hold parts priced on
+     * different ladders, so the value cannot live on the product alone.
+     */
+    public void setVariantMetafield(String productGid, List<String> variantGids, String namespace,
+                                    String key, String type, String value) {
+        if (variantGids == null || variantGids.isEmpty()) {
+            return;
+        }
+        List<Map<String, Object>> variants = new ArrayList<>();
+        for (String variantGid : variantGids) {
+            variants.add(Map.of("id", variantGid, "metafields", List.of(Map.of(
+                    "namespace", namespace, "key", key, "type", type, "value", value))));
+        }
+        JsonNode data = gql.execute(ShopifyGraphQL.VARIANTS_BULK_UPDATE,
+                Map.of("productId", productGid, "variants", variants));
+        checkUserErrors(require(data).path("productVariantsBulkUpdate"), "productVariantsBulkUpdate");
+    }
+
+    /**
+     * Drops the cached supplier-id index so the next read repages Shopify. Called after writing a
+     * metafield the index carries (the quantity ladder), so the catalog's badge shows the change at
+     * once instead of waiting out the TTL.
+     */
+    public void invalidateImportedIndex() {
+        indexBuiltAt = null;
+    }
+
+    /**
+     * Writes one product metafield. Used by the discount sync to publish the product-wide quantity
+     * ladder, which is also what the catalog badge reads off the store index.
+     */
+    public void setProductMetafield(String productGid, String namespace, String key, String type,
+                                    String value) {
+        Map<String, Object> metafield = Map.of(
+                "ownerId", productGid, "namespace", namespace, "key", key, "type", type, "value", value);
+        JsonNode data = gql.execute(ShopifyGraphQL.METAFIELDS_SET,
+                Map.of("metafields", List.of(metafield)));
+        checkUserErrors(require(data).path("metafieldsSet"), "metafieldsSet");
     }
 
     /** App handle first, then the migrated-product index; throws when neither knows the id. */
@@ -594,10 +740,15 @@ public class ShopifySyncService {
             if (v.onHand() == null || ref == null || ref.inventoryItemId() == null) {
                 continue;
             }
+            if (ref.available() == null) {
+                // Not stocked at this location yet: setting a quantity there would be refused.
+                activateInventory(gql, ref.inventoryItemId(), shopify.locationId());
+            }
             quantities.add(Map.of(
                     "inventoryItemId", ref.inventoryItemId(),
                     "locationId", shopify.locationId(),
-                    "quantity", v.onHand()));
+                    "quantity", v.onHand(),
+                    "changeFromQuantity", ref.available() == null ? 0 : ref.available()));
         }
         if (quantities.isEmpty()) {
             return 0;
@@ -605,10 +756,13 @@ public class ShopifySyncService {
         Map<String, Object> input = new LinkedHashMap<>();
         input.put("name", "available");
         input.put("reason", "correction");
-        input.put("ignoreCompareQuantity", true);
         input.put("quantities", quantities);
 
-        JsonNode data = gql.execute(ShopifyGraphQL.INVENTORY_SET_QUANTITIES, Map.of("input", input));
+        // A fresh key per push: the client's throttling retry resends the same body, and Shopify
+        // must count that as the one write it is.
+        Map<String, Object> vars = Map.of("input", input,
+                "idempotencyKey", UUID.randomUUID().toString());
+        JsonNode data = gql.execute(ShopifyGraphQL.INVENTORY_SET_QUANTITIES, vars);
         checkUserErrors(require(data).path("inventorySetQuantities"), "inventorySetQuantities");
         return quantities.size();
     }
@@ -619,22 +773,54 @@ public class ShopifySyncService {
             for (JsonNode n : nodes) {
                 String sku = n.path("sku").asText(null);
                 if (sku != null) {
-                    String invItem = n.path("inventoryItem").path("id").asText(null);
-                    bySku.put(sku, new VariantRef(n.path("id").asText(null), invItem));
+                    JsonNode item = n.path("inventoryItem");
+                    bySku.put(sku, new VariantRef(n.path("id").asText(null),
+                            item.path("id").asText(null), availableAt(item)));
                 }
             }
         }
         return bySku;
     }
 
-    private static JsonNode require(JsonNode data) {
+    /** @return the "available" quantity the store holds at the configured location, or null. */
+    static Integer availableAt(JsonNode inventoryItem) {
+        JsonNode level = inventoryItem.path("inventoryLevel");
+        if (level.isMissingNode() || level.isNull()) {
+            return null;
+        }
+        for (JsonNode quantity : level.path("quantities")) {
+            if ("available".equals(quantity.path("name").asText())) {
+                return quantity.path("quantity").asInt();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Stocks an inventory item at a location so its quantity can be set. Failures warn: the set that
+     * follows reports the real problem, and a product is not a failed sync over one variant.
+     */
+    static void activateInventory(ShopifyGraphQLClient gql, String inventoryItemId, String locationId) {
+        try {
+            Map<String, Object> vars = Map.of("inventoryItemId", inventoryItemId,
+                    "updates", List.of(Map.of("locationId", locationId, "activate", true)));
+            JsonNode data = gql.execute(ShopifyGraphQL.INVENTORY_ACTIVATE, vars);
+            checkUserErrors(require(data).path("inventoryBulkToggleActivation"),
+                    "inventoryBulkToggleActivation");
+        } catch (RuntimeException e) {
+            log.warn("Could not stock inventory item {} at {}: {}", inventoryItemId, locationId,
+                    e.getMessage());
+        }
+    }
+
+    static JsonNode require(JsonNode data) {
         if (data == null) {
             throw new ShopifySyncException("Shopify returned no data");
         }
         return data;
     }
 
-    private static void checkUserErrors(JsonNode result, String op) {
+    static void checkUserErrors(JsonNode result, String op) {
         JsonNode userErrors = result.path("userErrors");
         if (userErrors.isArray() && !userErrors.isEmpty()) {
             throw new ShopifySyncException(op + " userErrors: " + userErrors);

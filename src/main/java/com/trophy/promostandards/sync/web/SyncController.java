@@ -1,5 +1,7 @@
 package com.trophy.promostandards.sync.web;
 
+import com.trophy.promostandards.discount.DiscountSyncService;
+import com.trophy.promostandards.discount.DiscountSyncService.DiscountResult;
 import com.trophy.promostandards.sync.MetafieldCatalogService;
 import com.trophy.promostandards.sync.OrderSyncService;
 import com.trophy.promostandards.sync.OrderSyncService.OrderSyncResult;
@@ -8,6 +10,8 @@ import com.trophy.promostandards.sync.ShopifySyncService.SyncResult;
 import com.trophy.promostandards.sync.SyncProperties;
 import com.trophy.promostandards.sync.model.MetafieldDefinitionView;
 import com.trophy.promostandards.sync.model.MetafieldSample;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -31,15 +35,19 @@ import java.util.Map;
 @RequestMapping("/api/sync")
 public class SyncController {
 
+    private static final Logger log = LoggerFactory.getLogger(SyncController.class);
+
     private final ShopifySyncService sync;
     private final OrderSyncService orderSync;
     private final MetafieldCatalogService metafieldCatalog;
+    private final DiscountSyncService discounts;
 
     public SyncController(ShopifySyncService sync, OrderSyncService orderSync,
-                          MetafieldCatalogService metafieldCatalog) {
+                          MetafieldCatalogService metafieldCatalog, DiscountSyncService discounts) {
         this.sync = sync;
         this.orderSync = orderSync;
         this.metafieldCatalog = metafieldCatalog;
+        this.discounts = discounts;
     }
 
     /** List the store's existing product metafield definitions so the UI can offer them at import. */
@@ -57,15 +65,21 @@ public class SyncController {
     }
 
     /**
-     * Import (create or update) a single supplier product. The optional body carries the metafields
-     * the user picked in the UI; with no body the product imports with just its identity metafields.
+     * Import (create or update) a single supplier product, then publish its quantity discounts. The
+     * optional body carries the metafields the user picked in the UI; with no body the product
+     * imports with just its identity metafields.
+     *
+     * <p>The two belong together — a product whose price ladder is not published is priced wrong for
+     * every quantity above the first break — so this endpoint does both rather than leaving the
+     * second call to whoever remembers. Discounts never fail the import: a failure there is reported
+     * in {@code discountError} and the product is still imported.
      */
     @PostMapping("/products/{productId}")
-    public SyncResult importProduct(@PathVariable String productId,
-                                    @RequestBody(required = false) ImportRequest body) {
+    public ImportResponse importProduct(@PathVariable String productId,
+                                        @RequestBody(required = false) ImportRequest body) {
         List<SyncProperties.Metafield> metafields =
                 body == null || body.metafields() == null ? List.of() : body.metafields();
-        return sync.importProduct(productId, metafields);
+        return withDiscounts(sync.importProduct(productId, metafields));
     }
 
     /** Import a batch of supplier products; per-product failures are reported, not fatal. */
@@ -74,12 +88,27 @@ public class SyncController {
         List<BatchItem> results = new ArrayList<>();
         for (String productId : productIds) {
             try {
-                results.add(BatchItem.ok(sync.importProduct(productId)));
+                results.add(BatchItem.ok(withDiscounts(sync.importProduct(productId))));
             } catch (RuntimeException e) {
                 results.add(BatchItem.failed(productId, e.getMessage()));
             }
         }
         return results;
+    }
+
+    /**
+     * Publishes the product's quantity-break ladder and reports it alongside the import. A failure
+     * here is recorded, not thrown: the product is already in Shopify, and losing that result to a
+     * failed metafield write would tell the caller the import failed when it did not.
+     */
+    private ImportResponse withDiscounts(SyncResult result) {
+        try {
+            return ImportResponse.of(result, discounts.sync(result.productId()));
+        } catch (RuntimeException e) {
+            log.warn("Imported {} but could not publish its discounts: {}", result.productId(),
+                    e.getMessage());
+            return ImportResponse.of(result, null, e.getMessage());
+        }
     }
 
     /** Refresh inventory for an already-imported product. */
@@ -109,8 +138,27 @@ public class SyncController {
     }
 
     /** One entry in a batch import response. */
-    public record BatchItem(String productId, boolean success, SyncResult result, String error) {
-        static BatchItem ok(SyncResult r) {
+    /**
+     * What an import did, in one object: the product side flattened so existing callers keep reading
+     * the same fields, plus what happened to its discounts.
+     */
+    public record ImportResponse(String productId, String shopifyProductId, String handle,
+                                 boolean updated, int variantCount, int inventoryUpdated,
+                                 List<String> warnings, DiscountResult discounts,
+                                 String discountError) {
+
+        static ImportResponse of(SyncResult r, DiscountResult discounts) {
+            return of(r, discounts, null);
+        }
+
+        static ImportResponse of(SyncResult r, DiscountResult discounts, String discountError) {
+            return new ImportResponse(r.productId(), r.shopifyProductId(), r.handle(), r.updated(),
+                    r.variantCount(), r.inventoryUpdated(), r.warnings(), discounts, discountError);
+        }
+    }
+
+    public record BatchItem(String productId, boolean success, ImportResponse result, String error) {
+        static BatchItem ok(ImportResponse r) {
             return new BatchItem(r.productId(), true, r, null);
         }
 

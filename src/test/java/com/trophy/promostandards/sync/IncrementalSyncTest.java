@@ -3,6 +3,7 @@ package com.trophy.promostandards.sync;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.trophy.promostandards.db.SyncStateStore;
 import com.trophy.promostandards.db.SyncStateStore.Kind;
+import com.trophy.promostandards.discount.DiscountProperties;
 import com.trophy.promostandards.shopify.ShopifyGraphQLClient;
 import com.trophy.promostandards.shopify.ShopifyHttp;
 import com.trophy.promostandards.shopify.ShopifyProperties;
@@ -157,14 +158,15 @@ class IncrementalSyncTest {
 
         return new ShopifySyncService(gql, catalog,
                 new ShopifyProductMapper(props, policy, new ObjectMapper(), shopify),
-                policy, shopify, props, new ObjectMapper(), providerOf(state));
+                policy, shopify, props, new ObjectMapper(), providerOf(state),
+                new DiscountProperties(null, null, null, null));
     }
 
     private static SupplierProduct product(int onHand) {
         return new SupplierProduct("SAMPLE-001", "Sample Polo", null, null, null, List.of(),
                 List.of(new Variant("SAMPLE-001-RED", "Red", "S", "SAMPLE-001-RED-S",
                         new BigDecimal("9.50"), new BigDecimal("12.00"), onHand, List.of())),
-                List.of(), List.of());
+                List.of(), List.of(), List.of());
     }
 
     /**
@@ -179,7 +181,7 @@ class IncrementalSyncTest {
         SupplierProduct product = new SupplierProduct("SAMPLE-001", "Sample", null, null, null, List.of(),
                 List.of(new Variant("SAMPLE-001-RED", "Red", "S", "SAMPLE-001-RED-S",
                         new BigDecimal("88.20"), new BigDecimal("147.00"), 10, List.of())),
-                List.of(), List.of());
+                List.of(), List.of(), List.of());
         ShopifySyncService service = service(product, Strategy.SUPPLIER_LIST);
 
         service.refresh("SAMPLE-001", Kind.PRICE, false, false);
@@ -196,7 +198,7 @@ class IncrementalSyncTest {
         SupplierProduct product = new SupplierProduct("SAMPLE-001", "Sample", null, null, null, List.of(),
                 List.of(new Variant("SAMPLE-001-RED", "Red", "S", "SAMPLE-001-RED-S",
                         new BigDecimal("88.20"), new BigDecimal("147.00"), 10, List.of())),
-                List.of(), List.of());
+                List.of(), List.of(), List.of());
         ShopifySyncService service = service(product, Strategy.MARKUP);
 
         service.refresh("SAMPLE-001", Kind.PRICE, false, false);
@@ -333,7 +335,8 @@ class IncrementalSyncTest {
                 new ShopifyGraphQLClient(http, tokens, shopify,
                         new ShopifyRetryProperties(1, Duration.ofMillis(1), Duration.ofMillis(1))),
                 catalog, new ShopifyProductMapper(props, policy, new ObjectMapper(), shopify),
-                policy, shopify, props, new ObjectMapper(), providerOf(null));
+                policy, shopify, props, new ObjectMapper(), providerOf(null),
+                new DiscountProperties(null, null, null, null));
 
         assertThat(service.refresh("SAMPLE-001", Kind.INVENTORY, false, false).outcome())
                 .isEqualTo(Outcome.PUSHED);

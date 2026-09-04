@@ -105,12 +105,21 @@ public record ProductDetail(
     }
 
     /**
+     * One row of the supplier's quantity ladder, with what the shopper actually pays at that
+     * quantity. {@code retail} and {@code discount} are the published side of the row: the same
+     * charm-priced figure the Shopify variant carries, and how much off the first break's price it
+     * is — the same figures the published quantity-discount metafield is built from, so the console
+     * shows the ladder that gets published rather than the supplier's internal costs.
+     *
      * @param minQuantity minimum quantity for this break
      * @param price       supplier net unit price
      * @param listPrice   supplier list price
+     * @param retail      published unit price at this quantity (charm-priced)
+     * @param discount    {@code retail(first break) - retail}, null on the first break
      * @param uom         unit of measure
      */
-    public record PriceBreak(int minQuantity, BigDecimal price, BigDecimal listPrice, String uom) {
+    public record PriceBreak(int minQuantity, BigDecimal price, BigDecimal listPrice,
+                             BigDecimal retail, BigDecimal discount, String uom) {
     }
 
     /**

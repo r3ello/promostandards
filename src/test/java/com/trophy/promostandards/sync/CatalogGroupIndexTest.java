@@ -105,7 +105,7 @@ class CatalogGroupIndexTest {
         ShopifySyncService shopifySync = mock(ShopifySyncService.class);
         when(shopifySync.importedProductsOrEmpty()).thenReturn(List.of(
                 new ShopifySyncService.ImportedProduct("gid://shopify/Product/900", "p-8123-x",
-                        "a1", List.of("a1", "a2", "ZZ"), "migration")));
+                        "a1", List.of("a1", "a2", "ZZ"), "migration", null)));
 
         CatalogGroupIndex index = new CatalogGroupIndex(new SupplierProductScan(pd, SYNC), PROPS, new ObjectMapper(), shopifySync, providerOf(null), SYNC, PROMO);
         List<ProductGroup> groups = index.buildNow().groups();
