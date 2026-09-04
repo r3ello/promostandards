@@ -16,8 +16,9 @@ import java.util.Set;
  * product the one-shot trophypartner migration created, which carries the PromoStandards identity
  * metafields but a single legacy variant ({@code Title / Default Title}, SKU {@code PS11592}).
  *
- * <p>Matching is deliberately widest-first: SKU, then the variant's {@code custom.promo_standard_id}
- * (only when it identifies exactly one store variant), then the option values. A migrated variant
+ * <p>Matching is deliberately widest-first: the supplier part id in {@code trophy_sync.vendor_sku},
+ * then the SKU, then the variant's {@code custom.promo_standard_id} (only when it identifies exactly
+ * one store variant), then the option values. A migrated variant
  * matches on none of those, so a product left with exactly one unmatched variant has it
  * <b>adopted</b> — reused as the first supplier variant (keeping its id, and with it the order
  * history and any inventory) rather than deleted and recreated.
@@ -33,9 +34,16 @@ record ForeignVariantPlan(List<Entry> entries, List<StoreVariant> orphans) {
         CREATE
     }
 
-    /** A variant as it exists in Shopify right now. */
-    record StoreVariant(String id, String sku, String promoStandardId, String color, String size,
-                        String inventoryItemId, boolean tracked, Integer available) {
+    /**
+     * A variant as it exists in Shopify right now.
+     *
+     * @param vendorSku the supplier part id this variant stands for ({@code trophy_sync.vendor_sku}).
+     *                  Since the SKU became the store's own number ({@code PS1298-LB}), this is the
+     *                  only field that ties a store variant to a supplier part, and it is matched
+     *                  first.
+     */
+    record StoreVariant(String id, String sku, String promoStandardId, String vendorSku, String color,
+                        String size, String inventoryItemId, boolean tracked, Integer available) {
     }
 
     /**
@@ -57,6 +65,7 @@ record ForeignVariantPlan(List<Entry> entries, List<StoreVariant> orphans) {
      */
     static ForeignVariantPlan of(List<Variant> supplier, List<String> colorLabels, boolean emitSize,
                                  List<StoreVariant> store) {
+        Map<String, StoreVariant> byVendorSku = index(store, StoreVariant::vendorSku);
         Map<String, StoreVariant> bySku = index(store, StoreVariant::sku);
         Map<String, StoreVariant> byPromoId = uniqueIndex(store, StoreVariant::promoStandardId);
         Map<String, StoreVariant> byOptions = new LinkedHashMap<>();
@@ -72,6 +81,9 @@ record ForeignVariantPlan(List<Entry> entries, List<StoreVariant> orphans) {
             String colorLabel = colorLabels.get(i);
             String sizeLabel = emitSize ? VariantOptions.size(v.size()) : null;
             StoreVariant target = firstUnclaimed(claimed,
+                    // The part id first: it is the supplier's own identity, and unlike the SKU it
+                    // survives the store renumbering its variants.
+                    byVendorSku.get(upper(v.supplierPartId())),
                     bySku.get(upper(v.sku())),
                     byPromoId.get(upper(v.supplierPartId())),
                     byOptions.get(optionKey(colorLabel, sizeLabel)));

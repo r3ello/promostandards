@@ -84,12 +84,16 @@ class ShopifyProductMapperTest {
         // Inventory set within productSet at the configured location.
         assertThat((List<Map<String, Object>>) variants.get(0).get("inventoryQuantities"))
                 .containsExactly(Map.of("locationId", "gid://shopify/Location/1", "name", "available", "quantity", 1200));
-        // Every variant carries the supplier product id as a variant-level metafield.
+        // Every variant carries the supplier product id (identity, what the next sync matches on)
+        // and the supplier's own colour name (what the storefront reads).
         for (Map<String, Object> variant : variants) {
-            assertThat((List<Map<String, Object>>) variant.get("metafields")).containsExactly(Map.of(
+            assertThat((List<Map<String, Object>>) variant.get("metafields")).contains(Map.of(
                     "namespace", "custom", "key", "promo_standard_id",
                     "type", "single_line_text_field", "value", "SAMPLE-001"));
         }
+        assertThat((List<Map<String, Object>>) variants.get(0).get("metafields")).contains(Map.of(
+                "namespace", "trophy_sync", "key", "color",
+                "type", "single_line_text_field", "value", "Red"));
 
         List<Map<String, Object>> metafields = (List<Map<String, Object>>) input.get("metafields");
         assertThat(metafields).anySatisfy(m -> {

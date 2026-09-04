@@ -90,7 +90,7 @@ public class ShopifySyncService {
     public ShopifySyncService(ShopifyGraphQLClient gql, CatalogService catalog, ShopifyProductMapper mapper,
                               PricingPolicy pricingPolicy, ShopifyProperties shopify, SyncProperties props,
                               ObjectMapper objectMapper, ObjectProvider<SyncStateStore> syncStates,
-                              DiscountProperties discounts) {
+                              DiscountProperties discounts, ImageProperties images) {
         this.discounts = discounts;
         this.gql = gql;
         this.catalog = catalog;
@@ -100,7 +100,8 @@ public class ShopifySyncService {
         this.props = props;
         this.objectMapper = objectMapper;
         this.syncStates = syncStates;
-        this.foreignSync = new ForeignProductSync(gql, catalog, pricingPolicy, shopify, props, objectMapper);
+        this.foreignSync = new ForeignProductSync(gql, catalog, pricingPolicy, shopify, props,
+                objectMapper, images);
     }
 
     /**
@@ -368,7 +369,7 @@ public class ShopifySyncService {
     private int pushPrices(SupplierProduct product, String gid, Map<String, VariantRef> bySku) {
         List<Map<String, Object>> updates = new ArrayList<>();
         for (Variant v : product.variants()) {
-            VariantRef ref = bySku.get(v.sku());
+            VariantRef ref = variantFor(bySku, v);
             BigDecimal price = pricingPolicy.retailPrice(v.supplierNet(), v.listPrice());
             if (ref != null && price != null) {
                 updates.add(Map.of("id", ref.variantId(), "price", price.toPlainString()));
@@ -425,6 +426,17 @@ public class ShopifySyncService {
         ImportedProduct match = index.get(productId.toUpperCase(Locale.ROOT));
         String json = match == null ? null : match.discountsJson();
         return json != null && !json.isBlank();
+    }
+
+    /**
+     * @return who created the product: the sync's own {@code trophy_sync.source} when it has run,
+     * else the migration's {@code custom.ps_source}. Reading both is what lets the app answer for a
+     * product it has never synced — the migration is the only one that has said anything yet.
+     */
+    private static String source(JsonNode node) {
+        String current = node.path("syncSource").path("value").asText(null);
+        return current != null && !current.isBlank()
+                ? current : node.path("psSource").path("value").asText(null);
     }
 
     /** @return the supplier-id index (refreshed if stale), or null when unconfigured/never built. */
@@ -509,7 +521,7 @@ public class ShopifySyncService {
                 }
                 products.add(new ImportedProduct(node.path("id").asText(null),
                         node.path("handle").asText(null), canonical, List.copyOf(ids),
-                        node.path("psSource").path("value").asText(null),
+                        source(node),
                         node.path("discounts").path("value").asText(null)));
             }
             JsonNode pageInfo = page.path("pageInfo");
@@ -598,7 +610,8 @@ public class ShopifySyncService {
     }
 
     /**
-     * Stamps {@code custom.ps_last_sync_at} (every sync) and, for app-created products only,
+     * Stamps {@code trophy_sync.last_sync_at}, {@code vendor} and {@code source} on every sync. For
+     * app-created products only,
      * {@code custom.ps_source=app}. Never called with {@code appOwned} for foreign/migrated products
      * — their {@code ps_source=migration} is immutable. Failures warn, never fail the sync.
      */
@@ -606,18 +619,27 @@ public class ShopifySyncService {
         List<Map<String, Object>> metafields = new ArrayList<>();
         metafields.add(Map.of(
                 "ownerId", productGid,
-                "namespace", ShopifyProductMapper.METAFIELD_NAMESPACE,
-                "key", ShopifyProductMapper.MF_LAST_SYNC_AT,
+                "namespace", ShopifyProductMapper.SYNC_NAMESPACE,
+                "key", ShopifyProductMapper.MF_LAST_SYNC_AT_NEW,
                 "type", "date_time",
                 "value", Instant.now().truncatedTo(ChronoUnit.SECONDS).toString()));
-        if (appOwned) {
-            metafields.add(Map.of(
-                    "ownerId", productGid,
-                    "namespace", ShopifyProductMapper.METAFIELD_NAMESPACE,
-                    "key", ShopifyProductMapper.MF_SOURCE,
-                    "type", "single_line_text_field",
-                    "value", ShopifyProductMapper.SOURCE_APP));
-        }
+        // Stamped on both paths, because both are true of a synced product: which supplier the data
+        // came from, and who created the product. A migrated product only ever got these from the
+        // migration's own custom.ps_* keys, which is why they are read as a fallback until a sync
+        // has run — this is the run that ends that.
+        metafields.add(Map.of(
+                "ownerId", productGid,
+                "namespace", ShopifyProductMapper.SYNC_NAMESPACE,
+                "key", ShopifyProductMapper.MF_VENDOR,
+                "type", "single_line_text_field",
+                "value", props.supplierCode() == null ? "" : props.supplierCode()));
+        metafields.add(Map.of(
+                "ownerId", productGid,
+                "namespace", ShopifyProductMapper.SYNC_NAMESPACE,
+                "key", ShopifyProductMapper.MF_SOURCE_NEW,
+                "type", "single_line_text_field",
+                "value", appOwned ? ShopifyProductMapper.SOURCE_APP
+                        : ShopifyProductMapper.SOURCE_MIGRATION));
         try {
             JsonNode data = gql.execute(ShopifyGraphQL.METAFIELDS_SET, Map.of("metafields", metafields));
             checkUserErrors(require(data).path("metafieldsSet"), "metafieldsSet");
@@ -736,7 +758,7 @@ public class ShopifySyncService {
         }
         List<Map<String, Object>> quantities = new ArrayList<>();
         for (Variant v : product.variants()) {
-            VariantRef ref = bySku.get(v.sku());
+            VariantRef ref = variantFor(bySku, v);
             if (v.onHand() == null || ref == null || ref.inventoryItemId() == null) {
                 continue;
             }
@@ -767,19 +789,43 @@ public class ShopifySyncService {
         return quantities.size();
     }
 
+    /**
+     * Index a product's variants by every name the supplier side might know them under: the SKU and
+     * the {@code trophy_sync.vendor_sku} part id.
+     *
+     * <p>Both are needed since a migrated product's SKU became the store's own number
+     * ({@code PS1298-LB}), which no supplier field will ever match. The scheduled inventory and price
+     * pushes look a variant up by part id first and fall back to the SKU, so app-created products
+     * (whose SKUs are still supplier-derived) keep working unchanged.
+     */
     private Map<String, VariantRef> parseVariants(JsonNode nodes) {
-        Map<String, VariantRef> bySku = new LinkedHashMap<>();
+        Map<String, VariantRef> byKey = new LinkedHashMap<>();
         if (nodes != null && nodes.isArray()) {
             for (JsonNode n : nodes) {
+                JsonNode item = n.path("inventoryItem");
+                VariantRef ref = new VariantRef(n.path("id").asText(null),
+                        item.path("id").asText(null), availableAt(item));
                 String sku = n.path("sku").asText(null);
-                if (sku != null) {
-                    JsonNode item = n.path("inventoryItem");
-                    bySku.put(sku, new VariantRef(n.path("id").asText(null),
-                            item.path("id").asText(null), availableAt(item)));
+                if (sku != null && !sku.isBlank()) {
+                    byKey.put(sku, ref);
+                    byKey.putIfAbsent(sku.toUpperCase(Locale.ROOT), ref);
+                }
+                String vendorSku = n.path("vendorSku").path("value").asText(null);
+                if (vendorSku != null && !vendorSku.isBlank()) {
+                    byKey.putIfAbsent(vendorSku, ref);
+                    byKey.putIfAbsent(vendorSku.toUpperCase(Locale.ROOT), ref);
                 }
             }
         }
-        return bySku;
+        return byKey;
+    }
+
+    /** The store variant standing for a supplier variant: by part id first, then by SKU. */
+    private static VariantRef variantFor(Map<String, VariantRef> byKey, Variant v) {
+        VariantRef ref = v.supplierPartId() == null ? null
+                : byKey.getOrDefault(v.supplierPartId(),
+                        byKey.get(v.supplierPartId().toUpperCase(Locale.ROOT)));
+        return ref != null ? ref : byKey.get(v.sku());
     }
 
     /** @return the "available" quantity the store holds at the configured location, or null. */

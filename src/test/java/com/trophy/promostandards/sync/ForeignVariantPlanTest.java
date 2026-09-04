@@ -26,7 +26,7 @@ class ForeignVariantPlanTest {
         List<Variant> supplier = List.of(
                 variant("CM297BL", "Dark Brown", "12 X 9.5"),
                 variant("CM297RW", "Rawhide", "12 X 9.5"));
-        StoreVariant legacy = new StoreVariant("gid://ProductVariant/93", "PS11592", null,
+        StoreVariant legacy = new StoreVariant("gid://ProductVariant/93", "PS11592", null, null,
                 "Default Title", null, "gid://InventoryItem/193", false, null);
 
         ForeignVariantPlan plan = plan(supplier, List.of(legacy));
@@ -47,12 +47,12 @@ class ForeignVariantPlanTest {
                 variant("CM297TL", "Teal", "12 X 9.5"));
         List<StoreVariant> store = List.of(
                 // renamed in the store, but stamped with its supplier id
-                new StoreVariant("gid://ProductVariant/1", "CHANGED-SKU", "CM297BL", "Chocolate",
+                new StoreVariant("gid://ProductVariant/1", "CHANGED-SKU", "CM297BL", null, "Chocolate",
                         "12 X 9.5", "gid://InventoryItem/1", true, 0),
                 // no identity metafield and a stale SKU, but the option values still line up
-                new StoreVariant("gid://ProductVariant/2", "OLD-SKU", null, "Rawhide", "12 X 9.5",
+                new StoreVariant("gid://ProductVariant/2", "OLD-SKU", null, null, "Rawhide", "12 X 9.5",
                         "gid://InventoryItem/2", true, 0),
-                new StoreVariant("gid://ProductVariant/3", "CM297TL-12 X 9.5", null, null, null,
+                new StoreVariant("gid://ProductVariant/3", "CM297TL-12 X 9.5", null, null, null, null,
                         "gid://InventoryItem/3", true, 0));
 
         ForeignVariantPlan plan = plan(supplier, store);
@@ -68,9 +68,9 @@ class ForeignVariantPlanTest {
     void leavesSeveralUnmatchedStoreVariantsAsOrphans() {
         List<Variant> supplier = List.of(variant("CM297BL", "Dark Brown", "12 X 9.5"));
         List<StoreVariant> store = List.of(
-                new StoreVariant("gid://ProductVariant/1", "LEGACY-A", null, "Oak", "Large",
+                new StoreVariant("gid://ProductVariant/1", "LEGACY-A", null, null, "Oak", "Large",
                         "gid://InventoryItem/1", true, 0),
-                new StoreVariant("gid://ProductVariant/2", "LEGACY-B", null, "Walnut", "Large",
+                new StoreVariant("gid://ProductVariant/2", "LEGACY-B", null, null, "Walnut", "Large",
                         "gid://InventoryItem/2", true, 0));
 
         ForeignVariantPlan plan = plan(supplier, store);
@@ -87,7 +87,7 @@ class ForeignVariantPlanTest {
                 variant("CM297BL", "Dark Brown", "12 X 9.5"),
                 variant("CM297LB", "Dark Brown", "12 X 9.5"));
         List<StoreVariant> store = List.of(
-                new StoreVariant("gid://ProductVariant/1", "CM297BL-12 X 9.5", null,
+                new StoreVariant("gid://ProductVariant/1", "CM297BL-12 X 9.5", null, null,
                         "Dark Brown (BL)", "12 X 9.5", "gid://InventoryItem/1", true, 0));
 
         ForeignVariantPlan plan = plan(supplier, store);

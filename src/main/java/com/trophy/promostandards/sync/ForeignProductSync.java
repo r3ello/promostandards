@@ -62,9 +62,12 @@ class ForeignProductSync {
     private final ShopifyProperties shopify;
     private final SyncProperties props;
     private final ObjectMapper objectMapper;
+    private final ImageProperties images;
 
     ForeignProductSync(ShopifyGraphQLClient gql, CatalogService catalog, PricingPolicy pricingPolicy,
-                       ShopifyProperties shopify, SyncProperties props, ObjectMapper objectMapper) {
+                       ShopifyProperties shopify, SyncProperties props, ObjectMapper objectMapper,
+                       ImageProperties images) {
+        this.images = images;
         this.gql = gql;
         this.catalog = catalog;
         this.pricingPolicy = pricingPolicy;
@@ -79,8 +82,11 @@ class ForeignProductSync {
      * @param inventoryUpdated variants whose on-hand quantity was pushed
      * @param supplierIdsAdded ids discovered in the supplier's data and appended to
      *                         {@code ps_product_ids} (the catalog index must be rebuilt)
+     * @param imagesPublished  supplier images published on the product (0 when it sent none, which
+     *                         leaves whatever the product already had)
      */
-    record Result(int variants, int created, int inventoryUpdated, List<String> supplierIdsAdded) {
+    record Result(int variants, int created, int inventoryUpdated, List<String> supplierIdsAdded,
+                  int imagesPublished) {
     }
 
     /**
@@ -99,20 +105,27 @@ class ForeignProductSync {
         boolean emitSize = VariantOptions.hasSize(union.variants()) || options.containsKey("size");
         ForeignVariantPlan plan = ForeignVariantPlan.of(union.variants(), colorLabels, emitSize, store);
 
+        // The store keeps its own numbering: the legacy catalogue's SKU plus what tells the
+        // supplier's parts apart. The join back to PaceSetter is the vendor_sku metafield, not this.
+        Map<String, String> skuByPart = VariantSku.byVariant(
+                storeProduct.path("legacySku").path("value").asText(null), union.variants());
+
         boolean writable = writableShape(productId, gid, options, store);
         if (writable) {
             ensureOptions(gid, options, plan, emitSize);
         }
-        int updated = updateExisting(gid, plan, writable, emitSize);
-        int createdCount = writable ? createMissing(gid, plan, emitSize) : 0;
+        int updated = updateExisting(gid, plan, writable, emitSize, skuByPart);
+        Map<String, String> createdIds = writable
+                ? createMissing(gid, plan, emitSize, skuByPart) : Map.of();
         int inventory = pushInventory(gid, plan, writable);
+        int published = syncMedia(gid, union, storeProduct, plan, createdIds);
         List<String> added = extendSupplierIds(gid, imported, unioned.discoveredIds());
 
         log.info("Synced foreign product {} -> {}: {} supplier variants ({} created, {} updated, "
-                        + "{} inventory rows{})",
-                productId, gid, plan.entries().size(), createdCount, updated, inventory,
+                        + "{} inventory rows, {} images{})",
+                productId, gid, plan.entries().size(), createdIds.size(), updated, inventory, published,
                 added.isEmpty() ? "" : ", +" + added.size() + " supplier ids");
-        return new Result(plan.entries().size(), createdCount, inventory, added);
+        return new Result(plan.entries().size(), createdIds.size(), inventory, added, published);
     }
 
     // ---------------------------------------------------------------- supplier side
@@ -234,7 +247,8 @@ class ForeignProductSync {
             }
             JsonNode item = n.path("inventoryItem");
             variants.add(new StoreVariant(n.path("id").asText(null), n.path("sku").asText(null),
-                    n.path("psId").path("value").asText(null), color, size,
+                    n.path("psId").path("value").asText(null),
+                    n.path("vendorSku").path("value").asText(null), color, size,
                     item.path("id").asText(null), item.path("tracked").asBoolean(false),
                     ShopifySyncService.availableAt(item)));
         }
@@ -318,7 +332,8 @@ class ForeignProductSync {
      * Rewrites the variants that already exist: price, the identity metafield, tracked inventory,
      * and — for the adopted legacy variant — its SKU and option values.
      */
-    private int updateExisting(String gid, ForeignVariantPlan plan, boolean writable, boolean emitSize) {
+    private int updateExisting(String gid, ForeignVariantPlan plan, boolean writable, boolean emitSize,
+                               Map<String, String> skuByPart) {
         List<Map<String, Object>> variants = new ArrayList<>();
         for (Entry e : plan.toUpdate()) {
             if (!writable && e.action() == Action.ADOPT) {
@@ -331,11 +346,10 @@ class ForeignProductSync {
                 variant.put("price", price.toPlainString());
             }
             if (writable) {
-                // The SKU is the supplier's from here on: a migrated PS-prefixed SKU matches nothing.
-                variant.put("inventoryItem", Map.of("sku", e.variant().sku(), "tracked", true));
+                variant.put("inventoryItem", Map.of("sku", storeSku(e, skuByPart), "tracked", true));
                 variant.put("optionValues", optionValues(e, emitSize));
             }
-            variant.put("metafields", List.of(promoStandardId(e.supplierId())));
+            variant.put("metafields", variantMetafields(e));
             variants.add(variant);
         }
         if (variants.isEmpty()) {
@@ -347,11 +361,17 @@ class ForeignProductSync {
         return variants.size();
     }
 
-    /** Creates the supplier variants the product is missing, with stock set at creation time. */
-    private int createMissing(String gid, ForeignVariantPlan plan, boolean emitSize) {
+    /**
+     * Creates the supplier variants the product is missing, with stock set at creation time.
+     *
+     * @return the new variants' ids by SKU — the media step needs them, and the create response is
+     * the only place they exist without paying for another lookup
+     */
+    private Map<String, String> createMissing(String gid, ForeignVariantPlan plan, boolean emitSize,
+                                              Map<String, String> skuByPart) {
         List<Entry> missing = plan.toCreate();
         if (missing.isEmpty()) {
-            return 0;
+            return Map.of();
         }
         String locationId = shopify.locationId();
         List<Map<String, Object>> variants = new ArrayList<>();
@@ -362,8 +382,8 @@ class ForeignProductSync {
             if (price != null) {
                 variant.put("price", price.toPlainString());
             }
-            variant.put("inventoryItem", Map.of("sku", e.variant().sku(), "tracked", true));
-            variant.put("metafields", List.of(promoStandardId(e.supplierId())));
+            variant.put("inventoryItem", Map.of("sku", storeSku(e, skuByPart), "tracked", true));
+            variant.put("metafields", variantMetafields(e));
             if (locationId != null && !locationId.isBlank() && e.variant().onHand() != null) {
                 // Only valid on create — it activates the item at the location and sets the quantity.
                 variant.put("inventoryQuantities", List.of(Map.of(
@@ -374,8 +394,16 @@ class ForeignProductSync {
         Map<String, Object> vars = Map.of("productId", gid, "variants", variants,
                 "strategy", "PRESERVE_STANDALONE_VARIANT");
         JsonNode data = gql.execute(ShopifyGraphQL.VARIANTS_BULK_CREATE, vars);
-        checkUserErrors(require(data).path("productVariantsBulkCreate"), "productVariantsBulkCreate");
-        return variants.size();
+        JsonNode result = require(data).path("productVariantsBulkCreate");
+        checkUserErrors(result, "productVariantsBulkCreate");
+        Map<String, String> createdBySku = new LinkedHashMap<>();
+        for (JsonNode created : result.path("productVariants")) {
+            String sku = created.path("sku").asText(null);
+            if (sku != null && !sku.isBlank()) {
+                createdBySku.put(sku.toUpperCase(Locale.ROOT), created.path("id").asText());
+            }
+        }
+        return createdBySku;
     }
 
     private List<Map<String, String>> optionValues(Entry e, boolean emitSize) {
@@ -385,6 +413,155 @@ class ForeignProductSync {
             values.add(Map.of("optionName", VariantOptions.SIZE, "name", VariantOptions.size(e.sizeLabel())));
         }
         return values;
+    }
+
+    /**
+     * Publishes the supplier's images on a migrated product, replacing what it had.
+     *
+     * <p>This is the one place the app deliberately overwrites migrated content, and it is a
+     * decision, not an oversight: the store exists to show what PaceSetter actually sells, and the
+     * migration's images are both older and — for a known batch — the wrong product's altogether.
+     *
+     * <p><b>Silence is never a wipe.</b> A supplier that returns no media (its Media service faults
+     * on whole families) leaves the product's images untouched, because deleting first and finding
+     * nothing to publish would strip a product for a fault on their side.
+     *
+     * <p>Each image is published with its colour as {@code alt}, which is also the only way a variant
+     * can then be pointed at its own photo: Shopify rewrites every URL on ingest, so the source URL
+     * cannot be the join between what we sent and what came back.
+     *
+     * @return how many images were published
+     */
+    private int syncMedia(String gid, SupplierProduct product, JsonNode storeProduct,
+                          ForeignVariantPlan plan, Map<String, String> createdIds) {
+        List<String> gallery = product.imageUrls();
+        if (gallery.isEmpty()) {
+            log.debug("No supplier images for {}; leaving the product's own images alone", gid);
+            return 0;
+        }
+
+        // Colour per image, so a variant can find its own; the rest of the gallery gets the title.
+        Map<String, String> altByUrl = new LinkedHashMap<>();
+        for (Variant v : product.variants()) {
+            if (v.color() == null || v.color().isBlank()) {
+                continue;
+            }
+            for (String url : v.imageUrls()) {
+                altByUrl.putIfAbsent(url, v.color());
+            }
+        }
+        List<Map<String, Object>> media = new ArrayList<>();
+        for (String url : gallery) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("originalSource", url);
+            item.put("mediaContentType", "IMAGE");
+            String alt = altByUrl.getOrDefault(url, product.title());
+            if (alt != null && !alt.isBlank()) {
+                item.put("alt", alt);
+            }
+            media.add(item);
+        }
+
+        if (images.isReplaceExisting()) {
+            List<String> existing = new ArrayList<>();
+            for (JsonNode node : storeProduct.path("media").path("nodes")) {
+                String id = node.path("id").asText(null);
+                if (id != null && !id.isBlank()) {
+                    existing.add(id);
+                }
+            }
+            if (!existing.isEmpty()) {
+                try {
+                    JsonNode deleted = gql.execute(ShopifyGraphQL.FILE_DELETE, Map.of("fileIds", existing));
+                    checkUserErrors(require(deleted).path("fileDelete"), "fileDelete");
+                    log.info("Replaced {} image(s) on {} with the supplier's {}", existing.size(), gid,
+                            media.size());
+                } catch (RuntimeException e) {
+                    // fileDelete is the Files API and needs `write_files`, which this app is not
+                    // granted (verified against the live schema, 2026-09-04). Degrade instead of
+                    // failing: publishing the supplier's images on top still moves the store towards
+                    // the supplier's truth, and the import must not die over a photo.
+                    log.warn("Could not remove the {} existing image(s) on {} — the supplier's {} were "
+                            + "added on top instead. Granting the app `write_files` makes this a real "
+                            + "replacement. ({})", existing.size(), gid, media.size(), e.getMessage());
+                }
+            }
+        }
+
+        JsonNode data = require(gql.execute(ShopifyGraphQL.PRODUCT_ADD_MEDIA,
+                Map.of("id", gid, "media", media))).path("productUpdate");
+        checkUserErrors(data, "productUpdate(media)");
+        if (images.isAttachToVariants()) {
+            attachVariantMedia(gid, data.path("product").path("media").path("nodes"), plan, createdIds);
+        }
+        return media.size();
+    }
+
+    /** Points every variant at the image published for its colour. Never fatal: an image is not a price. */
+    private void attachVariantMedia(String gid, JsonNode publishedMedia, ForeignVariantPlan plan,
+                                    Map<String, String> createdIds) {
+        Map<String, String> mediaIdByAlt = new LinkedHashMap<>();
+        for (JsonNode node : publishedMedia) {
+            String alt = node.path("alt").asText(null);
+            if (alt != null && !alt.isBlank()) {
+                mediaIdByAlt.putIfAbsent(alt, node.path("id").asText());
+            }
+        }
+        if (mediaIdByAlt.isEmpty()) {
+            return;
+        }
+
+        List<Map<String, Object>> variantMedia = new ArrayList<>();
+        for (Entry e : plan.entries()) {
+            String color = e.variant().color();
+            String mediaId = color == null ? null : mediaIdByAlt.get(color);
+            String variantId = e.target() != null ? e.target().id()
+                    : createdIds.get(e.variant().sku() == null ? "" : e.variant().sku().toUpperCase(Locale.ROOT));
+            if (mediaId != null && variantId != null) {
+                variantMedia.add(Map.of("variantId", variantId, "mediaIds", List.of(mediaId)));
+            }
+        }
+        if (variantMedia.isEmpty()) {
+            return;
+        }
+        try {
+            JsonNode data = gql.execute(ShopifyGraphQL.VARIANT_APPEND_MEDIA,
+                    Map.of("productId", gid, "variantMedia", variantMedia));
+            checkUserErrors(require(data).path("productVariantAppendMedia"), "productVariantAppendMedia");
+        } catch (RuntimeException ex) {
+            // The images are published either way; a variant without its own photo is a cosmetic loss.
+            log.warn("Published the images for {} but could not attach them per variant: {}", gid,
+                    ex.getMessage());
+        }
+    }
+
+    /**
+     * @return the SKU this variant carries in the store: the legacy number plus the part's
+     * distinguishing tail ({@code PS1298-LB}), falling back to the supplier-derived one for a product
+     * the migration never numbered.
+     */
+    private static String storeSku(Entry e, Map<String, String> skuByPart) {
+        String mapped = skuByPart.get(VariantSku.key(e.variant().supplierPartId(), e.variant().size()));
+        return mapped != null ? mapped : e.variant().sku();
+    }
+
+    /**
+     * Identity first, then what the storefront reads. Since the SKU became the store's own number,
+     * {@code vendor_sku} is what says which PaceSetter part a variant is — the field the next sync
+     * matches on.
+     */
+    private List<Map<String, Object>> variantMetafields(Entry e) {
+        List<Map<String, Object>> fields = new ArrayList<>();
+        fields.add(promoStandardId(e.supplierId()));
+        Map<String, Object> vendorSku = ShopifyProductMapper.vendorSkuMetafield(e.variant().supplierPartId());
+        if (vendorSku != null) {
+            fields.add(vendorSku);
+        }
+        Map<String, Object> color = ShopifyProductMapper.colorMetafield(e.variant().color());
+        if (color != null) {
+            fields.add(color);
+        }
+        return fields;
     }
 
     private Map<String, Object> promoStandardId(String supplierId) {
