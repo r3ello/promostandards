@@ -278,6 +278,19 @@ final class ShopifyGraphQL {
             }
             """;
 
+    /**
+     * A product's media with its ingestion status. Shopify downloads an image after the mutation
+     * returns, and a variant cannot be pointed at one until it is {@code READY} — attaching earlier
+     * is refused with "Non-ready media cannot be attached to variants".
+     */
+    static final String PRODUCT_MEDIA_STATUS = """
+            query ProductMedia($id: ID!) {
+              product(id: $id) {
+                media(first: 100) { nodes { id alt status } }
+              }
+            }
+            """;
+
     /** Points a variant at one of the product's images. */
     static final String VARIANT_APPEND_MEDIA = """
             mutation VariantAppendMedia($productId: ID!, $variantMedia: [ProductVariantAppendMediaInput!]!) {

@@ -163,6 +163,8 @@ public class CatalogService {
                 .toList();
         accs.removeAll(phantoms);
 
+        List<String> distinctGallery = new ArrayList<>(new LinkedHashSet<>(gallery));
+
         // Resolve each variant: price (colour part id -> single fallback), SKU, images.
         List<Variant> variants = new ArrayList<>();
         for (VariantAcc acc : accs) {
@@ -174,12 +176,19 @@ public class CatalogService {
                 price = priceByPart.getOrDefault(colorPart, singlePrice);
             }
             String partId = acc.partId != null ? acc.partId : colorPart;
+            // PaceSetter never sets partId on its media, but it does serve each colour as a product
+            // of its own with its own photo: getMediaContent(CM373LB) answers cm373lb.jpg. So the
+            // gallery of THIS call belongs to the variant of the id that was asked for — and only to
+            // that one, or CM373BS's photo would end up on all eleven colours of the family.
+            List<String> variantImages = imagesByColor.getOrDefault(acc.color, List.of());
+            if (variantImages.isEmpty() && partId != null && partId.equalsIgnoreCase(productId)) {
+                variantImages = distinctGallery;
+            }
             variants.add(new Variant(partId, acc.color, acc.size, sku(partId, acc.size),
                     price == null ? null : price.net(), price == null ? null : price.list(),
-                    acc.onHand, imagesByColor.getOrDefault(acc.color, List.of())));
+                    acc.onHand, variantImages));
         }
 
-        List<String> distinctGallery = new ArrayList<>(new LinkedHashSet<>(gallery));
         List<String> tags = product.categories() == null ? List.of() : product.categories();
         String productType = tags.isEmpty() ? null : tags.get(tags.size() - 1);
 

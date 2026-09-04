@@ -113,6 +113,7 @@ CASES: dict[str, dict] = {
                           "media": [{"originalSource": "https://example.invalid/probe.jpg",
                                      "mediaContentType": "IMAGE", "alt": "probe"}]},
     "FILE_DELETE": {"fileIds": ["gid://shopify/MediaImage/999999999999"]},
+    "PRODUCT_MEDIA_STATUS": {"id": GHOST["product"]},
     "VARIANT_APPEND_MEDIA": {"productId": GHOST["product"],
                              "variantMedia": [{"variantId": GHOST["variant"],
                                                "mediaIds": ["gid://shopify/MediaImage/999999999999"]}]},

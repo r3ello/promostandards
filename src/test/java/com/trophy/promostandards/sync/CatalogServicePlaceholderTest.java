@@ -152,4 +152,48 @@ class CatalogServicePlaceholderTest {
                         .contains("stock is left"))
                 .anySatisfy(w -> assertThat(w).startsWith("Media:").contains("images are left"));
     }
+
+    /**
+     * PaceSetter never sets {@code partId} on its media, but it serves each colour as a <b>product of
+     * its own</b> with one photo: {@code getMediaContent(CM373LB)} answers {@code cm373lb.jpg}. So the
+     * image a call returns belongs to the variant of the id that was asked for — and to that one only,
+     * or CM373BS's photo would be published as all eleven colours of the family.
+     */
+    @Test
+    void givesTheProductsOwnPhotoToItsOwnVariant() {
+        ProductDataService productData = mock(ProductDataService.class);
+        PricingService pricing = mock(PricingService.class);
+        InventoryService inventory = mock(InventoryService.class);
+        MediaService media = mock(MediaService.class);
+
+        when(productData.getProduct(eq("CM373BS"), any(), any())).thenReturn(new Product(
+                "CM373BS", "Leatherette on Steel Shot Glass", "desc", "PaceSetter", List.of("Drinkware"),
+                List.of(new Product.ProductPart("CM373BS", "Black Silver", "Black Silver", List.of()),
+                        new Product.ProductPart("CM373LB", "Light Brown", "Light Brown", List.of()))));
+        when(pricing.getConfigurationAndPricingWithList(eq("CM373BS"), any(), any(), any(), any(), any()))
+                .thenReturn(new Configuration("CM373BS", "USD", "List", List.of(
+                        new Configuration.PartPrice("CM373BS", "Black Silver", List.of(
+                                new Configuration.PriceBreak(25, new BigDecimal("12.36"),
+                                        new BigDecimal("19.99"), "EA")))), List.of()));
+        when(inventory.getInventoryLevels(eq("CM373BS"), any())).thenReturn(
+                new InventoryLevels("CM373BS", List.of()));
+        // One image, no partId — exactly what the supplier sends.
+        when(media.getMediaContent(eq("CM373BS"), any(), any())).thenReturn(List.of(
+                new com.trophy.promostandards.media.model.MediaContent("CM373BS", null, "Image",
+                        "https://pacesetterawards.com/Images/cm373bs.jpg", "cm373bs.jpg", null,
+                        null, null, null, null)));
+
+        SupplierProduct product = new CatalogService(productData, pricing, inventory, media, PROPS)
+                .aggregate("CM373BS");
+
+        assertThat(product.imageUrls()).containsExactly("https://pacesetterawards.com/Images/cm373bs.jpg");
+        assertThat(product.variants()).anySatisfy(v -> {
+            assertThat(v.supplierPartId()).isEqualTo("CM373BS");
+            assertThat(v.imageUrls()).containsExactly("https://pacesetterawards.com/Images/cm373bs.jpg");
+        });
+        assertThat(product.variants()).anySatisfy(v -> {
+            assertThat(v.supplierPartId()).isEqualTo("CM373LB");
+            assertThat(v.imageUrls()).isEmpty();     // its photo lives under its own product id
+        });
+    }
 }

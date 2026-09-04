@@ -53,6 +53,10 @@ class ForeignProductSync {
 
     private static final Logger log = LoggerFactory.getLogger(ForeignProductSync.class);
 
+    /** How long to let Shopify finish ingesting images before giving up on per-variant photos. */
+    private static final java.time.Duration MEDIA_READY_WAIT = java.time.Duration.ofSeconds(2);
+    private static final int MEDIA_READY_ATTEMPTS = 8;
+
     /** Option names this app knows how to write. Anything else means hands off the variants. */
     private static final Set<String> KNOWN_OPTIONS = Set.of("title", "color", "size");
 
@@ -142,6 +146,10 @@ class ForeignProductSync {
         Map<String, Variant> byKey = new LinkedHashMap<>();
         Set<String> authoritative = new LinkedHashSet<>();
         Set<String> known = new LinkedHashSet<>();
+        // Every id's own photo, not just the seed's: PaceSetter serves each colour as a product with
+        // one image, so a family's variant photos only exist across these calls. They have to reach
+        // the product's gallery or there would be nothing for a variant to be pointed at.
+        Set<String> gallery = new LinkedHashSet<>(seed.imageUrls());
         known.add(upper(seed.productId()));
         collect(byKey, authoritative, seed.productId(), seed.variants());
         if (imported != null) {
@@ -149,7 +157,7 @@ class ForeignProductSync {
                 if (!known.add(upper(id))) {
                     continue;
                 }
-                aggregateInto(byKey, authoritative, id, seed.productId());
+                aggregateInto(byKey, authoritative, id, seed.productId(), gallery);
             }
         }
 
@@ -162,14 +170,14 @@ class ForeignProductSync {
             if (!known.add(upper(partId))) {
                 continue;
             }
-            if (aggregateInto(byKey, authoritative, partId, seed.productId())) {
+            if (aggregateInto(byKey, authoritative, partId, seed.productId(), gallery)) {
                 discovered.add(partId);
             }
         }
 
         SupplierProduct product = new SupplierProduct(seed.productId(), seed.title(),
                 seed.descriptionHtml(), seed.vendor(), seed.productType(), seed.tags(),
-                List.copyOf(byKey.values()), seed.imageUrls(), seed.priceParts(), seed.warnings());
+                List.copyOf(byKey.values()), List.copyOf(gallery), seed.priceParts(), seed.warnings());
         return new Union(product, List.copyOf(discovered));
     }
 
@@ -179,9 +187,11 @@ class ForeignProductSync {
 
     /** @return whether the supplier serves {@code id} as a product of its own. */
     private boolean aggregateInto(Map<String, Variant> byKey, Set<String> authoritative, String id,
-                                  String forProduct) {
+                                  String forProduct, Set<String> gallery) {
         try {
-            collect(byKey, authoritative, id, catalog.aggregate(id).variants());
+            SupplierProduct aggregate = catalog.aggregate(id);
+            collect(byKey, authoritative, id, aggregate.variants());
+            gallery.addAll(aggregate.imageUrls());
             return true;
         } catch (RuntimeException e) {
             // Not every part id is a product id, and an id the supplier no longer serves must not
@@ -492,9 +502,52 @@ class ForeignProductSync {
                 Map.of("id", gid, "media", media))).path("productUpdate");
         checkUserErrors(data, "productUpdate(media)");
         if (images.isAttachToVariants()) {
-            attachVariantMedia(gid, data.path("product").path("media").path("nodes"), plan, createdIds);
+            attachVariantMedia(gid, readyMedia(gid, data.path("product").path("media").path("nodes")),
+                    plan, createdIds);
         }
         return media.size();
+    }
+
+    /**
+     * Waits for Shopify to finish ingesting the images it was just given.
+     *
+     * <p>{@code productUpdate} returns as soon as the media records exist, but Shopify downloads the
+     * files afterwards and refuses to attach one to a variant until it is {@code READY} ("Non-ready
+     * media cannot be attached to variants"). Waiting is the only option: every sync republishes the
+     * images, so there is no later run where they are already ready.
+     *
+     * @return the media nodes, ready or not — the wait is bounded, and attaching is best-effort
+     */
+    private JsonNode readyMedia(String gid, JsonNode published) {
+        JsonNode media = published;
+        for (int attempt = 0; attempt < MEDIA_READY_ATTEMPTS; attempt++) {
+            boolean allReady = media.size() > 0;
+            for (JsonNode node : media) {
+                if (!"READY".equals(node.path("status").asText(null))) {
+                    allReady = false;
+                    break;
+                }
+            }
+            if (allReady) {
+                return media;
+            }
+            try {
+                Thread.sleep(MEDIA_READY_WAIT.toMillis());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return media;
+            }
+            try {
+                media = require(gql.execute(ShopifyGraphQL.PRODUCT_MEDIA_STATUS, Map.of("id", gid)))
+                        .path("product").path("media").path("nodes");
+            } catch (RuntimeException e) {
+                log.debug("Could not re-read media status for {}: {}", gid, e.getMessage());
+                return media;
+            }
+        }
+        log.info("Images for {} were still processing after {}s; variants keep the product photo",
+                gid, MEDIA_READY_ATTEMPTS * MEDIA_READY_WAIT.getSeconds());
+        return media;
     }
 
     /** Points every variant at the image published for its colour. Never fatal: an image is not a price. */
@@ -503,7 +556,9 @@ class ForeignProductSync {
         Map<String, String> mediaIdByAlt = new LinkedHashMap<>();
         for (JsonNode node : publishedMedia) {
             String alt = node.path("alt").asText(null);
-            if (alt != null && !alt.isBlank()) {
+            String status = node.path("status").asText(null);
+            // A media that never finished processing would fail the whole mutation for the rest.
+            if (alt != null && !alt.isBlank() && (status == null || "READY".equals(status))) {
                 mediaIdByAlt.putIfAbsent(alt, node.path("id").asText());
             }
         }
