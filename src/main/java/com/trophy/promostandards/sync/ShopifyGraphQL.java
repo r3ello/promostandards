@@ -301,6 +301,22 @@ final class ShopifyGraphQL {
             }
             """;
 
+    /**
+     * Remove product options. Used to undo this app's own doing: a product the supplier sells in one
+     * variant was given Color/Size options with a single value each, which the storefront renders as
+     * a selector with nothing to select. {@code DEFAULT} only deletes an option that has one value,
+     * which is exactly the case here and refuses anything riskier.
+     */
+    static final String PRODUCT_OPTIONS_DELETE = """
+            mutation ProductOptionsDelete($productId: ID!, $options: [ID!]!,
+                                          $strategy: ProductOptionDeleteStrategy) {
+              productOptionsDelete(productId: $productId, options: $options, strategy: $strategy) {
+                deletedOptionsIds
+                userErrors { field message code }
+              }
+            }
+            """;
+
     /** Update a metafield definition (used to enable the uniqueValues capability on ps_product_id). */
     static final String METAFIELD_DEFINITION_UPDATE = """
             mutation MetafieldDefinitionUpdate($definition: MetafieldDefinitionUpdateInput!) {

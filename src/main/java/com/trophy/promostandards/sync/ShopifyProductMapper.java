@@ -101,6 +101,84 @@ public class ShopifyProductMapper {
                          "type", "single_line_text_field", "value", supplierPartId);
     }
 
+    /**
+     * The supplier's size, per variant, written <b>twice on purpose</b>: {@code trophy_sync.size} is
+     * this app's own copy (so "what the sync published" is always answerable from its namespace) and
+     * {@code custom.size} is the store's, read by something outside this app — hence its type,
+     * {@code multi_line_text_field}, which is what that definition uses.
+     *
+     * <p>It matters most where there is no Size option to read it from: a product the supplier sells
+     * in one variant stays a plain product, and then the metafield is the only place the size lives.
+     */
+    static final String MF_VARIANT_SIZE = "size";
+
+    /**
+     * The {@code inventoryItem} input for a variant: SKU/tracking plus the supplier's shipping
+     * weight, which is what Shopify quotes postage from.
+     *
+     * <p>The unit is mapped, never assumed: publishing 0.1 as pounds when the supplier meant
+     * kilograms would be wrong by a factor of 2.2 on every shipping quote, so an unrecognised unit
+     * means no weight rather than a guess. PaceSetter says {@code LB} throughout.
+     */
+    static Map<String, Object> inventoryItemInput(Variant v, boolean withSku) {
+        Map<String, Object> item = new LinkedHashMap<>();
+        if (withSku) {
+            item.put("sku", v.sku());
+        }
+        item.put("tracked", true);
+        String unit = weightUnit(v.weightUom());
+        if (v.weight() != null && v.weight().signum() > 0 && unit != null) {
+            item.put("measurement", Map.of("weight",
+                    Map.of("value", v.weight().doubleValue(), "unit", unit)));
+        }
+        return item;
+    }
+
+    /**
+     * The same weight, again, as a variant metafield — one place for the shipping engine
+     * ({@code inventoryItem.measurement}) and one for anything reading this app's own namespace,
+     * exactly as the size is duplicated. Shopify's native {@code weight} type, so a theme gets a
+     * number and a unit rather than a string to parse; it normalises the unit to its enum form
+     * (a probe with {@code "lb"} came back as {@code POUNDS}).
+     */
+    static final String MF_VARIANT_WEIGHT = "weight";
+
+    /** @return the per-variant weight metafield, or null when there is no weight in a known unit. */
+    static Map<String, Object> weightMetafield(Variant v) {
+        String unit = weightUnit(v.weightUom());
+        if (v.weight() == null || v.weight().signum() <= 0 || unit == null) {
+            return null;
+        }
+        return Map.of("namespace", SYNC_NAMESPACE, "key", MF_VARIANT_WEIGHT, "type", "weight",
+                "value", "{\"value\":" + v.weight().doubleValue() + ",\"unit\":\"" + unit + "\"}");
+    }
+
+    /** @return Shopify's WeightUnit for a PromoStandards uom, or null when it is not one we know. */
+    static String weightUnit(String uom) {
+        if (uom == null) {
+            return null;
+        }
+        return switch (uom.trim().toUpperCase(Locale.ROOT)) {
+            case "LB", "LBS", "POUND", "POUNDS" -> "POUNDS";
+            case "OZ", "OUNCE", "OUNCES" -> "OUNCES";
+            case "KG", "KGS", "KILOGRAM", "KILOGRAMS" -> "KILOGRAMS";
+            case "G", "GM", "GRAM", "GRAMS" -> "GRAMS";
+            default -> null;
+        };
+    }
+
+    /** @return the per-variant size metafields (sync's own + the store's), empty when there is none. */
+    static List<Map<String, Object>> sizeMetafields(String supplierSize) {
+        if (supplierSize == null || supplierSize.isBlank()) {
+            return List.of();
+        }
+        return List.of(
+                Map.of("namespace", SYNC_NAMESPACE, "key", MF_VARIANT_SIZE,
+                        "type", "single_line_text_field", "value", supplierSize),
+                Map.of("namespace", METAFIELD_NAMESPACE, "key", MF_VARIANT_SIZE,
+                        "type", "multi_line_text_field", "value", supplierSize));
+    }
+
     /** @return the per-variant colour metafield, or null when the supplier named no colour. */
     static Map<String, Object> colorMetafield(String supplierColor) {
         return supplierColor == null || supplierColor.isBlank() ? null
@@ -165,7 +243,13 @@ public class ShopifyProductMapper {
         }
         input.put("status", "ACTIVE");
         input.put("tags", tags(product));
-        input.put("productOptions", productOptions(product));
+        // A product the supplier sells in ONE variant stays a plain product: no options, so Shopify
+        // keeps its Title/Default Title variant and the admin shows price, SKU and stock as the
+        // product's own. Giving it Color/Size with a single value each only renders a selector with
+        // nothing to select. The colour and size are still published, as variant metafields.
+        if (!isSingleVariant(product)) {
+            input.put("productOptions", productOptions(product));
+        }
         input.put("variants", variants(product));
 
         List<Map<String, Object>> files = files(product);
@@ -269,6 +353,11 @@ public class ShopifyProductMapper {
         return product.variants().stream().anyMatch(v -> v.size() != null && !v.size().isBlank());
     }
 
+    /** @return whether the supplier gives this product a single variant, i.e. it needs no options. */
+    static boolean isSingleVariant(SupplierProduct product) {
+        return product.variants().size() == 1;
+    }
+
     private List<Map<String, Object>> productOptions(SupplierProduct product) {
         List<Map<String, Object>> options = new ArrayList<>();
         options.add(optionDef(COLOR, 1, distinct(VariantOptions.colorLabels(product.variants()))));
@@ -285,6 +374,7 @@ public class ShopifyProductMapper {
 
     private List<Map<String, Object>> variants(SupplierProduct product) {
         boolean hasSize = hasSize(product);
+        boolean single = isSingleVariant(product);
         // Two parts of a family can share a colour name; the label carries the part id when they do,
         // because Shopify rejects two variants claiming the same option combination.
         List<String> colorLabels = VariantOptions.colorLabels(product.variants());
@@ -302,7 +392,9 @@ public class ShopifyProductMapper {
             if (hasSize) {
                 optionValues.add(Map.of("optionName", SIZE, "name", defaultSize(v.size())));
             }
-            variant.put("optionValues", optionValues);
+            if (!single) {
+                variant.put("optionValues", optionValues);
+            }
             List<Map<String, Object>> variantMetafields = new ArrayList<>();
             variantMetafields.add(Map.of(
                     "namespace", METAFIELD_NAMESPACE,
@@ -317,8 +409,13 @@ public class ShopifyProductMapper {
             if (vendorSku != null) {
                 variantMetafields.add(vendorSku);
             }
+            variantMetafields.addAll(sizeMetafields(v.size()));
+            Map<String, Object> weight = weightMetafield(v);
+            if (weight != null) {
+                variantMetafields.add(weight);
+            }
             variant.put("metafields", variantMetafields);
-            variant.put("inventoryItem", Map.of("tracked", true));
+            variant.put("inventoryItem", inventoryItemInput(v, false));
             // The variant's own photo, so the storefront swaps it when a colour is picked. It has to
             // be one of the product's files (Shopify rejects a variant file that is not), which it is:
             // the gallery is the union of every variant's images.

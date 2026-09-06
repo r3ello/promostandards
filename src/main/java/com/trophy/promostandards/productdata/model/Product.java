@@ -1,5 +1,6 @@
 package com.trophy.promostandards.productdata.model;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 /**
@@ -35,8 +36,15 @@ public record Product(String productId, String productName, String description, 
 	 * @param description      part description
 	 * @param primaryColor     primary color name
 	 * @param sizes            available size labels
+	 * @param weight           shipping weight of one unit, from the part's {@code Dimension} block;
+	 *                         null when the supplier gives none. It is the only shipping figure worth
+	 *                         mapping: the dimensions in that same block are what PaceSetter already
+	 *                         repeats as the inventory row's size attribute ("9.25 X 7"), while the
+	 *                         weight appears nowhere else and is what a store needs to quote postage
+	 * @param weightUom        unit the weight is expressed in (PaceSetter: {@code LB})
 	 */
-	public record ProductPart(String partId, String description, String primaryColor, List<String> sizes) {
+	public record ProductPart(String partId, String description, String primaryColor, List<String> sizes,
+			BigDecimal weight, String weightUom) {
 	}
 
 	/**

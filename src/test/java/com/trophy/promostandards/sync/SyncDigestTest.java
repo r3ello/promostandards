@@ -33,7 +33,7 @@ class SyncDigestTest {
 
     private static Variant variant(String sku, String net, Integer onHand) {
         return new Variant("SAMPLE-001-RED", "Red", "S", sku,
-                new BigDecimal(net), new BigDecimal("12.00"), onHand, List.of());
+                new BigDecimal(net), new BigDecimal("12.00"), onHand, List.of(), null, null);
     }
 
     @Test

@@ -18,7 +18,7 @@ class VariantSkuTest {
     /** A supplier variant reduced to what numbering cares about: its part id and size. */
     private static Variant variant(String partId, String size) {
         return new Variant(partId, "Colour", size, partId + "-" + size, new BigDecimal("1.00"),
-                new BigDecimal("2.00"), 1, List.of());
+                new BigDecimal("2.00"), 1, List.of(), null, null);
     }
 
     private static Map<String, String> skus(String legacy, String... partIds) {
@@ -47,19 +47,37 @@ class VariantSkuTest {
     }
 
     /**
-     * A product covering two families shares only "CM74", which would leave tails like "7BK" — a
-     * number, not a suffix anyone can read. The whole part id is used instead: longer, but nobody has
-     * to guess.
+     * The client's second worked example: several families under one product keep the digit that
+     * tells them apart. Common prefix CM254, so the tails are what is left.
      */
     @Test
-    void fallsBackToTheWholePartWhenTheTailIsNotOne() {
-        Map<String, String> skus = skus("PS9001", "CM747BK", "CM747BL", "CM746RD");
+    void keepsTheDigitThatSeparatesFamilies() {
+        Map<String, String> skus = skus("PS1298",
+                "CM2541LB", "CM2541LG", "CM2542RB", "CM2542YO", "CM2543BG");
 
-        assertThat(skuOf(skus, "CM747BK")).isEqualTo("PS9001-CM747BK");
-        assertThat(skuOf(skus, "CM746RD")).isEqualTo("PS9001-CM746RD");
+        assertThat(skus.values()).containsExactly("PS1298-1LB", "PS1298-1LG", "PS1298-2RB",
+                "PS1298-2YO", "PS1298-3BG");
     }
 
-    /** Two parts that differ only past the sixth character get their full ids, never a duplicate SKU. */
+    /** The real two-family product in the store: CM746 and CM747 share CM74, and that is the cut. */
+    @Test
+    void namesTwoFamiliesByWhatDiffers() {
+        Map<String, String> skus = skus("PS9001", "CM747BK", "CM747BL", "CM746RD");
+
+        assertThat(skuOf(skus, "CM747BK")).isEqualTo("PS9001-7BK");
+        assertThat(skuOf(skus, "CM746RD")).isEqualTo("PS9001-6RD");
+    }
+
+    /** An id that is itself the prefix of the others has no difference to be named by. */
+    @Test
+    void fallsBackToTheWholePartWhenNothingIsLeft() {
+        Map<String, String> skus = skus("PS500", "CM254", "CM2541LB");
+
+        assertThat(skuOf(skus, "CM254")).isEqualTo("PS500-CM254");
+        assertThat(skuOf(skus, "CM2541LB")).isEqualTo("PS500-1LB");
+    }
+
+    /** Whatever the ids look like, two variants never end up sharing a SKU. */
     @Test
     void neverIssuesTheSameSkuTwice() {
         assertThat(skus("PS7", "CD916ABLONGTAIL", "CD916ABLONGTAIX").values()).doesNotHaveDuplicates();

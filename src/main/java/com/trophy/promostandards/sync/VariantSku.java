@@ -25,15 +25,27 @@ import java.util.Set;
  * much anyway: PromoStandards has no SKU field at all, so the old {@code CM373BS-2.375 X 1.75 X 1.75}
  * was this app's invention too.
  *
- * <p>The tail is the part id minus what every part shares. Two guards keep it readable: a tail that
- * does not begin with a letter (a family split like {@code CM746*}/{@code CM747*} shares only
- * {@code CM74}, leaving {@code 7BK}) and any collision fall back to the whole part id, so the SKU is
- * always unambiguous even when it is longer than it could be.
+ * <p>The tail is simply <b>what is not common</b> — nothing more. A product covering several
+ * families keeps the digits that tell them apart:
+ *
+ * <pre>
+ *   PS1298 + {CM2541LB, CM2541LG, CM2542RB, CM2542YO, CM2543BG}   (common: CM254)
+ *   -> PS1298-1LB, PS1298-1LG, PS1298-2RB, PS1298-2YO, PS1298-3BG
+ * </pre>
+ *
+ * <p>Only two things ever lengthen it: a part sold in several sizes takes the size (or its variants
+ * would share a SKU), and a tail that comes out empty — one id being the prefix of the others —
+ * falls back to the whole part id, since an empty suffix identifies nothing.
+ *
+ * <p><b>The rule is literal, and sometimes that is very short.</b> A store product covering
+ * {@code GI835} and {@code GI836BK} shares {@code GI83}, so the SKUs come out {@code PS9619-5} and
+ * {@code PS9619-6BK}: the difference really is one character. It is unambiguous and it round-trips —
+ * {@code trophy_sync.vendor_sku} still holds the part id, which is what anything matching on the
+ * supplier reads — but it is thin for a human scanning a picking list. Raised with the client
+ * 2026-09-06 and left as is; the alternative, should it ever be wanted, is a minimum tail length
+ * (pad from the prefix leftwards until the tail is N characters), not a return to the whole part id.
  */
 final class VariantSku {
-
-    /** Beyond this a "tail" is not a distinguishing suffix any more, it is the part id again. */
-    private static final int MAX_TAIL = 6;
 
     private VariantSku() {
     }
@@ -71,7 +83,8 @@ final class VariantSku {
         for (Variant v : vs) {
             String id = v.supplierPartId();
             String tail = id.substring(Math.min(prefix.length(), id.length()));
-            if (!usable(tail)) {
+            if (tail.isEmpty()) {
+                // This id IS the prefix of the others: there is no difference to name it by.
                 tail = id;
             }
             // A part sold in several sizes is several variants under one id: without the size they
@@ -100,10 +113,6 @@ final class VariantSku {
 
     private static long count(List<String> ids, String id) {
         return ids.stream().filter(other -> other.equalsIgnoreCase(id)).count();
-    }
-
-    private static boolean usable(String tail) {
-        return !tail.isEmpty() && tail.length() <= MAX_TAIL && Character.isLetter(tail.charAt(0));
     }
 
     private static Set<String> upper(List<String> values) {

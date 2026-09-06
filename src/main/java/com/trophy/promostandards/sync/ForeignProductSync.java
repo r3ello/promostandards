@@ -114,12 +114,21 @@ class ForeignProductSync {
         Map<String, String> skuByPart = VariantSku.byVariant(
                 storeProduct.path("legacySku").path("value").asText(null), union.variants());
 
+        // One supplier variant means a plain product: Shopify keeps Title/Default Title and the
+        // admin shows price, SKU and stock as the product's own. Options with a single value each
+        // only render a selector with nothing to select — and this app is what put them there.
+        boolean single = union.variants().size() == 1;
+
         boolean writable = writableShape(productId, gid, options, store);
         if (writable) {
-            ensureOptions(gid, options, plan, emitSize);
+            if (single) {
+                revertToSimpleProduct(gid, options);
+            } else {
+                ensureOptions(gid, options, plan, emitSize);
+            }
         }
-        int updated = updateExisting(gid, plan, writable, emitSize, skuByPart);
-        Map<String, String> createdIds = writable
+        int updated = updateExisting(gid, plan, writable, emitSize, skuByPart, single);
+        Map<String, String> createdIds = writable && !single
                 ? createMissing(gid, plan, emitSize, skuByPart) : Map.of();
         int inventory = pushInventory(gid, plan, writable);
         int published = syncMedia(gid, union, storeProduct, plan, createdIds);
@@ -237,7 +246,7 @@ class ForeignProductSync {
                 && v.size() != null && !v.size().isBlank();
         String sku = sized ? sourceId + "-" + v.size() : sourceId;
         return new Variant(sourceId, v.color(), v.size(), sku, v.supplierNet(), v.listPrice(),
-                v.onHand(), v.imageUrls());
+                v.onHand(), v.imageUrls(), v.weight(), v.weightUom());
     }
 
     // ---------------------------------------------------------------- store side
@@ -297,6 +306,51 @@ class ForeignProductSync {
     // ---------------------------------------------------------------- mutations
 
     /** Turns the migrated {@code Title} option into {@code Color}, and adds {@code Size} if needed. */
+    /**
+     * Undoes the options this app gave a product the supplier sells in one variant: {@code Size} is
+     * deleted (the {@code DEFAULT} strategy only removes an option with a single value, which is
+     * exactly this case and refuses anything riskier) and {@code Color} is renamed back to
+     * {@code Title / Default Title} — the shape Shopify calls "no options", since a product cannot
+     * have none at all.
+     *
+     * <p>Never fatal, and never guessed at: an option carrying more than one value belongs to a real
+     * choice someone made, and is left alone.
+     */
+    private void revertToSimpleProduct(String gid, Map<String, JsonNode> options) {
+        JsonNode size = options.get("size");
+        if (size != null && size.path("optionValues").size() == 1) {
+            try {
+                Map<String, Object> vars = Map.of("productId", gid,
+                        "options", List.of(size.path("id").asText()), "strategy", "DEFAULT");
+                checkUserErrors(require(gql.execute(ShopifyGraphQL.PRODUCT_OPTIONS_DELETE, vars))
+                        .path("productOptionsDelete"), "productOptionsDelete");
+            } catch (RuntimeException e) {
+                log.warn("Could not drop the Size option of the single-variant product {}: {}", gid,
+                        e.getMessage());
+                return;     // renaming Color while Size survives would leave a worse shape than both
+            }
+        }
+        JsonNode color = options.get("color");
+        if (color == null || color.path("optionValues").size() != 1) {
+            return;
+        }
+        try {
+            Map<String, Object> vars = new LinkedHashMap<>();
+            vars.put("productId", gid);
+            vars.put("option", Map.of("id", color.path("id").asText(), "name", "Title"));
+            vars.put("optionValuesToUpdate", List.of(Map.of(
+                    "id", color.path("optionValues").get(0).path("id").asText(),
+                    "name", "Default Title")));
+            vars.put("variantStrategy", "LEAVE_AS_IS");
+            checkUserErrors(require(gql.execute(ShopifyGraphQL.PRODUCT_OPTION_UPDATE, vars))
+                    .path("productOptionUpdate"), "productOptionUpdate");
+            log.info("Reverted {} to a plain product: one supplier variant needs no options", gid);
+        } catch (RuntimeException e) {
+            log.warn("Could not revert the Color option of the single-variant product {}: {}", gid,
+                    e.getMessage());
+        }
+    }
+
     private void ensureOptions(String gid, Map<String, JsonNode> options, ForeignVariantPlan plan,
                                boolean emitSize) {
         Entry first = plan.adopted() != null ? plan.adopted()
@@ -343,7 +397,7 @@ class ForeignProductSync {
      * and — for the adopted legacy variant — its SKU and option values.
      */
     private int updateExisting(String gid, ForeignVariantPlan plan, boolean writable, boolean emitSize,
-                               Map<String, String> skuByPart) {
+                               Map<String, String> skuByPart, boolean single) {
         List<Map<String, Object>> variants = new ArrayList<>();
         for (Entry e : plan.toUpdate()) {
             if (!writable && e.action() == Action.ADOPT) {
@@ -356,8 +410,13 @@ class ForeignProductSync {
                 variant.put("price", price.toPlainString());
             }
             if (writable) {
-                variant.put("inventoryItem", Map.of("sku", storeSku(e, skuByPart), "tracked", true));
-                variant.put("optionValues", optionValues(e, emitSize));
+                Map<String, Object> item = ShopifyProductMapper.inventoryItemInput(e.variant(), false);
+                item.put("sku", storeSku(e, skuByPart));
+                variant.put("inventoryItem", item);
+                if (!single) {
+                    // A plain product has no options to write values for.
+                    variant.put("optionValues", optionValues(e, emitSize));
+                }
             }
             variant.put("metafields", variantMetafields(e));
             variants.add(variant);
@@ -392,7 +451,9 @@ class ForeignProductSync {
             if (price != null) {
                 variant.put("price", price.toPlainString());
             }
-            variant.put("inventoryItem", Map.of("sku", storeSku(e, skuByPart), "tracked", true));
+            Map<String, Object> item = ShopifyProductMapper.inventoryItemInput(e.variant(), false);
+            item.put("sku", storeSku(e, skuByPart));
+            variant.put("inventoryItem", item);
             variant.put("metafields", variantMetafields(e));
             if (locationId != null && !locationId.isBlank() && e.variant().onHand() != null) {
                 // Only valid on create — it activates the item at the location and sets the quantity.
@@ -615,6 +676,11 @@ class ForeignProductSync {
         Map<String, Object> color = ShopifyProductMapper.colorMetafield(e.variant().color());
         if (color != null) {
             fields.add(color);
+        }
+        fields.addAll(ShopifyProductMapper.sizeMetafields(e.variant().size()));
+        Map<String, Object> weight = ShopifyProductMapper.weightMetafield(e.variant());
+        if (weight != null) {
+            fields.add(weight);
         }
         return fields;
     }

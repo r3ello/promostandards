@@ -50,6 +50,9 @@ query ImportedProducts($cursor: String) {
       handle
       psId: metafield(namespace: "custom", key: "ps_product_id") { value }
       psIds: metafield(namespace: "custom", key: "ps_product_ids") { value }
+      lastSync: metafield(namespace: "trophy_sync", key: "last_sync_at") { value }
+      media(first: 60) { nodes { id } }
+      variants(first: 100) { nodes { id } }
     }
   }
 }
@@ -99,7 +102,10 @@ def store_products() -> list[dict]:
                 ids = [canonical.strip()] + [i.strip() for i in covered_ids
                                              if i.strip().upper() != canonical.strip().upper()]
                 products.append({"productId": canonical.strip(), "handle": node["handle"],
-                                 "ids": ids, "covers": len(ids)})
+                                 "ids": ids, "covers": len(ids),
+                                 "synced": bool((node.get("lastSync") or {}).get("value")),
+                                 "images": len(node["media"]["nodes"]),
+                                 "variants": len(node["variants"]["nodes"])})
         if not page["pageInfo"]["hasNextPage"]:
             return products
         cursor = page["pageInfo"]["endCursor"]
@@ -147,6 +153,16 @@ def main() -> int:
                         help="skip products the supplier no longer sells, and drive each one by the "
                              "id it DOES sell (a store product whose canonical id is gone may still "
                              "cover a sibling that is not)")
+    parser.add_argument("--synced-only", action="store_true",
+                        help="only products this app has already put in the store (they carry "
+                             "trophy_sync.last_sync_at) — for pushing a new field to what is live "
+                             "without importing anything new")
+    parser.add_argument("--needs-images", action="store_true",
+                        help="only products already synced that came out with fewer images than "
+                             "variants — what a supplier media outage leaves behind, and what "
+                             "--skip-done would otherwise skip for being 'ok'")
+    parser.add_argument("--only", default="",
+                        help="comma-separated supplier ids, or @file with one per line")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -173,6 +189,27 @@ def main() -> int:
                 continue
             if row.get("ok"):
                 done.add(row["productId"])
+    if args.synced_only:
+        products = [p for p in products if p.get("synced")]
+        print(f"{len(products)} product(s) already synced by this app", flush=True)
+    if args.needs_images:
+        # PaceSetter serves one photo per product id, so a store product covering N ids should come
+        # out with close to N images. Fewer means the media calls failed while the rest of the sync
+        # succeeded: its Media service stops answering under load and the import is deliberately
+        # tolerant of that, which leaves the product marked "ok" with nothing to show for it.
+        # Compared against the ids it covers, never against variants — a product covering one id has
+        # exactly one photo to get, however many variants the supplier splits it into.
+        products = [p for p in products
+                    if p.get("synced") and p["covers"] > 1 and p["images"] < p["covers"]]
+        print(f"{len(products)} synced product(s) look short of images", flush=True)
+    if args.only:
+        wanted = (Path(args.only[1:]).read_text(encoding="utf-8").split()
+                  if args.only.startswith("@") else args.only.split(","))
+        wanted = {w.strip().upper() for w in wanted if w.strip()}
+        products = [p for p in products
+                    if p["productId"].upper() in wanted
+                    or any(i.upper() in wanted for i in p["ids"])]
+
     todo = [p for p in products if p["productId"] not in done]
     if args.limit:
         todo = todo[:args.limit]

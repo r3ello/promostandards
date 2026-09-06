@@ -16,7 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class VariantOptionsTest {
 
     private static Variant variant(String partId, String color, String size) {
-        return new Variant(partId, color, size, partId, null, null, null, List.of());
+        return new Variant(partId, color, size, partId, null, null, null, List.of(), null, null);
     }
 
     @Test

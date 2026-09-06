@@ -53,6 +53,11 @@ public record SupplierProduct(
      * @param listPrice      supplier list/MAP unit price (may be null)
      * @param onHand         available quantity (null when inventory is unknown for this variant)
      * @param imageUrls      image URLs associated with this variant's color
+     * @param weight         shipping weight of one unit, null when the supplier gives none. The
+     *                       dimensions that come with it are deliberately not carried: they are the
+     *                       same numbers the inventory row already states as its size ("9.25 X 7"),
+     *                       whereas the weight exists nowhere else and is what quotes postage
+     * @param weightUom      unit of {@code weight} as the supplier states it (PaceSetter: {@code LB})
      */
     public record Variant(
             String supplierPartId,
@@ -62,7 +67,9 @@ public record SupplierProduct(
             BigDecimal supplierNet,
             BigDecimal listPrice,
             Integer onHand,
-            List<String> imageUrls
+            List<String> imageUrls,
+            BigDecimal weight,
+            String weightUom
     ) {
     }
 }

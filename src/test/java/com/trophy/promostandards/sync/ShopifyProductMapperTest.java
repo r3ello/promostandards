@@ -41,13 +41,13 @@ class ShopifyProductMapperTest {
                 List.of(
                         new Variant("SAMPLE-001-RED", "Red", "S", "SAMPLE-001-RED-S",
                                 new BigDecimal("10.00"), new BigDecimal("12.00"), 1200,
-                                List.of("https://cdn.example.com/red.jpg")),
+                                List.of("https://cdn.example.com/red.jpg"), null, null),
                         new Variant("SAMPLE-001-RED", "Red", "M", "SAMPLE-001-RED-M",
                                 new BigDecimal("10.00"), new BigDecimal("12.00"), 350,
-                                List.of("https://cdn.example.com/red.jpg")),
+                                List.of("https://cdn.example.com/red.jpg"), null, null),
                         new Variant("SAMPLE-001-BLU", "Blue", "S", "SAMPLE-001-BLU-S",
                                 new BigDecimal("10.00"), new BigDecimal("12.00"), 0,
-                                List.of("https://cdn.example.com/blue.jpg"))),
+                                List.of("https://cdn.example.com/blue.jpg"), null, null)),
                 List.of("https://cdn.example.com/red.jpg", "https://cdn.example.com/blue.jpg"),
                 priceParts(), List.of());
     }
@@ -55,7 +55,7 @@ class ShopifyProductMapperTest {
     private static SupplierProduct singleNullColorVariant() {
         return new SupplierProduct("C073A", "Walnut Plaque", null, null, null, List.of(),
                 List.of(new Variant("C073A", null, null, "C073A",
-                        new BigDecimal("125.00"), new BigDecimal("125.00"), null, List.of())),
+                        new BigDecimal("125.00"), new BigDecimal("125.00"), null, List.of(), null, null)),
                 List.of(), List.of(), List.of());
     }
 
@@ -168,19 +168,18 @@ class ShopifyProductMapperTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void handlesNullColorWithoutFailing() {
+    void keepsASingleVariantProductPlain() {
         Map<String, Object> vars = mapper().productSetVariables(singleNullColorVariant(), null);
         Map<String, Object> input = (Map<String, Object>) vars.get("input");
 
-        List<Map<String, Object>> options = (List<Map<String, Object>>) input.get("productOptions");
-        assertThat(options).extracting(o -> o.get("name")).containsExactly("Color"); // no Size option
-        Map<String, Object> colorOption = options.get(0);
-        assertThat((List<Map<String, String>>) colorOption.get("values")).containsExactly(Map.of("name", "Default"));
-
+        // One supplier variant needs no options: Shopify keeps Title/Default Title and the admin
+        // shows price, SKU and stock as the product's own. A Color option holding one value would
+        // only render a selector with nothing to select.
+        assertThat(input).doesNotContainKey("productOptions");
         List<Map<String, Object>> variants = (List<Map<String, Object>>) input.get("variants");
         assertThat(variants).hasSize(1);
-        assertThat((List<Map<String, String>>) variants.get(0).get("optionValues"))
-                .containsExactly(Map.of("optionName", "Color", "name", "Default"));
+        assertThat(variants.get(0)).doesNotContainKey("optionValues");
+        assertThat(variants.get(0).get("sku")).isNotNull();
     }
 
     @Test
@@ -189,5 +188,45 @@ class ShopifyProductMapperTest {
         Map<String, Object> vars = mapper().productSetVariables(sample(), "gid://shopify/Product/42");
         Map<String, Object> input = (Map<String, Object>) vars.get("input");
         assertThat(input.get("id")).isEqualTo("gid://shopify/Product/42");
+    }
+
+    /**
+     * The supplier's shipping weight reaches the inventory item, which is what Shopify quotes postage
+     * from. PaceSetter states it in pounds on every part (0.1 LB for a shot glass, 4 LB for a glass
+     * award); the unit is mapped rather than assumed, because publishing pounds as kilograms would be
+     * wrong by 2.2x on every quote.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void publishesTheSupplierWeightOnTheInventoryItem() {
+        SupplierProduct product = new SupplierProduct("GI307", "Noir Glass Wave", null, null, null,
+                List.of(), List.of(new Variant("GI307", "Clear Black", "9.25 X 7", "GI307-9.25 X 7",
+                        new BigDecimal("124.80"), new BigDecimal("208.00"), 95, List.of(),
+                        new BigDecimal("4"), "LB")),
+                List.of(), List.of(), List.of());
+
+        Map<String, Object> input = (Map<String, Object>)
+                mapper().productSetVariables(product, null).get("input");
+        List<Map<String, Object>> variants = (List<Map<String, Object>>) input.get("variants");
+        Map<String, Object> item = (Map<String, Object>) variants.get(0).get("inventoryItem");
+
+        assertThat(item.get("tracked")).isEqualTo(true);
+        assertThat((Map<String, Object>) item.get("measurement")).isEqualTo(
+                Map.of("weight", Map.of("value", 4.0, "unit", "POUNDS")));
+
+        // And again as a metafield, in Shopify's native weight type, for whatever reads this app's
+        // namespace rather than the shipping engine.
+        assertThat((List<Map<String, Object>>) variants.get(0).get("metafields")).contains(Map.of(
+                "namespace", "trophy_sync", "key", "weight", "type", "weight",
+                "value", "{\"value\":4.0,\"unit\":\"POUNDS\"}"));
+    }
+
+    /** An unrecognised unit publishes no weight at all: a wrong one silently misprices every order. */
+    @Test
+    void refusesToGuessAnUnknownWeightUnit() {
+        assertThat(ShopifyProductMapper.weightUnit("LB")).isEqualTo("POUNDS");
+        assertThat(ShopifyProductMapper.weightUnit("kg")).isEqualTo("KILOGRAMS");
+        assertThat(ShopifyProductMapper.weightUnit("stones")).isNull();
+        assertThat(ShopifyProductMapper.weightUnit(null)).isNull();
     }
 }

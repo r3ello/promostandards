@@ -95,8 +95,14 @@ public class CatalogService {
 
         // Colour -> part id (from Product Data) for pricing/media/SKU resolution.
         Map<String, String> partIdByColor = new LinkedHashMap<>();
+        // Shipping weight per part: only Product Data carries it, and the variant is where a store
+        // needs it (Shopify quotes postage from the inventory item, not the product).
+        Map<String, Product.ProductPart> partById = new LinkedHashMap<>();
         for (Product.ProductPart part : product.parts()) {
             partIdByColor.putIfAbsent(norm(part.primaryColor()), part.partId());
+            if (part.partId() != null) {
+                partById.putIfAbsent(part.partId().toUpperCase(Locale.ROOT), part);
+            }
         }
 
         // Media: image URLs per colour (+ product gallery).
@@ -184,9 +190,18 @@ public class CatalogService {
             if (variantImages.isEmpty() && partId != null && partId.equalsIgnoreCase(productId)) {
                 variantImages = distinctGallery;
             }
+            // The weight of the part itself, falling back to the colour's Product Data part for a
+            // variant the Inventory service named but Product Data did not.
+            Product.ProductPart weightPart = partId == null ? null
+                    : partById.get(partId.toUpperCase(Locale.ROOT));
+            if (weightPart == null && colorPart != null) {
+                weightPart = partById.get(colorPart.toUpperCase(Locale.ROOT));
+            }
             variants.add(new Variant(partId, acc.color, acc.size, sku(partId, acc.size),
                     price == null ? null : price.net(), price == null ? null : price.list(),
-                    acc.onHand, variantImages));
+                    acc.onHand, variantImages,
+                    weightPart == null ? null : weightPart.weight(),
+                    weightPart == null ? null : weightPart.weightUom()));
         }
 
         List<String> tags = product.categories() == null ? List.of() : product.categories();
