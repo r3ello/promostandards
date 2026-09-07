@@ -189,6 +189,12 @@ public class CatalogService {
             List<String> variantImages = imagesByColor.getOrDefault(acc.color, List.of());
             if (variantImages.isEmpty() && partId != null && partId.equalsIgnoreCase(productId)) {
                 variantImages = distinctGallery;
+            } else if (variantImages.isEmpty() && accs.size() == 1) {
+                // One variant and one gallery: there is nothing to be ambiguous about, and the id
+                // need not match — PaceSetter answers getMediaContent(CM712) with CM712WH.jpg, whose
+                // part id is not the one asked for, and that photo belongs to the only variant there
+                // is.
+                variantImages = distinctGallery;
             }
             // The weight of the part itself, falling back to the colour's Product Data part for a
             // variant the Inventory service named but Product Data did not.

@@ -32,6 +32,7 @@ Origin: 2026-09-04, after the first full pass showed 217 unsyncable products.
 from __future__ import annotations
 
 import argparse
+import glob
 import html
 import json
 import sys
@@ -55,7 +56,9 @@ query Tagged($cursor: String) {
       totalInventory
       psId: metafield(namespace: "custom", key: "ps_product_id") { value }
       psIds: metafield(namespace: "custom", key: "ps_product_ids") { value }
-      variants(first: 30) { nodes { sku } }
+      lastSync: metafield(namespace: "trophy_sync", key: "last_sync_at") { value }
+      media(first: 60) { nodes { id } }
+      variants(first: 60) { nodes { sku media(first: 1) { nodes { id } } } }
     }
   }
 }
@@ -84,6 +87,9 @@ def store_products(shop: str, version: str, token: str) -> list[dict]:
                 "gid": node["id"], "handle": node["handle"], "title": node["title"],
                 "status": node["status"], "inventory": node.get("totalInventory"),
                 "canonical": canonical, "ids": ids,
+                "synced": bool((node.get("lastSync") or {}).get("value")),
+                "images": len(node["media"]["nodes"]),
+                "variantImages": sum(1 for v in node["variants"]["nodes"] if v["media"]["nodes"]),
                 "skus": [v["sku"] for v in node["variants"]["nodes"] if v.get("sku")],
             })
         if not page["pageInfo"]["hasNextPage"]:
@@ -141,7 +147,9 @@ def main() -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base", default="http://localhost:8080")
     parser.add_argument("--out", default="informe-ids-huerfanos.html")
-    parser.add_argument("--run", default="", help="a sync_store_catalog report, for the real errors")
+    parser.add_argument("--run", default="",
+                        help="sync_store_catalog reports, comma-separated or a glob — the real "
+                             "errors, and which products the sync could not finish")
     args = parser.parse_args()
 
     shop, client_id, client_secret, version = local_credentials()
@@ -153,30 +161,50 @@ def main() -> int:
     sellable = set(sellable_list)
 
     # What the supplier actually answered, where a sync tried it: better evidence than "not listed".
-    errors = {}
-    if args.run and Path(args.run).exists():
-        for line in Path(args.run).read_text(encoding="utf-8").splitlines():
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not row.get("ok") and row.get("error"):
-                message = row["error"]
-                if '"message":"' in message:
-                    message = message.split('"message":"', 1)[1].split('"', 1)[0]
-                errors[row["productId"].upper()] = message
+    # Later reports win, so a product that failed once and succeeded afterwards reads as fine.
+    errors, succeeded = {}, set()
+    for pattern in [x.strip() for x in args.run.split(",") if x.strip()]:
+        for path in sorted(glob.glob(pattern)):
+            for line in Path(path).read_text(encoding="utf-8").splitlines():
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                pid = row.get("productId", "").upper()
+                if row.get("ok"):
+                    succeeded.add(pid)
+                    errors.pop(pid, None)
+                elif row.get("error"):
+                    message = row["error"]
+                    if '"message":"' in message:
+                        message = message.split('"message":"', 1)[1].split('"', 1)[0]
+                    errors[pid] = message
+                    succeeded.discard(pid)
 
     # Longest first: CD916A* must win over CD916* for CD916ABL.
     families = sorted({i[:-1] for i in sellable_list if i.endswith("*")}, key=len, reverse=True)
 
     products = store_products(shop, version, token)
-    familied, orphans, partials, healthy = [], [], [], 0
+    familied, orphans, partials, failed, incomplete, healthy = [], [], [], [], [], 0
     for product in products:
         dead = [i for i in product["ids"] if i.upper() not in sellable]
         live = [i for i in product["ids"] if i.upper() in sellable]
         product["dead"], product["live"] = dead, live
         product["families"] = {d: family_of(d, families) for d in dead}
-        if not dead:
+        # The supplier's own answer, when a sync actually tried this product.
+        product["error"] = next((errors[i.upper()] for i in product["ids"] if i.upper() in errors), "")
+        if live and product["error"]:
+            # It is sellable and the sync still could not finish it: that is its own problem, and a
+            # different one from an id the supplier never had.
+            failed.append(product)
+        elif live and product["synced"] and (product["images"] == 0
+                                             or (len(product["ids"]) > 1
+                                                 and product["variantImages"] == 0)):
+            # Published, but the photos did not land: either none at all, or none reached a variant.
+            # The second is the real signature of the media outage — Shopify refuses to attach an
+            # image it has not finished ingesting, and that pass gave up before it was ready.
+            incomplete.append(product)
+        elif not dead:
             healthy += 1
         elif live:
             partials.append(product)
@@ -186,20 +214,48 @@ def main() -> int:
             orphans.append(product)
 
     cache = {}
+    for product in failed + incomplete:
+        product["suggestions"], product["familyDetail"] = {}, {}
+        product["answer"] = product["error"]
     for product in familied + orphans + partials:
         product["suggestions"] = {d: candidates(d, sellable_list) for d in product["dead"]}
-        product["answer"] = errors.get(product["canonical"].upper(), "")
+        product["answer"] = product["error"] or errors.get(product["canonical"].upper(), "")
         product["familyDetail"] = {f + "*": family_detail(op, args.base, f + "*", cache)
                                    for f in {v for v in product["families"].values() if v}}
     print(f"{len(cache)} familia(s) consultadas al proveedor", flush=True)
 
     shop_name = shop.split(".")[0]
     Path(args.out).write_text(
-        render(products, familied, orphans, partials, healthy, sellable_list, shop_name),
+        render(products, familied, orphans, partials, failed, incomplete, healthy, sellable_list,
+               shop_name),
         encoding="utf-8")
     print(f"{len(familied)} con familia · {len(orphans)} sin rastro · {len(partials)} parciales · "
-          f"{healthy} sanos -> {args.out}")
+          f"{len(failed)} fallidos · {len(incomplete)} sin imagen · {healthy} sanos -> {args.out}")
     return 0
+
+
+def reason(error: str) -> tuple[str, str]:
+    """@return (short reason, what it means) for a supplier answer, so a row reads without decoding."""
+    if not error:
+        return ("—", "")
+    if "no configuration" in error:
+        return ("sin precio", "PaceSetter no publica tabla de precios para este id. No se importa a "
+                              "propósito: sin precio el producto saldría a 0.")
+    if "getProduct returned no product" in error or "No supplier service returned data" in error:
+        return ("sin producto", "Product Data no conoce el id. Es el caso de los huérfanos, pero "
+                                "aquí el proveedor sí lo lista como vendible.")
+    if "inventory service" in error:
+        return ("sin inventario", "El servicio de Inventory no tiene ficha. Hoy se tolera: entra sin "
+                                  "stock. Si aparece aquí es que falló por otra razón añadida.")
+    if "getMediaContent" in error:
+        return ("media caído", "El servicio de imágenes del proveedor falló. No borra nada: el "
+                               "producto se queda con las imágenes que ya tuviera.")
+    if "timed out" in error or "timeout" in error:
+        return ("timeout", "Tardó más que el límite del cliente. Suele ser una familia enorme (51 "
+                           "variantes) o el proveedor degradado; se reintenta con --skip-done.")
+    if "Access to this namespace" in error:
+        return ("metafield denegado", "Shopify rechazó escribir en un namespace reservado de otra app.")
+    return ("otro", error[:160])
 
 
 def rows_html(products: list[dict], shop_name: str, kind: str) -> str:
@@ -207,6 +263,27 @@ def rows_html(products: list[dict], shop_name: str, kind: str) -> str:
     for p in sorted(products, key=lambda x: x["title"].lower()):
         numeric = p["gid"].rsplit("/", 1)[-1]
         admin = f"https://admin.shopify.com/store/{shop_name}/products/{numeric}"
+        if kind in ("failed", "incomplete"):
+            short, meaning = reason(p.get("error", ""))
+            if kind == "incomplete":
+                if p["images"] == 0:
+                    short, meaning = ("sin imágenes", "Se publicó correctamente pero sin ninguna "
+                                      "imagen: el servicio de media del proveedor no respondió en "
+                                      "esa pasada. Se arregla volviéndolo a sincronizar.")
+                else:
+                    short, meaning = ("imágenes sin asociar", "Tiene imágenes en el producto pero "
+                                      "ninguna llegó a una variante: Shopify rechaza asociar una "
+                                      "imagen que aún está procesando. Se arregla resincronizando.")
+            live = "".join(f'<code class="live">{html.escape(i)}</code> ' for i in p["live"]) or "—"
+            out.append(f"""<tr data-kind="{kind}" data-search="{html.escape((p['title'] + ' ' + p['handle'] + ' ' + ' '.join(p['ids'])).lower())}">
+  <td><a href="https://admin.shopify.com/store/{shop_name}/products/{p['gid'].rsplit('/', 1)[-1]}" target="_blank" rel="noopener">{html.escape(p['title'])}</a>
+      <div class="handle">{html.escape(p['handle'])}</div>
+      <div class="meta">{p['status'].lower()} · {len(p['skus'])} variante(s) · {p['images']} imagen(es) · {p['variantImages']} con foto propia</div></td>
+  <td><span class="badge">{html.escape(short)}</span><span class="sugg">{html.escape(meaning)}</span></td>
+  <td>{live}</td>
+  <td class="answer">{html.escape(p.get('error', '')) or '<span class="muted">—</span>'}</td>
+</tr>""")
+            continue
         blocks = []
         for d in p["dead"]:
             fam = p["families"].get(d)
@@ -237,7 +314,8 @@ def rows_html(products: list[dict], shop_name: str, kind: str) -> str:
     return "\n".join(out)
 
 
-def render(products, familied, orphans, partials, healthy, sellable_list, shop_name) -> str:
+def render(products, familied, orphans, partials, failed, incomplete, healthy, sellable_list,
+           shop_name) -> str:
     return f"""<!doctype html>
 <html lang="es">
 <meta charset="utf-8">
@@ -295,6 +373,8 @@ td a:hover {{ text-decoration:underline; }}
 .sugg {{ display:block; font-size:.78rem; color:var(--muted); font-family:var(--mono); }}
 .sugg.none {{ font-style:italic; font-family:var(--sans); }}
 .sugg.fam {{ font-family:var(--sans); color:var(--accent); }}
+.badge {{ display:inline-block; padding:.15rem .5rem; border-radius:999px; font-size:.78rem;
+          font-weight:600; background:var(--loss-wash); color:var(--loss); margin-bottom:.25rem; }}
 .sugg.fam b {{ font-family:var(--mono); }}
 .answer {{ font-size:.82rem; color:var(--muted); max-width:22rem; }}
 .muted {{ color:var(--muted); }}
@@ -312,6 +392,8 @@ footer {{ margin-top:3rem; color:var(--muted); font-size:.85rem; }}
   <div class="stat warn"><b>{len(familied)}</b><span>ids que son<br>partes de una familia</span></div>
   <div class="stat bad"><b>{len(orphans)}</b><span>sin rastro<br>en el proveedor</span></div>
   <div class="stat warn"><b>{len(partials)}</b><span>parciales<br>(algún id muerto)</span></div>
+  <div class="stat bad"><b>{len(failed)}</b><span>fallaron<br>al sincronizar</span></div>
+  <div class="stat warn"><b>{len(incomplete)}</b><span>publicados<br>sin imágenes</span></div>
   <div class="stat good"><b>{healthy}</b><span>sanos<br>(todos los ids vivos)</span></div>
 </div>
 
@@ -349,6 +431,20 @@ código. Cuando una sincronización lo intentó, PaceSetter respondió
 aparece en la última columna). Para estos, la lista propone los códigos vivos que más se parecen —
 son una pista, hay que confirmarla en el catálogo del proveedor.</p>
 
+<h2>Motivo 3 — el proveedor lo vende, pero la sincronización no pudo terminarlo ({len(failed)} productos)</h2>
+<p>Estos <b>sí</b> están en el catálogo vendible y aun así no entraron. La columna del medio dice por
+qué, con la respuesta literal del proveedor a la derecha. El motivo más común es <b>sin precio</b>:
+<code>getConfigurationAndPricing</code> no devuelve tabla, y la importación se detiene <b>a
+propósito</b> — un producto sin precio saldría publicado a 0, que es peor que no publicarlo. Los
+demás motivos (sin producto, media caído, timeout) suelen ser transitorios y se resuelven
+reintentando.</p>
+
+<h2>Motivo 4 — publicados pero con las imágenes a medias ({len(incomplete)} productos)</h2>
+<p>Entraron bien —variantes, precio, stock, descuentos— pero las fotos no cuajaron: o no llegó
+ninguna, o llegaron al producto y <b>ninguna se asoció a una variante</b>. Lo segundo es la firma del
+apagón de su servicio de imágenes: Shopify rechaza asociar una imagen que todavía está procesando.
+No se pierde nada y no hay nada que decidir — se arregla volviendo a sincronizarlos.</p>
+
 <h2>Y aparte: parciales ({len(partials)} productos)</h2>
 <p>Estos <b>sí</b> se sincronizan, pero arrastran algún id muerto dentro de
 <code>ps_product_ids</code>. No rompen nada; ensucian los avisos de cada pasada y conviene limpiarlos.</p>
@@ -376,16 +472,20 @@ son una pista, hay que confirmarla en el catálogo del proveedor.</p>
   <button data-f="family">Partes de familia ({len(familied)})</button>
   <button data-f="orphan">Sin rastro ({len(orphans)})</button>
   <button data-f="partial">Parciales ({len(partials)})</button>
+  <button data-f="failed">Fallaron ({len(failed)})</button>
+  <button data-f="incomplete">Sin imágenes ({len(incomplete)})</button>
   <span class="muted" id="count"></span>
 </div>
 
 <div class="tablewrap">
 <table>
-<thead><tr><th>Producto</th><th>Ids muertos · candidatos</th><th>Ids vivos</th><th>Qué responde PaceSetter</th></tr></thead>
+<thead><tr><th>Producto</th><th>Ids muertos · candidatos / motivo</th><th>Ids vivos</th><th>Qué responde PaceSetter</th></tr></thead>
 <tbody id="body">
 {rows_html(familied, shop_name, "family")}
 {rows_html(orphans, shop_name, "orphan")}
 {rows_html(partials, shop_name, "partial")}
+{rows_html(failed, shop_name, "failed")}
+{rows_html(incomplete, shop_name, "incomplete")}
 </tbody>
 </table>
 </div>

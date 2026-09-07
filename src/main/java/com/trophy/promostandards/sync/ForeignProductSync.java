@@ -611,26 +611,38 @@ class ForeignProductSync {
         return media;
     }
 
-    /** Points every variant at the image published for its colour. Never fatal: an image is not a price. */
+    /**
+     * Points every variant at its own image. Never fatal: an image is not a price.
+     *
+     * <p>Matched by <b>filename</b>, not by the {@code alt} text. Shopify rewrites the URL on ingest
+     * but keeps the file name, so {@code cm373lb.jpg} is still recognisable — whereas matching on the
+     * colour (the first cut) silently attached nothing for a product whose variants have no colour at
+     * all, which is most of PaceSetter's crystal: it answers "N/A" and the app maps that to null.
+     * Fifteen products were published with their photo sitting on the product and on no variant.
+     */
     private void attachVariantMedia(String gid, JsonNode publishedMedia, ForeignVariantPlan plan,
                                     Map<String, String> createdIds) {
-        Map<String, String> mediaIdByAlt = new LinkedHashMap<>();
+        Map<String, String> mediaIdByFile = new LinkedHashMap<>();
         for (JsonNode node : publishedMedia) {
-            String alt = node.path("alt").asText(null);
             String status = node.path("status").asText(null);
             // A media that never finished processing would fail the whole mutation for the rest.
-            if (alt != null && !alt.isBlank() && (status == null || "READY".equals(status))) {
-                mediaIdByAlt.putIfAbsent(alt, node.path("id").asText());
+            if (status != null && !"READY".equals(status)) {
+                continue;
+            }
+            String file = fileName(node.path("image").path("url").asText(null));
+            if (file != null) {
+                mediaIdByFile.putIfAbsent(file, node.path("id").asText());
             }
         }
-        if (mediaIdByAlt.isEmpty()) {
+        if (mediaIdByFile.isEmpty()) {
             return;
         }
 
         List<Map<String, Object>> variantMedia = new ArrayList<>();
         for (Entry e : plan.entries()) {
-            String color = e.variant().color();
-            String mediaId = color == null ? null : mediaIdByAlt.get(color);
+            String file = e.variant().imageUrls().isEmpty() ? null
+                    : fileName(e.variant().imageUrls().get(0));
+            String mediaId = file == null ? null : mediaIdByFile.get(file);
             String variantId = e.target() != null ? e.target().id()
                     : createdIds.get(e.variant().sku() == null ? "" : e.variant().sku().toUpperCase(Locale.ROOT));
             if (mediaId != null && variantId != null) {
@@ -659,6 +671,17 @@ class ForeignProductSync {
     private static String storeSku(Entry e, Map<String, String> skuByPart) {
         String mapped = skuByPart.get(VariantSku.key(e.variant().supplierPartId(), e.variant().size()));
         return mapped != null ? mapped : e.variant().sku();
+    }
+
+    /** @return the file name of a URL, lower-cased, which is what survives Shopify's ingest. */
+    private static String fileName(String url) {
+        if (url == null || url.isBlank()) {
+            return null;
+        }
+        String path = url.split("[?#]", 2)[0];
+        int slash = path.lastIndexOf('/');
+        String name = slash < 0 ? path : path.substring(slash + 1);
+        return name.isBlank() ? null : name.trim().toLowerCase(Locale.ROOT);
     }
 
     /**
