@@ -340,6 +340,10 @@ body {
 	padding: var(--p-space-700, 1.75rem) var(--p-space-600);
 	animation: rise .18s ease;
 }
+/* The card's own display:flex outranks the UA rule for [hidden], so hiding one needs saying twice.
+   Two cards share this screen: the sign-in form, and the "session not verified" notice shown in its
+   place when the console runs inside the Shopify admin (there is no password to type there). */
+.login__card[hidden] { display: none; }
 .login__brand { display: flex; align-items: center; gap: var(--p-space-300); }
 .login__mark { color: var(--p-color-bg-fill-brand); font-size: 20px; }
 .login__brandtext { display: flex; flex-direction: column; line-height: 1.15; }

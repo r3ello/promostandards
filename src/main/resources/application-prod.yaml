@@ -70,6 +70,13 @@ server:
 # (.env on the server): APP_AUTH_USERNAME / APP_AUTH_PASSWORD. If the password is left blank
 # the gate fails closed (every login is rejected) — so the .env value must be set.
 # cookie-secure is true here because prod is served over HTTPS behind nginx.
+# Served inside the Shopify admin. Harmless when the app is also opened directly on its own domain:
+# the extra CSP only *allows* the admin to frame it, and the token is an alternative credential, not
+# a replacement for the login. Set SHOPIFY_EMBEDDED=false to serve it as a plain standalone console.
+shopify:
+  embedded:
+    enabled: ${SHOPIFY_EMBEDDED:true}
+
 security:
   auth:
     enabled: true

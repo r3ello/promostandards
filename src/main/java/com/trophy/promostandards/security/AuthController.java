@@ -1,6 +1,5 @@
 package com.trophy.promostandards.security;
 
-import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpHeaders;
@@ -20,6 +19,10 @@ import java.util.Map;
  * Form-login endpoints backing the static console's login screen. Present only when
  * {@code security.auth.enabled=true}. Credentials are checked by {@link AuthService}; a success
  * sets the HttpOnly session cookie that {@link SessionAuthFilter} verifies on every protected call.
+ *
+ * <p>Inside the Shopify admin nobody signs in here at all: the console authenticates with a Shopify
+ * session token and {@code /status} reports it as authenticated on the strength of that
+ * ({@link RequestAuthenticator}). The login form stays for direct access on this app's own domain.
  */
 @RestController
 @RequestMapping("/api/auth")
@@ -28,10 +31,15 @@ public class AuthController {
 
 	private final AuthService auth;
 	private final AuthProperties props;
+	private final RequestAuthenticator authenticator;
+	private final ShopifySessionToken shopify;
 
-	public AuthController(AuthService auth, AuthProperties props) {
+	public AuthController(AuthService auth, AuthProperties props, RequestAuthenticator authenticator,
+			ShopifySessionToken shopify) {
 		this.auth = auth;
 		this.props = props;
+		this.authenticator = authenticator;
+		this.shopify = shopify;
 	}
 
 	/** Login payload posted by the console's sign-in form. */
@@ -61,31 +69,24 @@ public class AuthController {
 	}
 
 	/**
-	 * Tells the front-end whether the session is still valid, so it can show either the login screen
-	 * or the console on load without triggering a browser credential dialog.
+	 * Tells the front-end whether the caller is already in, so it can show either the login screen
+	 * or the console on load without triggering a browser credential dialog. {@code embedded} says
+	 * the app is running as a Shopify embedded app; {@code signOut} is false in that case because
+	 * the session belongs to the Shopify admin, not to this app.
 	 */
 	@GetMapping("/status")
 	public Map<String, Object> status(HttpServletRequest request) {
-		boolean authenticated = hasValidSession(request);
+		boolean cookie = authenticator.hasValidCookie(request);
+		boolean authenticated = cookie || authenticator.authenticated(request);
 		Map<String, Object> out = new HashMap<>();
 		out.put("enabled", true);
+		out.put("embedded", shopify.enabled());
 		out.put("authenticated", authenticated);
+		out.put("signOut", cookie);
 		if (authenticated) {
-			out.put("username", props.getUsername());
+			out.put("username", cookie ? props.getUsername() : "Shopify admin");
 		}
 		return out;
-	}
-
-	private boolean hasValidSession(HttpServletRequest request) {
-		if (request.getCookies() == null) {
-			return false;
-		}
-		for (Cookie cookie : request.getCookies()) {
-			if (props.getCookieName().equals(cookie.getName()) && auth.tokenValid(cookie.getValue())) {
-				return true;
-			}
-		}
-		return false;
 	}
 
 	private ResponseCookie sessionCookie(String value, long maxAgeSeconds) {
