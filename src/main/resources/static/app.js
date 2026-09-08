@@ -40,7 +40,9 @@ async function api(url, method = 'GET', payload) {
 	const res = await fetch(url, opts);
 	if (res.status === 401) {
 		// Session missing/expired — bounce back to the login screen instead of surfacing an error.
-		showLogin();
+		// Embedded there is no form to fill in, so ask /status why the token was refused and say it.
+		if (embedded) fetchAuthStatus().then((s) => showLogin(s.tokenError));
+		else showLogin();
 		throw new Error('Your session has expired. Please sign in again.');
 	}
 	const body = await res.json().catch(() => null);
@@ -66,14 +68,24 @@ async function api(url, method = 'GET', payload) {
 // this doubles as the mode flag. Outside the admin nothing here runs and the cookie login stands.
 const embedded = !!(window.shopify && typeof window.shopify.idToken === 'function');
 
+// Set when App Bridge itself refuses to issue a token. Kept because it is a DIFFERENT fault from
+// the server refusing one — "we never minted a token" vs "the token never arrived / was rejected" —
+// and from the outside both are the same blank screen.
+let tokenFailure = null;
+
 async function authHeaders(headers) {
 	if (!embedded) return headers;
 	try {
 		const token = await window.shopify.idToken();
-		if (token) headers.Authorization = `Bearer ${token}`;
+		if (token) {
+			headers.Authorization = `Bearer ${token}`;
+			tokenFailure = null;
+		} else {
+			tokenFailure = 'App Bridge returned no session token for this admin session.';
+		}
 	} catch (e) {
-		// App Bridge could not mint one (not really framed by the admin, app key mismatch). Let the
-		// request go out bare: the 401 that follows is what tells the user, with the right message.
+		// Not really framed by the admin, or the api key in the page is not this app's.
+		tokenFailure = `App Bridge could not issue a session token: ${(e && e.message) || e}`;
 	}
 	return headers;
 }
@@ -91,7 +103,19 @@ async function fetchAuthStatus() {
 		const res = await fetch('/api/auth/status', { headers: await authHeaders({ Accept: 'application/json' }) });
 		if (res.status === 404) return { enabled: false, authenticated: true, signOut: false };
 		const b = await res.json().catch(() => null);
-		return { enabled: true, authenticated: !!(b && b.authenticated), signOut: !!(b && b.signOut) };
+		if (!b) {
+			// This endpoint is open to everyone and always answers JSON, so anything else means the
+			// app never saw the request: something in front of it replied instead. That proxy is also
+			// where the Authorization header carrying the session token goes to die.
+			const challenged = !!res.headers.get('WWW-Authenticate');
+			return {
+				enabled: true, authenticated: false, signOut: false,
+				tokenError: `Something in front of the app answered ${res.status} instead of the app`
+					+ (challenged ? ' and asked for its own credentials (nginx auth_basic?)' : '')
+					+ '. It also takes the Authorization header the Shopify session token needs.',
+			};
+		}
+		return { enabled: true, authenticated: !!b.authenticated, signOut: !!b.signOut, tokenError: b.tokenError };
 	} catch (e) {
 		return { enabled: false, authenticated: true, signOut: false }; // can't reach status — don't block the UI
 	}
@@ -107,9 +131,12 @@ function showLogin(message) {
 	el('loginForm').hidden = embedded;
 	el('embeddedError').hidden = !embedded;
 	if (embedded) {
+		// App Bridge's own failure wins: if no token was ever minted, the server's "no header
+		// arrived" is a true but misleading answer.
 		const detail = el('embeddedErrorDetail');
-		detail.textContent = message || '';
-		detail.hidden = !message;
+		const reason = tokenFailure || message || '';
+		detail.textContent = reason;
+		detail.hidden = !reason;
 		return;
 	}
 	const u = el('loginUser');
@@ -128,7 +155,7 @@ async function bootstrap() {
 	authEnabled = status.enabled;
 	canSignOut = status.enabled && status.signOut;
 	if (status.enabled && !status.authenticated) {
-		showLogin();
+		showLogin(status.tokenError);
 	} else {
 		showApp();
 		loadCatalog();

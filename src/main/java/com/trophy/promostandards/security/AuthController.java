@@ -85,6 +85,10 @@ public class AuthController {
 		out.put("signOut", cookie);
 		if (authenticated) {
 			out.put("username", cookie ? props.getUsername() : "Shopify admin");
+		} else if (shopify.enabled()) {
+			// The console is about to draw "session not verified"; give it something to say. This
+			// endpoint is open by design, and the reason names configuration, never a credential.
+			out.put("tokenError", shopify.refusal(request));
 		}
 		return out;
 	}
