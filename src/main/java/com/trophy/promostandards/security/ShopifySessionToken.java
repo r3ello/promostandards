@@ -16,7 +16,10 @@ import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /**
  * Verifier for the <b>Shopify session token</b> an embedded app receives from App Bridge.
@@ -80,9 +83,23 @@ public class ShopifySessionToken {
 		return enabled() ? shopify.clientId() : null;
 	}
 
-	/** The {@code *.myshopify.com} domain allowed to frame this app; null when embedding is off. */
-	public String storeDomain() {
-		return enabled() ? host() : null;
+	/**
+	 * Every {@code *.myshopify.com} host that is this store: the configured one plus
+	 * {@code shopify.embedded.shop-domains}. Empty when embedding is off. They are all allowed to
+	 * frame the app and to open it, because they are the same shop under different names.
+	 */
+	public List<String> storeDomains() {
+		if (!enabled()) {
+			return List.of();
+		}
+		Set<String> hosts = new LinkedHashSet<>();
+		hosts.add(host(shopify.storeDomain()));
+		for (String extra : embed.shopDomains()) {
+			if (filled(extra)) {
+				hosts.add(host(extra));
+			}
+		}
+		return List.copyOf(hosts);
 	}
 
 	/** True when the request carries a session token this app minted-for and trusts. */
@@ -154,14 +171,18 @@ public class ShopifySessionToken {
 	}
 
 	private String refuseClaims(JsonNode claims) {
-		String expectedShop = "https://" + host();
+		List<String> shops = storeDomains().stream().map(host -> "https://" + host).toList();
 		String dest = trimSlash(claims.path("dest").asText().toLowerCase(Locale.ROOT));
-		if (!expectedShop.equals(dest)) {
-			return "the token is for " + dest + " but this server is configured for " + expectedShop
-					+ " (shopify.store-domain)";
+		if (!shops.contains(dest)) {
+			// Nearly always the same store under its other name: Shopify's generated permanent domain
+			// is what the token carries, while the Admin API is happily answering on the other one.
+			return "the token is for " + dest + " but this server accepts " + String.join(", ", shops)
+					+ " — if that is the same store, add it to shopify.embedded.shop-domains "
+					+ "(SHOPIFY_EMBEDDED_SHOP_DOMAINS) rather than changing shopify.store-domain, which "
+					+ "every sync call uses";
 		}
-		if (!claims.path("iss").asText().toLowerCase(Locale.ROOT).startsWith(expectedShop)) {
-			return "the token's issuer does not belong to " + expectedShop;
+		if (!claims.path("iss").asText().toLowerCase(Locale.ROOT).startsWith(dest)) {
+			return "the token's issuer does not belong to " + dest;
 		}
 		String audience = claims.path("aud").asText();
 		if (!shopify.clientId().equals(audience)) {
@@ -186,18 +207,18 @@ public class ShopifySessionToken {
 	}
 
 	/**
-	 * The configured store as a bare lowercase host. A {@code https://} prefix or a trailing slash
-	 * is tolerated on purpose: this one value is both compared against the token's {@code dest} and
-	 * written into the frame-ancestors header, so a scheme left in the config would break the
+	 * A configured store domain as a bare lowercase host. A {@code https://} prefix or a trailing
+	 * slash is tolerated on purpose: these values are both compared against the token's {@code dest}
+	 * and written into the frame-ancestors header, so a scheme left in the config would break the
 	 * embedded login while every other Shopify call kept working — a long way to go looking for a
 	 * stray "https://".
 	 */
-	private String host() {
-		String domain = shopify.storeDomain().trim().toLowerCase(Locale.ROOT);
-		if (domain.startsWith("https://")) {
-			domain = domain.substring("https://".length());
+	private static String host(String domain) {
+		String bare = domain.trim().toLowerCase(Locale.ROOT);
+		if (bare.startsWith("https://")) {
+			bare = bare.substring("https://".length());
 		}
-		return trimSlash(domain);
+		return trimSlash(bare);
 	}
 
 	/** The scheme word of an Authorization header, for the message — never the credential itself. */

@@ -22,7 +22,7 @@ class ConsoleIndexControllerTest {
 		ShopifyProperties shopify = new ShopifyProperties("trophypartner.myshopify.com", CLIENT_ID,
 				"secret", null, "2026-04", null);
 		ConsoleIndexController controller = new ConsoleIndexController(
-				new ShopifySessionToken(shopify, new ShopifyEmbedProperties(embedded)));
+				new ShopifySessionToken(shopify, new ShopifyEmbedProperties(embedded, java.util.List.of())));
 		return controller.index().getBody();
 	}
 

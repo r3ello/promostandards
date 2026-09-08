@@ -76,6 +76,8 @@ server:
 shopify:
   embedded:
     enabled: ${SHOPIFY_EMBEDDED:true}
+    # The admin identifies this store by its generated permanent domain, not by trophy-partner.
+    shop-domains: ${SHOPIFY_EMBEDDED_SHOP_DOMAINS:wy2ena-jf.myshopify.com}
 
 security:
   auth:

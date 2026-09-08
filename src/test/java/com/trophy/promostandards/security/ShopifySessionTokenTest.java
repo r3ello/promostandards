@@ -3,6 +3,8 @@ package com.trophy.promostandards.security;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -25,7 +27,7 @@ class ShopifySessionTokenTest {
 		assertThat(disabled.valid(EmbeddedTokens.valid())).isFalse();
 		assertThat(disabled.enabled()).isFalse();
 		assertThat(disabled.apiKey()).isNull();
-		assertThat(disabled.storeDomain()).isNull();
+		assertThat(disabled.storeDomains()).isEmpty();
 	}
 
 	@Test
@@ -43,6 +45,27 @@ class ShopifySessionTokenTest {
 				EmbeddedTokens.CLIENT_ID, 60, EmbeddedTokens.SECRET);
 
 		assertThat(EmbeddedTokens.verifier(true).valid(elsewhere)).isFalse();
+	}
+
+	/**
+	 * The store's other name. Shopify gives a store a generated permanent domain as well as the one
+	 * from its name, and the session token always carries the generated one — while the Admin API
+	 * answers on either, so a store can be synced for weeks through a domain its tokens never
+	 * mention. That is exactly how the first live attempt failed.
+	 */
+	@Test
+	void acceptsAnotherConfiguredNameOfTheSameStore() {
+		ShopifySessionToken verifier = EmbeddedTokens.verifier(true, List.of("wy2ena-jf.myshopify.com"));
+		String generated = EmbeddedTokens.token("https://wy2ena-jf.myshopify.com", EmbeddedTokens.CLIENT_ID,
+				60, EmbeddedTokens.SECRET);
+
+		assertThat(verifier.valid(generated)).isTrue();
+		assertThat(verifier.valid(EmbeddedTokens.valid())).isTrue();          // the original still works
+		assertThat(verifier.storeDomains())
+				.containsExactly(EmbeddedTokens.STORE, "wy2ena-jf.myshopify.com");
+		// and it is a list, not a licence: an unlisted shop is still refused
+		assertThat(verifier.valid(EmbeddedTokens.token("https://someone-else.myshopify.com",
+				EmbeddedTokens.CLIENT_ID, 60, EmbeddedTokens.SECRET))).isFalse();
 	}
 
 	@Test
@@ -73,10 +96,10 @@ class ShopifySessionTokenTest {
 		ShopifySessionToken verifier = new ShopifySessionToken(
 				new com.trophy.promostandards.shopify.ShopifyProperties("https://" + EmbeddedTokens.STORE + "/",
 						EmbeddedTokens.CLIENT_ID, EmbeddedTokens.SECRET, null, "2026-04", null),
-				new ShopifyEmbedProperties(true));
+				new ShopifyEmbedProperties(true, List.of()));
 
 		assertThat(verifier.valid(EmbeddedTokens.valid())).isTrue();
-		assertThat(verifier.storeDomain()).isEqualTo(EmbeddedTokens.STORE);   // what the CSP names
+		assertThat(verifier.storeDomains()).containsExactly(EmbeddedTokens.STORE);   // what the CSP names
 	}
 
 	@Test

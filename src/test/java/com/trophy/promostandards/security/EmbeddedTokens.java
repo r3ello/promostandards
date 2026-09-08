@@ -7,6 +7,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.List;
 
 /**
  * Test fixture that plays Shopify: it mints the session tokens App Bridge would hand the browser,
@@ -25,9 +26,14 @@ final class EmbeddedTokens {
 
 	/** A verifier wired to {@link #STORE} / {@link #CLIENT_ID}, embedded mode on or off. */
 	static ShopifySessionToken verifier(boolean enabled) {
+		return verifier(enabled, List.of());
+	}
+
+	/** The same, also accepting {@code alsoAccepted} as names of the same store. */
+	static ShopifySessionToken verifier(boolean enabled, List<String> alsoAccepted) {
 		return new ShopifySessionToken(
 				new ShopifyProperties(STORE, CLIENT_ID, SECRET, null, "2026-04", null),
-				new ShopifyEmbedProperties(enabled));
+				new ShopifyEmbedProperties(enabled, alsoAccepted));
 	}
 
 	/** The token Shopify would issue: this store, this app, valid now. */

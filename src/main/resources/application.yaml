@@ -176,6 +176,12 @@ shopify:
   # See SHOPIFY-EMBEDDED.md; off locally, where the app is opened on its own domain.
   embedded:
     enabled: ${SHOPIFY_EMBEDDED:false}
+    # Further *.myshopify.com names of the SAME store. Shopify gives a store a generated permanent
+    # domain as well as the one built from its name, and the session token always carries the
+    # generated one -- while the Admin API answers on either, which is how this store was synced for
+    # weeks through a domain its own tokens never mention. List the other name here instead of
+    # changing store-domain, which every sync call uses.
+    shop-domains: ${SHOPIFY_EMBEDDED_SHOP_DOMAINS:}
   # Shopify rate-limits by query COST and reports exhaustion as HTTP 200 + errors[].extensions.code
   # = THROTTLED. Those calls are retried (waiting the bucket's own restore time when the response
   # reports it, else exponential backoff) instead of failing the operation.
