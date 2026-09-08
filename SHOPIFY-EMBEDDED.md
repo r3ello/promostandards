@@ -87,6 +87,38 @@ que significa que el token fue rechazado — casi siempre porque el `client_id`/
 servidor ya no son los de la app de Shopify, o porque `SHOPIFY_STORE_DOMAIN` no es la tienda desde la
 que se abre.
 
+## Si sale "Session not verified"
+
+Desde la segunda versión **la tarjeta dice el motivo** debajo del título, y el servidor lo escribe
+también en el log (`WARN Shopify session token refused: …`). Los mensajes y lo que significan:
+
+| Mensaje | Qué pasa |
+|---|---|
+| *App Bridge could not issue a session token* | El fallo es del navegador, no del servidor: la página no está realmente enmarcada por el admin, o el `client_id` del `<meta>` no es el de esa app. |
+| *no Authorization header reached the app* | El token se emitió pero no llegó: **casi siempre el `auth_basic` de nginx**. |
+| *the Authorization header is not a Bearer token* | Lo mismo, confirmado: el proxy está metiendo su propio `Basic`. |
+| *bad signature* | El `SHOPIFY_CLIENT_SECRET` del servidor no es el de la app que abrió el admin. |
+| *the token is for https://X but this server is configured for https://Y* | `SHOPIFY_STORE_DOMAIN` no coincide con la tienda desde la que se abre. |
+| *the token was minted for app Z* | `SHOPIFY_CLIENT_ID` es de otra app. |
+| *the token expired Ns ago — check the server's clock* | Reloj del servidor desincronizado (los tokens duran ~1 min). |
+| *Something in front of the app answered 401 instead of the app* | nginx contestó antes de llegar a la app. |
+
+Dos comprobaciones de un segundo desde cualquier sitio:
+
+```sh
+# ¿contesta la app, o contesta nginx? Tiene que salir JSON, no un 401 con WWW-Authenticate:
+curl -i https://TU-DOMINIO/api/auth/status
+
+# ¿tiene la página el client id inyectado?
+curl -s https://TU-DOMINIO/ | grep -i shopify-api-key
+```
+
+Y en el servidor, `date -u` — si el reloj se ha ido más de unos segundos, ningún token vale.
+
+**Los estáticos ya no se quedan cacheados**: la consola sirve `app.css`/`app.js` con un `?v=<hash>`
+de su propio contenido, así que un redespliegue basta. Si en el primer intento viste el formulario de
+login **y** la tarjeta de error a la vez, era justo eso: CSS antiguo en el navegador.
+
 ## Lo que NO cambia
 
 * La app sigue hablando con Shopify por **client_credentials** con su client id/secret. El session

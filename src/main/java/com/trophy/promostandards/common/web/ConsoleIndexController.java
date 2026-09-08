@@ -11,6 +11,9 @@ import org.springframework.web.bind.annotation.ResponseBody;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 
 /**
  * Serves the console shell, and it exists for one reason: <b>App Bridge needs this app's client id
@@ -56,8 +59,7 @@ public class ConsoleIndexController {
 	}
 
 	private String render() throws IOException {
-		ClassPathResource shell = new ClassPathResource("static/index.html");
-		String html = new String(shell.getContentAsByteArray(), StandardCharsets.UTF_8);
+		String html = withAssetVersions(read("static/index.html"));
 		String apiKey = shopify.apiKey();
 		if (apiKey == null) {
 			return html.replace(MARKER, "");
@@ -65,6 +67,38 @@ public class ConsoleIndexController {
 		return html.replace(MARKER,
 				"<meta name=\"shopify-api-key\" content=\"" + attribute(apiKey) + "\">\n"
 						+ "\t<script src=\"" + APP_BRIDGE_SRC + "\"></script>");
+	}
+
+	/**
+	 * Stamps the stylesheet/script links with a hash of their own content, so a deploy is enough to
+	 * make every browser fetch them again.
+	 *
+	 * <p>Worth the few lines: the first embedded deploy showed the login form and the "session not
+	 * verified" card <em>at the same time</em>, because the browser was still running the previous
+	 * {@code app.css} — the one without the rule that hides whichever card is not wanted. A stale
+	 * asset there does not look like a cache, it looks like the feature is broken.
+	 */
+	private String withAssetVersions(String html) throws IOException {
+		String version = version("static/app.css", "static/app.js", "static/polaris-tokens.css");
+		return html.replace("href=\"app.css\"", "href=\"app.css?v=" + version + "\"")
+				.replace("href=\"polaris-tokens.css\"", "href=\"polaris-tokens.css?v=" + version + "\"")
+				.replace("src=\"app.js\"", "src=\"app.js?v=" + version + "\"");
+	}
+
+	private String version(String... resources) throws IOException {
+		try {
+			MessageDigest digest = MessageDigest.getInstance("SHA-256");
+			for (String resource : resources) {
+				digest.update(read(resource).getBytes(StandardCharsets.UTF_8));
+			}
+			return HexFormat.of().formatHex(digest.digest()).substring(0, 8);
+		} catch (NoSuchAlgorithmException e) {
+			throw new IllegalStateException("SHA-256 unavailable", e);
+		}
+	}
+
+	private static String read(String resource) throws IOException {
+		return new String(new ClassPathResource(resource).getContentAsByteArray(), StandardCharsets.UTF_8);
 	}
 
 	/** The client id is configuration, not user input, but it still goes into an HTML attribute. */

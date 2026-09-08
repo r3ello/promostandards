@@ -37,6 +37,16 @@ class ConsoleIndexControllerTest {
 		assertThat(html.indexOf("app-bridge.js")).isLessThan(html.indexOf("app.js"));
 	}
 
+	/** A deploy has to be enough to retire a cached stylesheet; the first one was not. */
+	@Test
+	void stampsTheAssetsWithAContentHash() throws IOException {
+		String html = shell(false);
+
+		assertThat(html).containsPattern("href=\"app\\.css\\?v=[0-9a-f]{8}\"")
+				.containsPattern("src=\"app\\.js\\?v=[0-9a-f]{8}\"")
+				.containsPattern("href=\"polaris-tokens\\.css\\?v=[0-9a-f]{8}\"");
+	}
+
 	@Test
 	void servesThePlainShellWhenNotEmbedded() throws IOException {
 		String html = shell(false);
