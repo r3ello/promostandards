@@ -157,6 +157,9 @@ def main() -> int:
                         help="only products this app has already put in the store (they carry "
                              "trophy_sync.last_sync_at) — for pushing a new field to what is live "
                              "without importing anything new")
+    parser.add_argument("--pending-only", action="store_true",
+                        help="only products this app has never put in the store — the inverse of "
+                             "--synced-only, for importing what a fresh migration brought in")
     parser.add_argument("--needs-images", action="store_true",
                         help="only products already synced that came out with fewer images than "
                              "variants — what a supplier media outage leaves behind, and what "
@@ -189,6 +192,9 @@ def main() -> int:
                 continue
             if row.get("ok"):
                 done.add(row["productId"])
+    if args.pending_only:
+        products = [p for p in products if not p.get("synced")]
+        print(f"{len(products)} product(s) never synced by this app", flush=True)
     if args.synced_only:
         products = [p for p in products if p.get("synced")]
         print(f"{len(products)} product(s) already synced by this app", flush=True)

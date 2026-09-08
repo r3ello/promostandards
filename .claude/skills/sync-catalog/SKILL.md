@@ -8,22 +8,18 @@ description: Run a PaceSetter → Shopify catalog sync (one product, the sellabl
 The app pushes supplier data into a live store. Everything here is written so a run can be started,
 watched and reported without rediscovering how any of it works.
 
-## Before anything: is the running app the current code?
+## The app is the user's to run. Wait for it.
 
-`spring-boot:run` compiles at startup, so **a code change is only live after a restart**. The user
-usually keeps an instance on **8080**. If you changed code this session, either ask them to restart
-it or run your own on 8081 and point the runner at it — never assume 8080 is current.
+**Do not start your own instance** (asked for explicitly, 2026-09-07). The user keeps one on
+**8080**; when it is down or needs a restart, say so and wait. Two JVMs against one live store is
+confusion nobody needs, and it cost a real incident: a `TaskStop` on `spring-boot:run` kills the
+Maven wrapper but **leaves the JVM listening**, so a two-day-old survivor answered `/actuator/health`
+as if it were fresh and a whole pass ran against stale code. If you ever must check what holds a
+port: `Get-NetTCPConnection -LocalPort 8081 -State Listen` then `Stop-Process -Id <OwningProcess>`.
 
-```powershell
-# PowerShell tool, not Bash: the Bash sandbox blocks Maven Central.
-$env:JAVA_TOOL_OPTIONS="-Duser.timezone=America/New_York -Djavax.net.ssl.trustStoreType=Windows-ROOT"
-$env:MAVEN_OPTS="-Djavax.net.ssl.trustStoreType=Windows-ROOT"
-mvn -o spring-boot:run "-Dspring-boot.run.profiles=local" "-Dspring-boot.run.arguments=--server.port=8081"
-```
-
-Quote every `-D` argument or PowerShell splits it and Maven answers "Unknown lifecycle phase". Start
-it with `run_in_background`, then poll `/actuator/health` until it answers. **Stop it with TaskStop
-when the run is done** — two instances on the same store is avoidable noise.
+`spring-boot:run` compiles at startup, so **a code change is only live after a restart**. After
+changing anything the sync touches, tell the user what to restart and why, then wait — and confirm on
+one product before running a pass, by reading the field you changed back out of the store.
 
 ## Running a sync
 

@@ -32,6 +32,7 @@ Origin: 2026-09-04, after the first full pass showed 217 unsyncable products.
 from __future__ import annotations
 
 import argparse
+import csv
 import glob
 import html
 import json
@@ -147,6 +148,10 @@ def main() -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base", default="http://localhost:8080")
     parser.add_argument("--out", default="informe-ids-huerfanos.html")
+    parser.add_argument("--csv", default="",
+                        help="also write the id overlaps here: one row per (product, shared id), "
+                             "with who else claims it — the working list for repairing "
+                             "ps_product_ids in a migration sheet")
     parser.add_argument("--run", default="",
                         help="sync_store_catalog reports, comma-separated or a glob — the real "
                              "errors, and which products the sync could not finish")
@@ -185,7 +190,17 @@ def main() -> int:
     families = sorted({i[:-1] for i in sellable_list if i.endswith("*")}, key=len, reverse=True)
 
     products = store_products(shop, version, token)
-    familied, orphans, partials, failed, incomplete, healthy = [], [], [], [], [], 0
+
+    # Who claims each supplier id. The app's index maps an id to ONE product, so an id claimed twice
+    # means a sync of it silently updates whichever came first and never touches the other — found the
+    # hard way: syncing CM288DB refreshed the "wine bag large" while the "small" that also lists it sat
+    # untouched and was reported as done.
+    owners: dict[str, list[dict]] = {}
+    for product in products:
+        for i in product["ids"]:
+            owners.setdefault(i.upper(), []).append(product)
+
+    familied, orphans, partials, failed, incomplete, shared, healthy = [], [], [], [], [], [], 0
     for product in products:
         dead = [i for i in product["ids"] if i.upper() not in sellable]
         live = [i for i in product["ids"] if i.upper() in sellable]
@@ -193,7 +208,13 @@ def main() -> int:
         product["families"] = {d: family_of(d, families) for d in dead}
         # The supplier's own answer, when a sync actually tried this product.
         product["error"] = next((errors[i.upper()] for i in product["ids"] if i.upper() in errors), "")
-        if live and product["error"]:
+        product["sharedWith"] = {i: [o["handle"] for o in owners[i.upper()] if o is not product]
+                                 for i in product["ids"] if len(owners[i.upper()]) > 1}
+        if product["sharedWith"] and live:
+            # Two products claiming one id is the blocking problem: nothing can be synced correctly
+            # until the data says which of them owns it.
+            shared.append(product)
+        elif live and product["error"]:
             # It is sellable and the sync still could not finish it: that is its own problem, and a
             # different one from an id the supplier never had.
             failed.append(product)
@@ -214,7 +235,7 @@ def main() -> int:
             orphans.append(product)
 
     cache = {}
-    for product in failed + incomplete:
+    for product in failed + incomplete + shared:
         product["suggestions"], product["familyDetail"] = {}, {}
         product["answer"] = product["error"]
     for product in familied + orphans + partials:
@@ -224,13 +245,30 @@ def main() -> int:
                                    for f in {v for v in product["families"].values() if v}}
     print(f"{len(cache)} familia(s) consultadas al proveedor", flush=True)
 
+    if args.csv:
+        # One row per (product, contested id). A migration sheet is edited per product, so the
+        # product's whole id list rides along: deciding who keeps an id means rewriting that list.
+        with open(args.csv, "w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.writer(handle, delimiter=";")
+            writer.writerow(["id_en_conflicto", "handle", "titulo", "ps_product_id",
+                             "sincronizado", "variantes", "reclamado_tambien_por",
+                             "ps_product_ids_actual"])
+            for product in sorted(shared, key=lambda x: x["handle"]):
+                for supplier_id, others in sorted(product["sharedWith"].items()):
+                    writer.writerow([supplier_id, product["handle"], product["title"],
+                                     product["canonical"], "si" if product["synced"] else "no",
+                                     len(product["skus"]), " | ".join(others),
+                                     " ".join(product["ids"])])
+        print(f"{sum(len(p['sharedWith']) for p in shared)} conflicto(s) -> {args.csv}", flush=True)
+
     shop_name = shop.split(".")[0]
     Path(args.out).write_text(
-        render(products, familied, orphans, partials, failed, incomplete, healthy, sellable_list,
-               shop_name),
+        render(products, familied, orphans, partials, failed, incomplete, shared, healthy,
+               sellable_list, shop_name),
         encoding="utf-8")
     print(f"{len(familied)} con familia · {len(orphans)} sin rastro · {len(partials)} parciales · "
-          f"{len(failed)} fallidos · {len(incomplete)} sin imagen · {healthy} sanos -> {args.out}")
+          f"{len(failed)} fallidos · {len(incomplete)} sin imagen · {len(shared)} con id compartido · "
+          f"{healthy} sanos -> {args.out}")
     return 0
 
 
@@ -263,6 +301,21 @@ def rows_html(products: list[dict], shop_name: str, kind: str) -> str:
     for p in sorted(products, key=lambda x: x["title"].lower()):
         numeric = p["gid"].rsplit("/", 1)[-1]
         admin = f"https://admin.shopify.com/store/{shop_name}/products/{numeric}"
+        if kind == "shared":
+            filas = "".join(
+                f'<div class="idrow"><code class="dead">{html.escape(i)}</code>'
+                f'<span class="sugg">también en {html.escape(", ".join(otros))}</span></div>'
+                for i, otros in p["sharedWith"].items())
+            out.append(f"""<tr data-kind="shared" data-search="{html.escape((p['title'] + ' ' + p['handle'] + ' ' + ' '.join(p['ids'])).lower())}">
+  <td><a href="https://admin.shopify.com/store/{shop_name}/products/{p['gid'].rsplit('/', 1)[-1]}" target="_blank" rel="noopener">{html.escape(p['title'])}</a>
+      <div class="handle">{html.escape(p['handle'])}</div>
+      <div class="meta">{p['status'].lower()} · {len(p['skus'])} variante(s) · {'sincronizado' if p['synced'] else 'sin sincronizar'}</div></td>
+  <td><span class="badge">id compartido</span>{filas}</td>
+  <td>{"".join(f'<code class="live">{html.escape(i)}</code> ' for i in p["live"]) or "—"}</td>
+  <td class="answer"><span class="muted">La app resuelve un id a un solo producto: sincronizarlo
+      actualiza al primero que lo reclama y deja al otro intacto.</span></td>
+</tr>""")
+            continue
         if kind in ("failed", "incomplete"):
             short, meaning = reason(p.get("error", ""))
             if kind == "incomplete":
@@ -314,7 +367,7 @@ def rows_html(products: list[dict], shop_name: str, kind: str) -> str:
     return "\n".join(out)
 
 
-def render(products, familied, orphans, partials, failed, incomplete, healthy, sellable_list,
+def render(products, familied, orphans, partials, failed, incomplete, shared, healthy, sellable_list,
            shop_name) -> str:
     return f"""<!doctype html>
 <html lang="es">
@@ -394,6 +447,7 @@ footer {{ margin-top:3rem; color:var(--muted); font-size:.85rem; }}
   <div class="stat warn"><b>{len(partials)}</b><span>parciales<br>(algún id muerto)</span></div>
   <div class="stat bad"><b>{len(failed)}</b><span>fallaron<br>al sincronizar</span></div>
   <div class="stat warn"><b>{len(incomplete)}</b><span>publicados<br>sin imágenes</span></div>
+  <div class="stat bad"><b>{len(shared)}</b><span>con id<br>compartido</span></div>
   <div class="stat good"><b>{healthy}</b><span>sanos<br>(todos los ids vivos)</span></div>
 </div>
 
@@ -445,6 +499,17 @@ ninguna, o llegaron al producto y <b>ninguna se asoció a una variante</b>. Lo s
 apagón de su servicio de imágenes: Shopify rechaza asociar una imagen que todavía está procesando.
 No se pierde nada y no hay nada que decidir — se arregla volviendo a sincronizarlos.</p>
 
+<h2>Motivo 5 — dos productos reclaman el mismo id ({len(shared)} productos)</h2>
+<p><b>Es el problema que bloquea la migración nueva.</b> La app resuelve un id de PaceSetter a
+<b>un</b> producto de la tienda, así que cuando dos lo llevan en su <code>ps_product_ids</code>,
+sincronizar ese id actualiza al primero que lo reclama y <b>deja al otro intacto</b> — informando de
+éxito. Se descubrió al sincronizar <code>CM288DB</code>: refrescó el <i>Leatherette Wine Bag
+<b>Large</b></i> mientras el <i><b>Small</b></i>, que también lo lista, se quedaba sin tocar.</p>
+<p>No es algo que la sincronización pueda decidir: dado <code>CM288DB</code>, sólo tú sabes si
+pertenece al bolso pequeño o al grande. Las salidas son <b>repartir los ids</b> para que cada uno
+aparezca en un solo producto, o <b>fusionar</b> los dos productos si en realidad son el mismo artículo
+en dos tamaños. Hasta entonces estos quedan fuera de las pasadas.</p>
+
 <h2>Y aparte: parciales ({len(partials)} productos)</h2>
 <p>Estos <b>sí</b> se sincronizan, pero arrastran algún id muerto dentro de
 <code>ps_product_ids</code>. No rompen nada; ensucian los avisos de cada pasada y conviene limpiarlos.</p>
@@ -474,6 +539,7 @@ No se pierde nada y no hay nada que decidir — se arregla volviendo a sincroniz
   <button data-f="partial">Parciales ({len(partials)})</button>
   <button data-f="failed">Fallaron ({len(failed)})</button>
   <button data-f="incomplete">Sin imágenes ({len(incomplete)})</button>
+  <button data-f="shared">Id compartido ({len(shared)})</button>
   <span class="muted" id="count"></span>
 </div>
 
@@ -486,6 +552,7 @@ No se pierde nada y no hay nada que decidir — se arregla volviendo a sincroniz
 {rows_html(partials, shop_name, "partial")}
 {rows_html(failed, shop_name, "failed")}
 {rows_html(incomplete, shop_name, "incomplete")}
+{rows_html(shared, shop_name, "shared")}
 </tbody>
 </table>
 </div>
