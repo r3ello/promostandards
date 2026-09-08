@@ -166,7 +166,7 @@ class IncrementalSyncTest {
     private static SupplierProduct product(int onHand) {
         return new SupplierProduct("SAMPLE-001", "Sample Polo", null, null, null, List.of(),
                 List.of(new Variant("SAMPLE-001-RED", "Red", "S", "SAMPLE-001-RED-S",
-                        new BigDecimal("9.50"), new BigDecimal("12.00"), onHand, List.of())),
+                        new BigDecimal("9.50"), new BigDecimal("12.00"), onHand, List.of(), null, null)),
                 List.of(), List.of(), List.of());
     }
 
@@ -181,7 +181,7 @@ class IncrementalSyncTest {
     void pushesTheSupplierRetailPriceToShopifyNotTheNetPrice() {
         SupplierProduct product = new SupplierProduct("SAMPLE-001", "Sample", null, null, null, List.of(),
                 List.of(new Variant("SAMPLE-001-RED", "Red", "S", "SAMPLE-001-RED-S",
-                        new BigDecimal("88.20"), new BigDecimal("147.00"), 10, List.of())),
+                        new BigDecimal("88.20"), new BigDecimal("147.00"), 10, List.of(), null, null)),
                 List.of(), List.of(), List.of());
         ShopifySyncService service = service(product, Strategy.SUPPLIER_LIST);
 
@@ -198,7 +198,7 @@ class IncrementalSyncTest {
     void pushesTheMarkedUpPriceWhenConfiguredForMarkup() {
         SupplierProduct product = new SupplierProduct("SAMPLE-001", "Sample", null, null, null, List.of(),
                 List.of(new Variant("SAMPLE-001-RED", "Red", "S", "SAMPLE-001-RED-S",
-                        new BigDecimal("88.20"), new BigDecimal("147.00"), 10, List.of())),
+                        new BigDecimal("88.20"), new BigDecimal("147.00"), 10, List.of(), null, null)),
                 List.of(), List.of(), List.of());
         ShopifySyncService service = service(product, Strategy.MARKUP);
 

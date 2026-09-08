@@ -10,8 +10,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Unit tests for {@link SessionAuthFilter}: the static-console + health + auth-endpoint exemptions,
- * the plain-401 (no {@code WWW-Authenticate}) challenge on protected paths, and the happy path with
- * a valid session cookie.
+ * the plain-401 (no {@code WWW-Authenticate}) challenge on protected paths, and both ways in — the
+ * session cookie and, in embedded mode, a Shopify session token.
  */
 class SessionAuthFilterTest {
 
@@ -25,9 +25,14 @@ class SessionAuthFilterTest {
 
 	private static MockHttpServletResponse run(AuthService auth, AuthProperties props, MockHttpServletRequest request)
 			throws Exception {
+		return run(auth, props, EmbeddedTokens.verifier(false), request);
+	}
+
+	private static MockHttpServletResponse run(AuthService auth, AuthProperties props, ShopifySessionToken shopify,
+			MockHttpServletRequest request) throws Exception {
 		MockHttpServletResponse response = new MockHttpServletResponse();
 		MockFilterChain chain = new MockFilterChain();
-		new SessionAuthFilter(auth, props).doFilter(request, response, chain);
+		new SessionAuthFilter(new RequestAuthenticator(auth, props, shopify)).doFilter(request, response, chain);
 		return response;
 	}
 
@@ -76,5 +81,26 @@ class SessionAuthFilterTest {
 		request.setCookies(new Cookie(props.getCookieName(), "forged-token"));
 
 		assertThat(run(auth, props, request).getStatus()).isEqualTo(401);
+	}
+
+	/** How the console gets in from inside the Shopify admin, where the cookie never arrives. */
+	@Test
+	void allowsProtectedPathWithAShopifySessionToken() throws Exception {
+		AuthProperties props = props();
+		MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/catalog/products");
+		request.addHeader("Authorization", "Bearer " + EmbeddedTokens.valid());
+
+		assertThat(run(new AuthService(props), props, EmbeddedTokens.verifier(true), request).getStatus())
+				.isEqualTo(200);
+	}
+
+	/** The same token is worth nothing until the app is configured as an embedded app. */
+	@Test
+	void ignoresAShopifySessionTokenWhenEmbeddingIsOff() throws Exception {
+		AuthProperties props = props();
+		MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/catalog/products");
+		request.addHeader("Authorization", "Bearer " + EmbeddedTokens.valid());
+
+		assertThat(run(new AuthService(props), props, request).getStatus()).isEqualTo(401);
 	}
 }

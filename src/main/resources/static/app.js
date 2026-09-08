@@ -32,7 +32,7 @@ let groupPollTimer = null;
 
 // --- API ---------------------------------------------------------------
 async function api(url, method = 'GET', payload) {
-	const opts = { method, headers: { Accept: 'application/json' } };
+	const opts = { method, headers: await authHeaders({ Accept: 'application/json' }) };
 	if (payload !== undefined && payload !== null) {
 		opts.headers['Content-Type'] = 'application/json';
 		opts.body = JSON.stringify(payload);
@@ -53,28 +53,65 @@ async function api(url, method = 'GET', payload) {
 	return body;
 }
 
+// --- Shopify embedded mode ---------------------------------------------
+// Inside the Shopify admin this console runs in an iframe on admin.shopify.com, which makes its
+// PS_SESSION cookie a THIRD-PARTY cookie: the browser refuses to send it back, so the login screen
+// appeared to work and every call after it came back 401. Shopify's answer is a session token —
+// App Bridge (injected into the head by ConsoleIndexController when shopify.embedded.enabled is
+// on) mints a short-lived JWT signed with the app's client secret, we send it as a bearer, and the
+// server verifies it. Tokens live about a minute, so we ask App Bridge for one PER REQUEST rather
+// than caching: it holds a fresh one in memory, so the call is local and cheap.
+//
+// `window.shopify` only exists when App Bridge loaded, which only happens in embedded mode — so
+// this doubles as the mode flag. Outside the admin nothing here runs and the cookie login stands.
+const embedded = !!(window.shopify && typeof window.shopify.idToken === 'function');
+
+async function authHeaders(headers) {
+	if (!embedded) return headers;
+	try {
+		const token = await window.shopify.idToken();
+		if (token) headers.Authorization = `Bearer ${token}`;
+	} catch (e) {
+		// App Bridge could not mint one (not really framed by the admin, app key mismatch). Let the
+		// request go out bare: the 401 that follows is what tells the user, with the right message.
+	}
+	return headers;
+}
+
 // --- auth --------------------------------------------------------------
 // When security.auth is enabled the app is gated behind a login screen: the console shell loads
-// but every /api/** call needs a session cookie. `/api/auth/status` tells us whether to show the
-// login screen or the console on load; a 404 means the auth feature is off (nothing to gate).
+// but every /api/** call needs a credential — the session cookie, or the Shopify token above.
+// `/api/auth/status` tells us whether to show the login screen or the console on load; a 404 means
+// the auth feature is off (nothing to gate).
 let authEnabled = false;
+let canSignOut = false;         // false when the session is Shopify's: there is nothing to sign out of
 
 async function fetchAuthStatus() {
 	try {
-		const res = await fetch('/api/auth/status', { headers: { Accept: 'application/json' } });
-		if (res.status === 404) return { enabled: false, authenticated: true };
+		const res = await fetch('/api/auth/status', { headers: await authHeaders({ Accept: 'application/json' }) });
+		if (res.status === 404) return { enabled: false, authenticated: true, signOut: false };
 		const b = await res.json().catch(() => null);
-		return { enabled: true, authenticated: !!(b && b.authenticated) };
+		return { enabled: true, authenticated: !!(b && b.authenticated), signOut: !!(b && b.signOut) };
 	} catch (e) {
-		return { enabled: false, authenticated: true }; // can't reach status — don't block the UI
+		return { enabled: false, authenticated: true, signOut: false }; // can't reach status — don't block the UI
 	}
 }
 
-function showLogin() {
+// Embedded, there is no password to ask for: a blocked request means Shopify's token was refused,
+// so the same screen shows what went wrong instead of a form that cannot help.
+function showLogin(message) {
 	el('loginScreen').hidden = false;
 	el('appMain').hidden = true;
 	el('topbarRight').hidden = true;
 	el('signOutBtn').hidden = true;
+	el('loginForm').hidden = embedded;
+	el('embeddedError').hidden = !embedded;
+	if (embedded) {
+		const detail = el('embeddedErrorDetail');
+		detail.textContent = message || '';
+		detail.hidden = !message;
+		return;
+	}
 	const u = el('loginUser');
 	if (u) setTimeout(() => u.focus(), 0);
 }
@@ -83,12 +120,13 @@ function showApp() {
 	el('loginScreen').hidden = true;
 	el('appMain').hidden = false;
 	el('topbarRight').hidden = false;
-	el('signOutBtn').hidden = !authEnabled;
+	el('signOutBtn').hidden = !canSignOut;
 }
 
 async function bootstrap() {
 	const status = await fetchAuthStatus();
 	authEnabled = status.enabled;
+	canSignOut = status.enabled && status.signOut;
 	if (status.enabled && !status.authenticated) {
 		showLogin();
 	} else {
@@ -119,6 +157,7 @@ async function doLogin(ev) {
 			return;
 		}
 		authEnabled = true;
+		canSignOut = true;
 		el('loginPass').value = '';
 		showApp();
 		loadCatalog();

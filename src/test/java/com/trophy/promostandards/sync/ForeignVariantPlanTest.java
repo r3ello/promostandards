@@ -13,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ForeignVariantPlanTest {
 
     private static Variant variant(String partId, String color, String size) {
-        return new Variant(partId, color, size, partId + "-" + size, null, null, null, List.of());
+        return new Variant(partId, color, size, partId + "-" + size, null, null, null, List.of(), null, null);
     }
 
     private static ForeignVariantPlan plan(List<Variant> supplier, List<StoreVariant> store) {

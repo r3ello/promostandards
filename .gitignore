@@ -47,3 +47,6 @@ application-secret.properties
 
 # Python bytecode from the tools/ scripts
 __pycache__/
+
+# Claude Code: per-machine permissions, not project configuration
+.claude/settings.local.json

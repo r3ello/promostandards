@@ -155,7 +155,18 @@ public class SoapProductDataClient implements ProductDataClient {
 				if (apparelSize != null && apparelSize.getLabelSize() != null) {
 					sizes.add(apparelSize.getLabelSize());
 				}
-				parts.add(new Product.ProductPart(part.getPartId(), joinText(part.getDescription()), primaryColor, sizes));
+				// The Dimension block is where the shipping weight lives; PaceSetter fills it for
+				// every part (0.1 LB, 4 LB...) and it is the one figure the store cannot get anywhere
+				// else — the dimensions beside it are the same numbers as the inventory size string.
+				java.math.BigDecimal weight = null;
+				String weightUom = null;
+				var dimension = part.getDimension();
+				if (dimension != null) {
+					weight = dimension.getWeight();
+					weightUom = dimension.getWeightUom() == null ? null : dimension.getWeightUom().value();
+				}
+				parts.add(new Product.ProductPart(part.getPartId(), joinText(part.getDescription()),
+						primaryColor, sizes, weight, weightUom));
 			}
 		}
 

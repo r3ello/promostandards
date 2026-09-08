@@ -124,7 +124,7 @@ class ShopifySyncServiceTest {
         when(catalog.aggregate("CM777")).thenReturn(sibling());
         when(catalog.aggregate("CM778")).thenReturn(new SupplierProduct("CM778", "Sample Cap", null,
                 null, null, List.of(), List.of(new Variant("CM778", "Forest", "S", "CM778-S",
-                new BigDecimal("4.00"), null, 7, List.of())), List.of(), List.of(), List.of()));
+                new BigDecimal("4.00"), null, 7, List.of(), null, null)), List.of(), List.of(), List.of()));
 
         return new ShopifySyncService(gql, catalog, mapper, policy, shopify, syncProps, new ObjectMapper(),
                 CatalogTestSupport.providerOf(syncState), DISCOUNTS, IMAGES);
@@ -135,9 +135,9 @@ class ShopifySyncServiceTest {
                 List.of("Polos"),
                 List.of(
                         new Variant("SAMPLE-001-RED", "Red", "S", "SAMPLE-001-RED-S",
-                                new BigDecimal("9.50"), new BigDecimal("12.00"), 1200, List.of()),
+                                new BigDecimal("9.50"), new BigDecimal("12.00"), 1200, List.of(), null, null),
                         new Variant("SAMPLE-001-RED", "Red", "M", "SAMPLE-001-RED-M",
-                                new BigDecimal("9.50"), new BigDecimal("12.00"), 350, List.of())),
+                                new BigDecimal("9.50"), new BigDecimal("12.00"), 350, List.of(), null, null)),
                 List.of(), List.of(), List.of());
     }
 
@@ -147,9 +147,9 @@ class ShopifySyncServiceTest {
                 List.of("Caps"),
                 List.of(
                         new Variant("CM777", "Navy", "S", "CM777-S",
-                                new BigDecimal("4.00"), null, 5, List.of()),
+                                new BigDecimal("4.00"), null, 5, List.of(), null, null),
                         new Variant("CM778", "Forest", "S", "CM778-S",
-                                new BigDecimal("4.00"), null, 0, List.of())),
+                                new BigDecimal("4.00"), null, 0, List.of(), null, null)),
                 List.of(), List.of(), List.of());
     }
 

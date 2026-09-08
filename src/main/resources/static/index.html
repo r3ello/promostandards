@@ -3,6 +3,10 @@
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<!-- Filled in by ConsoleIndexController: App Bridge + this app's client id, so the
+	     console can mint Shopify session tokens when it runs inside the admin. Empty when
+	     shopify.embedded.enabled=false. Must stay the first script in the head. -->
+	<!--SHOPIFY_APP_BRIDGE-->
 	<title>TrophyPartner · Product Sync</title>
 	<link rel="stylesheet" href="polaris-tokens.css">
 	<link rel="stylesheet" href="app.css">
@@ -32,6 +36,22 @@
 			<p class="login__error" id="loginError" role="alert" hidden></p>
 			<button type="submit" class="btn btn--primary login__submit" id="loginBtn">Sign in</button>
 		</form>
+		<!-- Shown instead of the form when the console runs inside the Shopify admin: there is
+		     no password to type there, so a failure means the session token was refused. -->
+		<div class="login__card" id="embeddedError" hidden>
+			<div class="login__brand">
+				<span class="login__mark">◆</span>
+				<div class="login__brandtext">
+					<strong>TrophyPartner</strong>
+					<span>Product Sync</span>
+				</div>
+			</div>
+			<h1 class="login__title">Session not verified</h1>
+			<p class="login__sub">Shopify could not confirm this admin session. Reload the app from
+				the Shopify admin; if it keeps failing, the app's client id or secret on the server no
+				longer matches the Shopify app.</p>
+			<p class="login__error" id="embeddedErrorDetail" role="alert" hidden></p>
+		</div>
 	</div>
 
 	<!-- Top bar -->

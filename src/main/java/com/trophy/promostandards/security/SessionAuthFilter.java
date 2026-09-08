@@ -2,7 +2,6 @@ package com.trophy.promostandards.security;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
-import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -12,17 +11,22 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 
 /**
- * Session-cookie gate over the app's data + management endpoints, backing the static login screen.
+ * Session gate over the app's data + management endpoints, backing the static login screen.
  *
  * <p>Registered only when {@code security.auth.enabled=true}. Unlike HTTP Basic (which pops the
  * browser's native credential dialog), this filter protects <em>only</em> the sensitive endpoints
  * and lets the static console shell load unauthenticated, so {@code index.html} can render its own
  * login screen. That screen posts to {@code /api/auth/login} (see {@link AuthController}), which
- * sets the session cookie this filter checks.
+ * sets the session cookie {@link RequestAuthenticator} checks.
+ *
+ * <p>A request may also authenticate with a Shopify <b>session token</b> instead of the cookie,
+ * which is what the console uses when it is opened inside the Shopify admin — see
+ * {@link ShopifySessionToken}. Both credentials are equal here; the filter only asks
+ * {@link RequestAuthenticator} whether one of them held.
  *
  * <p>Protected: {@code /api/**} (except {@code /api/auth/**}) and {@code /actuator/**} (except
  * {@code /actuator/health}, left open for the Docker healthcheck). A protected request without a
- * valid session cookie gets a plain {@code 401} JSON body and <em>no</em> {@code WWW-Authenticate}
+ * valid credential gets a plain {@code 401} JSON body and <em>no</em> {@code WWW-Authenticate}
  * header, so no browser dialog appears — the front-end shows the login screen instead.
  */
 @Component
@@ -32,19 +36,17 @@ public class SessionAuthFilter extends OncePerRequestFilter {
 	/** Path prefix left open so the container healthcheck (see Dockerfile) needs no credentials. */
 	private static final String HEALTH_PATH = "/actuator/health";
 
-	private final AuthService auth;
-	private final AuthProperties props;
+	private final RequestAuthenticator authenticator;
 
-	public SessionAuthFilter(AuthService auth, AuthProperties props) {
-		this.auth = auth;
-		this.props = props;
+	public SessionAuthFilter(RequestAuthenticator authenticator) {
+		this.authenticator = authenticator;
 	}
 
 	@Override
 	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
 			throws ServletException, IOException {
 
-		if (!isProtected(pathWithinApp(request)) || hasValidSession(request)) {
+		if (!isProtected(pathWithinApp(request)) || authenticator.authenticated(request)) {
 			chain.doFilter(request, response);
 			return;
 		}
@@ -65,19 +67,6 @@ public class SessionAuthFilter extends OncePerRequestFilter {
 			return false;
 		}
 		return path.equals("/actuator") || path.startsWith("/actuator/");
-	}
-
-	private boolean hasValidSession(HttpServletRequest request) {
-		Cookie[] cookies = request.getCookies();
-		if (cookies == null) {
-			return false;
-		}
-		for (Cookie cookie : cookies) {
-			if (props.getCookieName().equals(cookie.getName()) && auth.tokenValid(cookie.getValue())) {
-				return true;
-			}
-		}
-		return false;
 	}
 
 	private static String pathWithinApp(HttpServletRequest request) {

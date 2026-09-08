@@ -170,6 +170,12 @@ shopify:
   api-version: "${SHOPIFY_API_VERSION:2026-04}"
   # Inventory location GID quantities are written to, e.g. gid://shopify/Location/123
   location-id: "${SHOPIFY_LOCATION_ID:gid://shopify/Location/81537040495}"
+  # Run the console INSIDE the Shopify admin (embedded app). On: the shell loads App Bridge, every
+  # response declares frame-ancestors for the admin, and a Shopify session token is accepted in
+  # place of the login cookie — which is the only credential that survives the admin's iframe.
+  # See SHOPIFY-EMBEDDED.md; off locally, where the app is opened on its own domain.
+  embedded:
+    enabled: ${SHOPIFY_EMBEDDED:false}
   # Shopify rate-limits by query COST and reports exhaustion as HTTP 200 + errors[].extensions.code
   # = THROTTLED. Those calls are retried (waiting the bucket's own restore time when the response
   # reports it, else exponential backoff) instead of failing the operation.

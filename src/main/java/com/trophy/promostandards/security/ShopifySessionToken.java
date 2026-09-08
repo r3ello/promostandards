@@ -1,0 +1,183 @@
+package com.trophy.promostandards.security;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.trophy.promostandards.shopify.ShopifyProperties;
+import jakarta.servlet.http.HttpServletRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
+import org.springframework.stereotype.Component;
+
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
+import java.time.Instant;
+import java.util.Base64;
+import java.util.Locale;
+
+/**
+ * Verifier for the <b>Shopify session token</b> an embedded app receives from App Bridge.
+ *
+ * <p>App Bridge hands the browser a JWT signed <b>HS256 with this app's client secret</b>; the
+ * front-end sends it as {@code Authorization: Bearer …} on every call and we check it here. Since
+ * only Shopify and this server know the secret, a token that verifies proves the caller is a real
+ * admin session of the configured store — which is a stronger statement than the shared
+ * username/password the form login checks, and the only one that works in the admin's iframe
+ * (see {@link ShopifyEmbedProperties}).
+ *
+ * <p>What is checked, and why each one matters:
+ * <ul>
+ *   <li><b>alg = HS256</b>, taken from a whitelist rather than from the token — a verifier that
+ *       trusts the token's own {@code alg} can be told {@code none}.</li>
+ *   <li><b>signature</b> over {@code header.payload} with the client secret.</li>
+ *   <li><b>{@code aud} = our client id</b> — a valid token minted for a different app is not ours.</li>
+ *   <li><b>{@code dest} = our store</b>, and {@code iss} under it — this is a single-store custom
+ *       app, so a session from any other shop is refused rather than let in as "some Shopify user".</li>
+ *   <li><b>{@code exp} / {@code nbf}</b>, with a few seconds of leeway for clock drift. Session
+ *       tokens live about a minute, which is why the front-end asks for a fresh one per request.</li>
+ * </ul>
+ *
+ * <p>The bean always exists; when embedding is off (or the credentials are missing) it simply
+ * answers {@code false} to everything, so nothing has to be conditional on the feature switch.
+ */
+@Component
+public class ShopifySessionToken {
+
+	private static final Logger log = LoggerFactory.getLogger(ShopifySessionToken.class);
+	private static final String HMAC_ALG = "HmacSHA256";
+	private static final String BEARER = "Bearer ";
+	/** Tolerated clock drift between Shopify's signer and this server, in seconds. */
+	private static final long LEEWAY = 10;
+
+	private final ShopifyProperties shopify;
+	private final ShopifyEmbedProperties embed;
+	private final ObjectMapper json = new ObjectMapper();
+
+	public ShopifySessionToken(ShopifyProperties shopify, ShopifyEmbedProperties embed) {
+		this.shopify = shopify;
+		this.embed = embed;
+	}
+
+	/** True when the app is configured to run inside the Shopify admin and can verify tokens. */
+	public boolean enabled() {
+		return embed.enabled() && filled(shopify.clientId()) && filled(shopify.clientSecret())
+				&& filled(shopify.storeDomain());
+	}
+
+	/**
+	 * The client id, which App Bridge needs in the page and which is public by design (it travels in
+	 * every embedded URL). Null when embedding is off, so the console omits App Bridge entirely.
+	 */
+	public String apiKey() {
+		return enabled() ? shopify.clientId() : null;
+	}
+
+	/** The {@code *.myshopify.com} domain allowed to frame this app; null when embedding is off. */
+	public String storeDomain() {
+		return enabled() ? host() : null;
+	}
+
+	/**
+	 * The configured store as a bare lowercase host. A {@code https://} prefix or a trailing slash
+	 * is tolerated on purpose: this one value is both compared against the token's {@code dest} and
+	 * written into the frame-ancestors header, so a scheme left in the config would break the
+	 * embedded login while every other Shopify call kept working — a long way to go looking for a
+	 * stray "https://".
+	 */
+	private String host() {
+		String domain = shopify.storeDomain().trim().toLowerCase(Locale.ROOT);
+		if (domain.startsWith("https://")) {
+			domain = domain.substring("https://".length());
+		}
+		return trimSlash(domain);
+	}
+
+	/** True when the request carries a session token this app minted-for and trusts. */
+	public boolean authenticates(HttpServletRequest request) {
+		if (!enabled()) {
+			return false;
+		}
+		String header = request.getHeader(HttpHeaders.AUTHORIZATION);
+		if (header == null || !header.regionMatches(true, 0, BEARER, 0, BEARER.length())) {
+			return false;
+		}
+		return valid(header.substring(BEARER.length()).trim());
+	}
+
+	/** True when {@code token} is a well-formed, unexpired session token for this app and store. */
+	public boolean valid(String token) {
+		if (!enabled() || token == null || token.isBlank()) {
+			return false;
+		}
+		String[] parts = token.split("\\.");
+		if (parts.length != 3) {
+			return reject("not a three-part JWT");
+		}
+		try {
+			JsonNode header = json.readTree(decode(parts[0]));
+			if (!"HS256".equals(header.path("alg").asText())) {
+				return reject("unsupported alg " + header.path("alg").asText());
+			}
+			byte[] expected = sign((parts[0] + "." + parts[1]).getBytes(StandardCharsets.US_ASCII));
+			if (!MessageDigest.isEqual(expected, Base64.getUrlDecoder().decode(parts[2]))) {
+				return reject("bad signature");
+			}
+			return claimsValid(json.readTree(decode(parts[1])));
+		} catch (IllegalArgumentException | java.io.IOException malformed) {
+			return reject("malformed token: " + malformed.getMessage());
+		}
+	}
+
+	private boolean claimsValid(JsonNode claims) {
+		String expectedShop = "https://" + host();
+		String dest = trimSlash(claims.path("dest").asText().toLowerCase(Locale.ROOT));
+		if (!expectedShop.equals(dest)) {
+			return reject("token is for " + dest + ", not " + expectedShop);
+		}
+		if (!claims.path("iss").asText().toLowerCase(Locale.ROOT).startsWith(expectedShop)) {
+			return reject("iss does not belong to " + expectedShop);
+		}
+		if (!shopify.clientId().equals(claims.path("aud").asText())) {
+			return reject("aud is another app");
+		}
+		long now = Instant.now().getEpochSecond();
+		if (claims.path("exp").asLong() + LEEWAY < now) {
+			return reject("expired");
+		}
+		if (claims.path("nbf").asLong() - LEEWAY > now) {
+			return reject("not valid yet");
+		}
+		return true;
+	}
+
+	private static String trimSlash(String value) {
+		return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
+	}
+
+	private static String decode(String segment) {
+		return new String(Base64.getUrlDecoder().decode(segment), StandardCharsets.UTF_8);
+	}
+
+	private byte[] sign(byte[] data) {
+		try {
+			Mac mac = Mac.getInstance(HMAC_ALG);
+			mac.init(new SecretKeySpec(shopify.clientSecret().getBytes(StandardCharsets.UTF_8), HMAC_ALG));
+			return mac.doFinal(data);
+		} catch (GeneralSecurityException e) {
+			throw new IllegalStateException("HMAC-SHA256 unavailable", e);
+		}
+	}
+
+	/** Rejections are a debug-level detail: a stale token is routine, not an incident. */
+	private static boolean reject(String reason) {
+		log.debug("Shopify session token rejected: {}", reason);
+		return false;
+	}
+
+	private static boolean filled(String value) {
+		return value != null && !value.isBlank();
+	}
+}

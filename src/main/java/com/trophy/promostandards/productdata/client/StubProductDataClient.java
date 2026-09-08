@@ -16,6 +16,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.math.BigDecimal;
 import java.util.List;
 
 /**
@@ -44,8 +45,10 @@ public class StubProductDataClient implements ProductDataClient {
 				"Soft-touch piqué polo with embroidered logo area.", "Trophy Apparel",
 				List.of("Apparel", "Polos"),
 				List.of(
-						new ProductPart(productId + "-RED", "Red colorway", "Red", List.of("S", "M", "L", "XL")),
-						new ProductPart(productId + "-BLU", "Blue colorway", "Blue", List.of("S", "M", "L"))));
+						new ProductPart(productId + "-RED", "Red colorway", "Red", List.of("S", "M", "L", "XL"),
+								new BigDecimal("0.75"), "LB"),
+						new ProductPart(productId + "-BLU", "Blue colorway", "Blue", List.of("S", "M", "L"),
+								new BigDecimal("0.75"), "LB")));
 	}
 
 	/** A trophy family member that Common-Groups the other two sizes. */
@@ -64,7 +67,8 @@ public class StubProductDataClient implements ProductDataClient {
 		return new Product(productId, "Classic Trophy Cup",
 				"Gold-tone trophy cup on a marble base — sold per size.", "Trophy Awards",
 				List.of("Awards", "Trophies"),
-				List.of(new ProductPart(productId + "-GLD", size + " · Gold", "Gold", List.of(size))),
+				List.of(new ProductPart(productId + "-GLD", size + " · Gold", "Gold", List.of(size),
+						new BigDecimal("1.20"), "LB")),
 				siblings);
 	}
 

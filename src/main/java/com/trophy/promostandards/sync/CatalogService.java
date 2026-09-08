@@ -95,8 +95,14 @@ public class CatalogService {
 
         // Colour -> part id (from Product Data) for pricing/media/SKU resolution.
         Map<String, String> partIdByColor = new LinkedHashMap<>();
+        // Shipping weight per part: only Product Data carries it, and the variant is where a store
+        // needs it (Shopify quotes postage from the inventory item, not the product).
+        Map<String, Product.ProductPart> partById = new LinkedHashMap<>();
         for (Product.ProductPart part : product.parts()) {
             partIdByColor.putIfAbsent(norm(part.primaryColor()), part.partId());
+            if (part.partId() != null) {
+                partById.putIfAbsent(part.partId().toUpperCase(Locale.ROOT), part);
+            }
         }
 
         // Media: image URLs per colour (+ product gallery).
@@ -163,6 +169,8 @@ public class CatalogService {
                 .toList();
         accs.removeAll(phantoms);
 
+        List<String> distinctGallery = new ArrayList<>(new LinkedHashSet<>(gallery));
+
         // Resolve each variant: price (colour part id -> single fallback), SKU, images.
         List<Variant> variants = new ArrayList<>();
         for (VariantAcc acc : accs) {
@@ -174,12 +182,34 @@ public class CatalogService {
                 price = priceByPart.getOrDefault(colorPart, singlePrice);
             }
             String partId = acc.partId != null ? acc.partId : colorPart;
+            // PaceSetter never sets partId on its media, but it does serve each colour as a product
+            // of its own with its own photo: getMediaContent(CM373LB) answers cm373lb.jpg. So the
+            // gallery of THIS call belongs to the variant of the id that was asked for — and only to
+            // that one, or CM373BS's photo would end up on all eleven colours of the family.
+            List<String> variantImages = imagesByColor.getOrDefault(acc.color, List.of());
+            if (variantImages.isEmpty() && partId != null && partId.equalsIgnoreCase(productId)) {
+                variantImages = distinctGallery;
+            } else if (variantImages.isEmpty() && accs.size() == 1) {
+                // One variant and one gallery: there is nothing to be ambiguous about, and the id
+                // need not match — PaceSetter answers getMediaContent(CM712) with CM712WH.jpg, whose
+                // part id is not the one asked for, and that photo belongs to the only variant there
+                // is.
+                variantImages = distinctGallery;
+            }
+            // The weight of the part itself, falling back to the colour's Product Data part for a
+            // variant the Inventory service named but Product Data did not.
+            Product.ProductPart weightPart = partId == null ? null
+                    : partById.get(partId.toUpperCase(Locale.ROOT));
+            if (weightPart == null && colorPart != null) {
+                weightPart = partById.get(colorPart.toUpperCase(Locale.ROOT));
+            }
             variants.add(new Variant(partId, acc.color, acc.size, sku(partId, acc.size),
                     price == null ? null : price.net(), price == null ? null : price.list(),
-                    acc.onHand, imagesByColor.getOrDefault(acc.color, List.of())));
+                    acc.onHand, variantImages,
+                    weightPart == null ? null : weightPart.weight(),
+                    weightPart == null ? null : weightPart.weightUom()));
         }
 
-        List<String> distinctGallery = new ArrayList<>(new LinkedHashSet<>(gallery));
         List<String> tags = product.categories() == null ? List.of() : product.categories();
         String productType = tags.isEmpty() ? null : tags.get(tags.size() - 1);
 

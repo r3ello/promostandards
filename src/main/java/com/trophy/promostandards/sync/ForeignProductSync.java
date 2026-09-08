@@ -53,6 +53,10 @@ class ForeignProductSync {
 
     private static final Logger log = LoggerFactory.getLogger(ForeignProductSync.class);
 
+    /** How long to let Shopify finish ingesting images before giving up on per-variant photos. */
+    private static final java.time.Duration MEDIA_READY_WAIT = java.time.Duration.ofSeconds(2);
+    private static final int MEDIA_READY_ATTEMPTS = 8;
+
     /** Option names this app knows how to write. Anything else means hands off the variants. */
     private static final Set<String> KNOWN_OPTIONS = Set.of("title", "color", "size");
 
@@ -110,12 +114,21 @@ class ForeignProductSync {
         Map<String, String> skuByPart = VariantSku.byVariant(
                 storeProduct.path("legacySku").path("value").asText(null), union.variants());
 
+        // One supplier variant means a plain product: Shopify keeps Title/Default Title and the
+        // admin shows price, SKU and stock as the product's own. Options with a single value each
+        // only render a selector with nothing to select — and this app is what put them there.
+        boolean single = union.variants().size() == 1;
+
         boolean writable = writableShape(productId, gid, options, store);
         if (writable) {
-            ensureOptions(gid, options, plan, emitSize);
+            if (single) {
+                revertToSimpleProduct(gid, options);
+            } else {
+                ensureOptions(gid, options, plan, emitSize);
+            }
         }
-        int updated = updateExisting(gid, plan, writable, emitSize, skuByPart);
-        Map<String, String> createdIds = writable
+        int updated = updateExisting(gid, plan, writable, emitSize, skuByPart, single);
+        Map<String, String> createdIds = writable && !single
                 ? createMissing(gid, plan, emitSize, skuByPart) : Map.of();
         int inventory = pushInventory(gid, plan, writable);
         int published = syncMedia(gid, union, storeProduct, plan, createdIds);
@@ -142,6 +155,10 @@ class ForeignProductSync {
         Map<String, Variant> byKey = new LinkedHashMap<>();
         Set<String> authoritative = new LinkedHashSet<>();
         Set<String> known = new LinkedHashSet<>();
+        // Every id's own photo, not just the seed's: PaceSetter serves each colour as a product with
+        // one image, so a family's variant photos only exist across these calls. They have to reach
+        // the product's gallery or there would be nothing for a variant to be pointed at.
+        Set<String> gallery = new LinkedHashSet<>(seed.imageUrls());
         known.add(upper(seed.productId()));
         collect(byKey, authoritative, seed.productId(), seed.variants());
         if (imported != null) {
@@ -149,7 +166,7 @@ class ForeignProductSync {
                 if (!known.add(upper(id))) {
                     continue;
                 }
-                aggregateInto(byKey, authoritative, id, seed.productId());
+                aggregateInto(byKey, authoritative, id, seed.productId(), gallery);
             }
         }
 
@@ -162,14 +179,14 @@ class ForeignProductSync {
             if (!known.add(upper(partId))) {
                 continue;
             }
-            if (aggregateInto(byKey, authoritative, partId, seed.productId())) {
+            if (aggregateInto(byKey, authoritative, partId, seed.productId(), gallery)) {
                 discovered.add(partId);
             }
         }
 
         SupplierProduct product = new SupplierProduct(seed.productId(), seed.title(),
                 seed.descriptionHtml(), seed.vendor(), seed.productType(), seed.tags(),
-                List.copyOf(byKey.values()), seed.imageUrls(), seed.priceParts(), seed.warnings());
+                List.copyOf(byKey.values()), List.copyOf(gallery), seed.priceParts(), seed.warnings());
         return new Union(product, List.copyOf(discovered));
     }
 
@@ -179,9 +196,11 @@ class ForeignProductSync {
 
     /** @return whether the supplier serves {@code id} as a product of its own. */
     private boolean aggregateInto(Map<String, Variant> byKey, Set<String> authoritative, String id,
-                                  String forProduct) {
+                                  String forProduct, Set<String> gallery) {
         try {
-            collect(byKey, authoritative, id, catalog.aggregate(id).variants());
+            SupplierProduct aggregate = catalog.aggregate(id);
+            collect(byKey, authoritative, id, aggregate.variants());
+            gallery.addAll(aggregate.imageUrls());
             return true;
         } catch (RuntimeException e) {
             // Not every part id is a product id, and an id the supplier no longer serves must not
@@ -227,7 +246,7 @@ class ForeignProductSync {
                 && v.size() != null && !v.size().isBlank();
         String sku = sized ? sourceId + "-" + v.size() : sourceId;
         return new Variant(sourceId, v.color(), v.size(), sku, v.supplierNet(), v.listPrice(),
-                v.onHand(), v.imageUrls());
+                v.onHand(), v.imageUrls(), v.weight(), v.weightUom());
     }
 
     // ---------------------------------------------------------------- store side
@@ -287,6 +306,51 @@ class ForeignProductSync {
     // ---------------------------------------------------------------- mutations
 
     /** Turns the migrated {@code Title} option into {@code Color}, and adds {@code Size} if needed. */
+    /**
+     * Undoes the options this app gave a product the supplier sells in one variant: {@code Size} is
+     * deleted (the {@code DEFAULT} strategy only removes an option with a single value, which is
+     * exactly this case and refuses anything riskier) and {@code Color} is renamed back to
+     * {@code Title / Default Title} — the shape Shopify calls "no options", since a product cannot
+     * have none at all.
+     *
+     * <p>Never fatal, and never guessed at: an option carrying more than one value belongs to a real
+     * choice someone made, and is left alone.
+     */
+    private void revertToSimpleProduct(String gid, Map<String, JsonNode> options) {
+        JsonNode size = options.get("size");
+        if (size != null && size.path("optionValues").size() == 1) {
+            try {
+                Map<String, Object> vars = Map.of("productId", gid,
+                        "options", List.of(size.path("id").asText()), "strategy", "DEFAULT");
+                checkUserErrors(require(gql.execute(ShopifyGraphQL.PRODUCT_OPTIONS_DELETE, vars))
+                        .path("productOptionsDelete"), "productOptionsDelete");
+            } catch (RuntimeException e) {
+                log.warn("Could not drop the Size option of the single-variant product {}: {}", gid,
+                        e.getMessage());
+                return;     // renaming Color while Size survives would leave a worse shape than both
+            }
+        }
+        JsonNode color = options.get("color");
+        if (color == null || color.path("optionValues").size() != 1) {
+            return;
+        }
+        try {
+            Map<String, Object> vars = new LinkedHashMap<>();
+            vars.put("productId", gid);
+            vars.put("option", Map.of("id", color.path("id").asText(), "name", "Title"));
+            vars.put("optionValuesToUpdate", List.of(Map.of(
+                    "id", color.path("optionValues").get(0).path("id").asText(),
+                    "name", "Default Title")));
+            vars.put("variantStrategy", "LEAVE_AS_IS");
+            checkUserErrors(require(gql.execute(ShopifyGraphQL.PRODUCT_OPTION_UPDATE, vars))
+                    .path("productOptionUpdate"), "productOptionUpdate");
+            log.info("Reverted {} to a plain product: one supplier variant needs no options", gid);
+        } catch (RuntimeException e) {
+            log.warn("Could not revert the Color option of the single-variant product {}: {}", gid,
+                    e.getMessage());
+        }
+    }
+
     private void ensureOptions(String gid, Map<String, JsonNode> options, ForeignVariantPlan plan,
                                boolean emitSize) {
         Entry first = plan.adopted() != null ? plan.adopted()
@@ -333,7 +397,7 @@ class ForeignProductSync {
      * and — for the adopted legacy variant — its SKU and option values.
      */
     private int updateExisting(String gid, ForeignVariantPlan plan, boolean writable, boolean emitSize,
-                               Map<String, String> skuByPart) {
+                               Map<String, String> skuByPart, boolean single) {
         List<Map<String, Object>> variants = new ArrayList<>();
         for (Entry e : plan.toUpdate()) {
             if (!writable && e.action() == Action.ADOPT) {
@@ -346,8 +410,13 @@ class ForeignProductSync {
                 variant.put("price", price.toPlainString());
             }
             if (writable) {
-                variant.put("inventoryItem", Map.of("sku", storeSku(e, skuByPart), "tracked", true));
-                variant.put("optionValues", optionValues(e, emitSize));
+                Map<String, Object> item = ShopifyProductMapper.inventoryItemInput(e.variant(), false);
+                item.put("sku", storeSku(e, skuByPart));
+                variant.put("inventoryItem", item);
+                if (!single) {
+                    // A plain product has no options to write values for.
+                    variant.put("optionValues", optionValues(e, emitSize));
+                }
             }
             variant.put("metafields", variantMetafields(e));
             variants.add(variant);
@@ -382,7 +451,9 @@ class ForeignProductSync {
             if (price != null) {
                 variant.put("price", price.toPlainString());
             }
-            variant.put("inventoryItem", Map.of("sku", storeSku(e, skuByPart), "tracked", true));
+            Map<String, Object> item = ShopifyProductMapper.inventoryItemInput(e.variant(), false);
+            item.put("sku", storeSku(e, skuByPart));
+            variant.put("inventoryItem", item);
             variant.put("metafields", variantMetafields(e));
             if (locationId != null && !locationId.isBlank() && e.variant().onHand() != null) {
                 // Only valid on create — it activates the item at the location and sets the quantity.
@@ -492,29 +563,86 @@ class ForeignProductSync {
                 Map.of("id", gid, "media", media))).path("productUpdate");
         checkUserErrors(data, "productUpdate(media)");
         if (images.isAttachToVariants()) {
-            attachVariantMedia(gid, data.path("product").path("media").path("nodes"), plan, createdIds);
+            attachVariantMedia(gid, readyMedia(gid, data.path("product").path("media").path("nodes")),
+                    plan, createdIds);
         }
         return media.size();
     }
 
-    /** Points every variant at the image published for its colour. Never fatal: an image is not a price. */
-    private void attachVariantMedia(String gid, JsonNode publishedMedia, ForeignVariantPlan plan,
-                                    Map<String, String> createdIds) {
-        Map<String, String> mediaIdByAlt = new LinkedHashMap<>();
-        for (JsonNode node : publishedMedia) {
-            String alt = node.path("alt").asText(null);
-            if (alt != null && !alt.isBlank()) {
-                mediaIdByAlt.putIfAbsent(alt, node.path("id").asText());
+    /**
+     * Waits for Shopify to finish ingesting the images it was just given.
+     *
+     * <p>{@code productUpdate} returns as soon as the media records exist, but Shopify downloads the
+     * files afterwards and refuses to attach one to a variant until it is {@code READY} ("Non-ready
+     * media cannot be attached to variants"). Waiting is the only option: every sync republishes the
+     * images, so there is no later run where they are already ready.
+     *
+     * @return the media nodes, ready or not — the wait is bounded, and attaching is best-effort
+     */
+    private JsonNode readyMedia(String gid, JsonNode published) {
+        JsonNode media = published;
+        for (int attempt = 0; attempt < MEDIA_READY_ATTEMPTS; attempt++) {
+            boolean allReady = media.size() > 0;
+            for (JsonNode node : media) {
+                if (!"READY".equals(node.path("status").asText(null))) {
+                    allReady = false;
+                    break;
+                }
+            }
+            if (allReady) {
+                return media;
+            }
+            try {
+                Thread.sleep(MEDIA_READY_WAIT.toMillis());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return media;
+            }
+            try {
+                media = require(gql.execute(ShopifyGraphQL.PRODUCT_MEDIA_STATUS, Map.of("id", gid)))
+                        .path("product").path("media").path("nodes");
+            } catch (RuntimeException e) {
+                log.debug("Could not re-read media status for {}: {}", gid, e.getMessage());
+                return media;
             }
         }
-        if (mediaIdByAlt.isEmpty()) {
+        log.info("Images for {} were still processing after {}s; variants keep the product photo",
+                gid, MEDIA_READY_ATTEMPTS * MEDIA_READY_WAIT.getSeconds());
+        return media;
+    }
+
+    /**
+     * Points every variant at its own image. Never fatal: an image is not a price.
+     *
+     * <p>Matched by <b>filename</b>, not by the {@code alt} text. Shopify rewrites the URL on ingest
+     * but keeps the file name, so {@code cm373lb.jpg} is still recognisable — whereas matching on the
+     * colour (the first cut) silently attached nothing for a product whose variants have no colour at
+     * all, which is most of PaceSetter's crystal: it answers "N/A" and the app maps that to null.
+     * Fifteen products were published with their photo sitting on the product and on no variant.
+     */
+    private void attachVariantMedia(String gid, JsonNode publishedMedia, ForeignVariantPlan plan,
+                                    Map<String, String> createdIds) {
+        Map<String, String> mediaIdByFile = new LinkedHashMap<>();
+        for (JsonNode node : publishedMedia) {
+            String status = node.path("status").asText(null);
+            // A media that never finished processing would fail the whole mutation for the rest.
+            if (status != null && !"READY".equals(status)) {
+                continue;
+            }
+            String file = fileName(node.path("image").path("url").asText(null));
+            if (file != null) {
+                mediaIdByFile.putIfAbsent(file, node.path("id").asText());
+            }
+        }
+        if (mediaIdByFile.isEmpty()) {
             return;
         }
 
         List<Map<String, Object>> variantMedia = new ArrayList<>();
         for (Entry e : plan.entries()) {
-            String color = e.variant().color();
-            String mediaId = color == null ? null : mediaIdByAlt.get(color);
+            String file = e.variant().imageUrls().isEmpty() ? null
+                    : fileName(e.variant().imageUrls().get(0));
+            String mediaId = file == null ? null : mediaIdByFile.get(file);
             String variantId = e.target() != null ? e.target().id()
                     : createdIds.get(e.variant().sku() == null ? "" : e.variant().sku().toUpperCase(Locale.ROOT));
             if (mediaId != null && variantId != null) {
@@ -545,6 +673,17 @@ class ForeignProductSync {
         return mapped != null ? mapped : e.variant().sku();
     }
 
+    /** @return the file name of a URL, lower-cased, which is what survives Shopify's ingest. */
+    private static String fileName(String url) {
+        if (url == null || url.isBlank()) {
+            return null;
+        }
+        String path = url.split("[?#]", 2)[0];
+        int slash = path.lastIndexOf('/');
+        String name = slash < 0 ? path : path.substring(slash + 1);
+        return name.isBlank() ? null : name.trim().toLowerCase(Locale.ROOT);
+    }
+
     /**
      * Identity first, then what the storefront reads. Since the SKU became the store's own number,
      * {@code vendor_sku} is what says which PaceSetter part a variant is — the field the next sync
@@ -560,6 +699,11 @@ class ForeignProductSync {
         Map<String, Object> color = ShopifyProductMapper.colorMetafield(e.variant().color());
         if (color != null) {
             fields.add(color);
+        }
+        fields.addAll(ShopifyProductMapper.sizeMetafields(e.variant().size()));
+        Map<String, Object> weight = ShopifyProductMapper.weightMetafield(e.variant());
+        if (weight != null) {
+            fields.add(weight);
         }
         return fields;
     }

@@ -255,14 +255,15 @@ final class ShopifyGraphQL {
      * be right for and cannot be used on: migrated products must never see it (it is declarative over
      * variants). {@code productUpdate} takes media without touching anything else.
      *
-     * <p>The response returns the media it just created with their {@code alt} text, which is how a
-     * variant is then matched to its own image — Shopify rewrites every URL on ingest, so the source
-     * URL cannot be the join.
+     * <p>The response returns the media it just created with their URL, which is how a variant is
+     * then matched to its own image: Shopify rewrites the URL on ingest but <b>keeps the filename</b>
+     * ({@code cm373lb.jpg} stays {@code cm373lb.jpg}), and that survives products whose variants have
+     * no colour to be matched by.
      */
     static final String PRODUCT_ADD_MEDIA = """
             mutation ProductAddMedia($id: ID!, $media: [CreateMediaInput!]) {
               productUpdate(product: {id: $id}, media: $media) {
-                product { id media(first: 100) { nodes { id alt } } }
+                product { id media(first: 100) { nodes { id alt ... on MediaImage { image { url } } } } }
                 userErrors { field message }
               }
             }
@@ -278,12 +279,41 @@ final class ShopifyGraphQL {
             }
             """;
 
+    /**
+     * A product's media with its ingestion status. Shopify downloads an image after the mutation
+     * returns, and a variant cannot be pointed at one until it is {@code READY} — attaching earlier
+     * is refused with "Non-ready media cannot be attached to variants".
+     */
+    static final String PRODUCT_MEDIA_STATUS = """
+            query ProductMedia($id: ID!) {
+              product(id: $id) {
+                media(first: 100) { nodes { id alt status ... on MediaImage { image { url } } } }
+              }
+            }
+            """;
+
     /** Points a variant at one of the product's images. */
     static final String VARIANT_APPEND_MEDIA = """
             mutation VariantAppendMedia($productId: ID!, $variantMedia: [ProductVariantAppendMediaInput!]!) {
               productVariantAppendMedia(productId: $productId, variantMedia: $variantMedia) {
                 productVariants { id }
                 userErrors { field message }
+              }
+            }
+            """;
+
+    /**
+     * Remove product options. Used to undo this app's own doing: a product the supplier sells in one
+     * variant was given Color/Size options with a single value each, which the storefront renders as
+     * a selector with nothing to select. {@code DEFAULT} only deletes an option that has one value,
+     * which is exactly the case here and refuses anything riskier.
+     */
+    static final String PRODUCT_OPTIONS_DELETE = """
+            mutation ProductOptionsDelete($productId: ID!, $options: [ID!]!,
+                                          $strategy: ProductOptionDeleteStrategy) {
+              productOptionsDelete(productId: $productId, options: $options, strategy: $strategy) {
+                deletedOptionsIds
+                userErrors { field message code }
               }
             }
             """;

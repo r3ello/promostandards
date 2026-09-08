@@ -26,7 +26,11 @@ class AuthControllerTest {
 	}
 
 	private static AuthController controller(AuthProperties props) {
-		return new AuthController(new AuthService(props), props);
+		return controller(props, new AuthService(props), EmbeddedTokens.verifier(false));
+	}
+
+	private static AuthController controller(AuthProperties props, AuthService auth, ShopifySessionToken shopify) {
+		return new AuthController(auth, props, new RequestAuthenticator(auth, props, shopify), shopify);
 	}
 
 	@Test
@@ -63,7 +67,7 @@ class AuthControllerTest {
 	void statusReflectsSessionCookie() {
 		AuthProperties props = props();
 		AuthService auth = new AuthService(props);
-		AuthController controller = new AuthController(auth, props);
+		AuthController controller = controller(props, auth, EmbeddedTokens.verifier(false));
 
 		MockHttpServletRequest anonymous = new MockHttpServletRequest();
 		assertThat(controller.status(anonymous)).containsEntry("authenticated", false);
@@ -71,5 +75,23 @@ class AuthControllerTest {
 		MockHttpServletRequest authed = new MockHttpServletRequest();
 		authed.setCookies(new Cookie(props.getCookieName(), auth.issueToken()));
 		assertThat(controller.status(authed)).containsEntry("authenticated", true);
+	}
+
+	/**
+	 * Embedded, the front-end must be told it is already in — nobody types a password into the
+	 * Shopify admin — and that there is nothing to sign out of.
+	 */
+	@Test
+	void statusAcceptsAShopifySessionTokenAndOffersNoSignOut() {
+		AuthProperties props = props();
+		AuthController controller = controller(props, new AuthService(props), EmbeddedTokens.verifier(true));
+
+		MockHttpServletRequest request = new MockHttpServletRequest();
+		request.addHeader("Authorization", "Bearer " + EmbeddedTokens.valid());
+
+		assertThat(controller.status(request))
+				.containsEntry("authenticated", true)
+				.containsEntry("embedded", true)
+				.containsEntry("signOut", false);
 	}
 }
