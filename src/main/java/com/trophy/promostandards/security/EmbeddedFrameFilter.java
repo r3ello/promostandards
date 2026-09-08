@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.List;
 
 /**
  * Declares who may put this app in an iframe, which is what lets the Shopify admin render it.
@@ -39,10 +40,15 @@ public class EmbeddedFrameFilter extends OncePerRequestFilter {
 	@Override
 	protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
 			throws ServletException, IOException {
-		String shop = shopify.storeDomain();
-		if (shop != null) {
-			response.setHeader("Content-Security-Policy",
-					"frame-ancestors https://" + shop + " https://admin.shopify.com;");
+		List<String> shops = shopify.storeDomains();
+		if (!shops.isEmpty()) {
+			// Every name the same store answers to: Shopify's generated permanent domain and the one
+			// built from the store's name are both legitimate parents of this frame.
+			StringBuilder policy = new StringBuilder("frame-ancestors");
+			for (String shop : shops) {
+				policy.append(" https://").append(shop);
+			}
+			response.setHeader("Content-Security-Policy", policy.append(" https://admin.shopify.com;").toString());
 		}
 		chain.doFilter(request, response);
 	}

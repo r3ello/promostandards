@@ -53,6 +53,14 @@ admin fuera de esas, el camino sería crear la del Partner Dashboard, no tocar c
 
 ### 2. Variables de entorno en el servidor
 
+**Ojo con el dominio de la tienda.** Shopify le da a cada tienda un `*.myshopify.com` **generado**
+(`wy2ena-jf.myshopify.com`) además del que sale de su nombre (`trophy-partner.myshopify.com`). La
+Admin API responde por los dos — por eso llevas semanas sincronizando por el segundo sin enterarte —
+pero **el session token siempre lleva el generado**, así que hay que aceptarlo también. Va en
+`SHOPIFY_EMBEDDED_SHOP_DOMAINS` (lista separada por comas), **no** en `SHOPIFY_STORE_DOMAIN`, que es
+el que usan todas las llamadas de sync. El perfil `prod` ya trae `wy2ena-jf.myshopify.com` por
+defecto.
+
 ```sh
 SHOPIFY_EMBEDDED=true            # ya viene a true en el perfil prod; ponlo a false para desactivarlo
 SHOPIFY_STORE_DOMAIN=trophypartner.myshopify.com
@@ -98,7 +106,7 @@ también en el log (`WARN Shopify session token refused: …`). Los mensajes y l
 | *no Authorization header reached the app* | El token se emitió pero no llegó: **casi siempre el `auth_basic` de nginx**. |
 | *the Authorization header is not a Bearer token* | Lo mismo, confirmado: el proxy está metiendo su propio `Basic`. |
 | *bad signature* | El `SHOPIFY_CLIENT_SECRET` del servidor no es el de la app que abrió el admin. |
-| *the token is for https://X but this server is configured for https://Y* | `SHOPIFY_STORE_DOMAIN` no coincide con la tienda desde la que se abre. |
+| *the token is for https://X but this server accepts https://Y* | Casi siempre **la misma tienda con su otro nombre** — ver abajo. Añade X a `SHOPIFY_EMBEDDED_SHOP_DOMAINS`. |
 | *the token was minted for app Z* | `SHOPIFY_CLIENT_ID` es de otra app. |
 | *the token expired Ns ago — check the server's clock* | Reloj del servidor desincronizado (los tokens duran ~1 min). |
 | *Something in front of the app answered 401 instead of the app* | nginx contestó antes de llegar a la app. |
