@@ -2,6 +2,14 @@ spring:
   application:
     name: promostandards
 
+  # The scheduled sync jobs share this pool. It must be > 1: Spring's default is a SINGLE thread,
+  # and the inventory pass takes the better part of an hour — on one thread the order sync (every
+  # 15 min, the job that ships tracking numbers to customers) simply waits behind it.
+  task:
+    scheduling:
+      pool:
+        size: 4
+
   # ---------------------------------------------------------------------------
   # Postgres (opt-in, see sync.persistence.enabled below)
   #
@@ -267,7 +275,11 @@ sync:
     map-floor: ${SYNC_PRICING_MAP_FLOOR:true}          # never price below the supplier list price
   schedule:
     enabled: false                   # master switch for all scheduled jobs
-    inventory-cron: "0 0/30 * * * *" # every 30 min
+    # Every 2 h, not every 30 min: a pass reads the supplier once per imported product it still
+    # sells (~700 of them), which takes longer than 30 minutes — a cron that cannot finish before it
+    # fires again is a queue, not a schedule. Stock that moves faster than this is what the manual
+    # "Sync" button on a row is for.
+    inventory-cron: "0 0 0/2 * * *"  # every 2 hours
     price-cron: "0 0 3 * * *"        # daily at 03:00
     order-cron: "0 0/15 * * * *"     # every 15 min
     # Evaluate every product and log what WOULD be pushed, without writing to Shopify. Turn this on

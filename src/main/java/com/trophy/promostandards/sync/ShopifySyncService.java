@@ -318,7 +318,21 @@ public class ShopifySyncService {
                 return new RefreshResult(productId, kind, Outcome.BACKING_OFF, 0, null);
             }
 
-            SupplierProduct product = catalog.aggregate(productId);
+            SupplierProduct product;
+            try {
+                product = catalog.aggregate(productId);
+            } catch (RuntimeException e) {
+                // A supplier that cannot answer for this id is a failure like any other, and has to
+                // be recorded as one: the store covers ids PaceSetter has stopped selling, and
+                // without a backoff every one of them is re-read on every single pass, forever.
+                if (store != null) {
+                    store.recordFailure(productId, kind, e.getMessage());
+                }
+                if (force) {
+                    throw e;    // a person asked for this one; surface the failure to them
+                }
+                return new RefreshResult(productId, kind, Outcome.FAILED, 0, e.getMessage());
+            }
             String digest = kind == Kind.PRICE
                     ? SyncDigest.forPrices(product, pricingPolicy, props.currency())
                     : SyncDigest.forInventory(product, shopify.locationId());

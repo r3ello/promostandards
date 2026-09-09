@@ -42,6 +42,22 @@ class SyncApiTest {
     @MockitoBean
     private MetafieldCatalogService metafieldCatalog;
 
+    /** The console (and the server, which has no terminal) reads the automation's state here. */
+    @Test
+    void reportsTheScheduleState() throws Exception {
+        mockMvc.perform(get("/api/sync/schedule"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.enabled").value(false))
+                .andExpect(jsonPath("$.crons.inventory").exists());
+    }
+
+    /** An unknown kind is the caller's mistake, not an upstream failure. */
+    @Test
+    void refusesAnUnknownRefreshKind() throws Exception {
+        mockMvc.perform(post("/api/sync/schedule/colours"))
+                .andExpect(status().isBadRequest());
+    }
+
     @Test
     void importProductReturnsResult() throws Exception {
         when(sync.importProduct(eq("SAMPLE-001"), any())).thenReturn(

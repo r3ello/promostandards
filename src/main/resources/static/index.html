@@ -76,6 +76,35 @@
 	</header>
 
 	<main class="page" id="appMain" hidden>
+		<!-- Scheduled sync: what runs unattended, what it is doing, and a way to try one pass.
+		     Hidden until GET /api/sync/schedule answers, so an older backend simply shows nothing. -->
+		<section class="card card--sched" id="scheduleCard" hidden>
+			<div class="card__head">
+				<div>
+					<h2 class="card__title">Scheduled sync</h2>
+					<p class="card__sub" id="scheduleMeta">Checking…</p>
+				</div>
+				<div class="card__actions">
+					<button class="btn btn--sm" id="scheduleReload" title="Refresh">↻</button>
+				</div>
+			</div>
+
+			<div class="table-wrap">
+				<table class="index-table" id="scheduleTable">
+					<thead>
+						<tr>
+							<th>Job</th>
+							<th>Runs</th>
+							<th>Last pass</th>
+							<th>Result</th>
+							<th class="col-actions">Actions</th>
+						</tr>
+					</thead>
+					<tbody id="scheduleBody"></tbody>
+				</table>
+			</div>
+		</section>
+
 		<section class="card">
 			<!-- Card header + toolbar -->
 			<div class="card__head">

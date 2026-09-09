@@ -40,9 +40,11 @@ python tools/sync_store_catalog.py --only-sellable --base http://localhost:8080 
     --timeout 600 --report <scratchpad>/sync-run-N.jsonl
 ```
 
-* **Always `--only-sellable`.** The store holds ~298 tagged products but PaceSetter only serves ~81
-  of them; without the flag the other 217 fail instantly with `getProduct returned no product` and
-  the report is a wall of noise. See `informe-ids-huerfanos.html` for why they are dead.
+* **Always `--only-sellable`.** The store holds ~1,043 tagged products covering 2,311 supplier ids,
+  and PaceSetter still serves 724 of those ids — only ~473 products have one (measured 2026-09-09).
+  Without the flag the rest fail instantly with `getProduct returned no product` and the report is a
+  wall of noise. See `informe-ids-huerfanos.html` for why they are dead. (The scheduled refreshes
+  apply the same filter themselves, from the cached sellable list.)
 * **Use a fresh report file per pass**, and `--skip-done <same file>` only to resume an interrupted
   one. A finished report skips everything, which looks like a no-op run.
 * Run it with `run_in_background` (~15-25 min) and watch it with a Monitor whose filter is

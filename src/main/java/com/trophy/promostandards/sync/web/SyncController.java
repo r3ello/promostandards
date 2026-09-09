@@ -1,5 +1,6 @@
 package com.trophy.promostandards.sync.web;
 
+import com.trophy.promostandards.db.SyncStateStore;
 import com.trophy.promostandards.discount.DiscountSyncService;
 import com.trophy.promostandards.discount.DiscountSyncService.DiscountResult;
 import com.trophy.promostandards.sync.MetafieldCatalogService;
@@ -8,6 +9,7 @@ import com.trophy.promostandards.sync.OrderSyncService.OrderSyncResult;
 import com.trophy.promostandards.sync.ShopifySyncService;
 import com.trophy.promostandards.sync.ShopifySyncService.SyncResult;
 import com.trophy.promostandards.sync.SyncProperties;
+import com.trophy.promostandards.sync.SyncScheduler;
 import com.trophy.promostandards.sync.model.MetafieldDefinitionView;
 import com.trophy.promostandards.sync.model.MetafieldSample;
 import org.slf4j.Logger;
@@ -41,13 +43,54 @@ public class SyncController {
     private final OrderSyncService orderSync;
     private final MetafieldCatalogService metafieldCatalog;
     private final DiscountSyncService discounts;
+    private final SyncScheduler scheduler;
 
     public SyncController(ShopifySyncService sync, OrderSyncService orderSync,
-                          MetafieldCatalogService metafieldCatalog, DiscountSyncService discounts) {
+                          MetafieldCatalogService metafieldCatalog, DiscountSyncService discounts,
+                          SyncScheduler scheduler) {
         this.sync = sync;
         this.orderSync = orderSync;
         this.metafieldCatalog = metafieldCatalog;
         this.discounts = discounts;
+        this.scheduler = scheduler;
+    }
+
+    /**
+     * Whether the unattended refresh is on, and what its last pass did.
+     *
+     * <p>The one way to answer "is this actually running?" without a terminal: on the server the log
+     * lives inside the container, and a pass that is still walking the catalog has written neither a
+     * log summary nor a {@code sync_run} row yet.
+     */
+    @GetMapping("/schedule")
+    public SyncScheduler.ScheduleStatus schedule() {
+        return scheduler.status();
+    }
+
+    /**
+     * Starts one refresh pass now, in the background, without waiting for its cron — and without
+     * needing the cron jobs switched on at all.
+     *
+     * <p>How the automation is proven before it is trusted: {@code ?dryRun=true} walks the whole
+     * catalog, writes nothing to Shopify, and leaves in {@code GET /schedule} both what it would
+     * have pushed and how long it took. The response returns immediately; a pass outlives any
+     * request.
+     *
+     * @param kind {@code inventory} or {@code price}
+     */
+    @PostMapping("/schedule/{kind}")
+    public SyncScheduler.ScheduleStatus runPass(@PathVariable String kind,
+                                                @RequestParam(defaultValue = "false") boolean dryRun) {
+        return scheduler.runNow(kindOf(kind), dryRun);
+    }
+
+    private static SyncStateStore.Kind kindOf(String kind) {
+        for (SyncStateStore.Kind candidate : SyncStateStore.Kind.values()) {
+            if (candidate.value().equalsIgnoreCase(kind) || candidate.name().equalsIgnoreCase(kind)) {
+                return candidate;
+            }
+        }
+        throw new IllegalArgumentException("Unknown refresh kind '" + kind + "': expected inventory or price");
     }
 
     /** List the store's existing product metafield definitions so the UI can offer them at import. */

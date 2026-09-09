@@ -159,6 +159,7 @@ async function bootstrap() {
 	} else {
 		showApp();
 		loadCatalog();
+		loadSchedule();
 	}
 }
 
@@ -188,6 +189,7 @@ async function doLogin(ev) {
 		el('loginPass').value = '';
 		showApp();
 		loadCatalog();
+		loadSchedule();
 	} catch (e) {
 		err.textContent = 'Could not reach the server. Please try again.';
 		err.hidden = false;
@@ -1141,4 +1143,150 @@ document.addEventListener('click', async (e) => {
 		applyDiscountResult(pid, r);
 	} catch (err) { toast(err.message, true); }
 	finally { btn.disabled = false; btn.innerHTML = label; }
+});
+
+// --- scheduled sync -----------------------------------------------------
+// The unattended half of the app: cron jobs that re-read the supplier and push only what changed.
+// Two things this panel exists for. One, a pass in flight writes neither a log line nor a database
+// row until it ends, so "is it running?" is otherwise unanswerable — `running` comes straight from
+// the scheduler. Two, a pass can be started here (dry, by default), which is how the automation gets
+// proven before it is trusted to run on its own.
+const SCHED_JOBS = {
+	inventory: { label: 'Inventory', note: 'stock levels of every imported product', runnable: true },
+	price: { label: 'Prices', note: 'retail prices, and the discount ladder of anything that moved', runnable: true },
+	orders: { label: 'Orders', note: 'shipment status and tracking back to Shopify', runnable: false },
+};
+const SCHED_POLL_MS = 5000;
+let schedPollTimer = null;
+
+/** Cron as a person reads it. Falls back to the expression itself rather than guessing wrong. */
+function cronText(expr) {
+	if (!expr) return '—';
+	const m = String(expr).trim().split(/\s+/);
+	if (m.length !== 6) return expr;
+	const [, min, hour, dom, mon] = m;
+	if (/^0\/(\d+)$/.test(min) && hour === '*') return `every ${min.split('/')[1]} min`;
+	if (min === '0' && /^0\/(\d+)$/.test(hour)) return `every ${hour.split('/')[1]} h`;
+	if (/^\d+$/.test(min) && /^\d+$/.test(hour) && dom === '*' && mon === '*') {
+		return `daily at ${String(hour).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+	}
+	return expr;
+}
+
+const SCHED_OUTCOME_TONE = {
+	PUSHED: 'success', UNCHANGED: 'neutral', WOULD_PUSH: 'caution',
+	BACKING_OFF: 'caution', FAILED: 'critical', STATE_UNAVAILABLE: 'critical',
+};
+
+function schedAgo(iso) {
+	const then = Date.parse(iso);
+	if (!then) return '—';
+	const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
+	if (secs < 60) return 'just now';
+	if (secs < 3600) return `${Math.round(secs / 60)} min ago`;
+	if (secs < 86400) return `${Math.round(secs / 3600)} h ago`;
+	return `${Math.round(secs / 86400)} d ago`;
+}
+
+function schedDuration(seconds) {
+	if (seconds === null || seconds === undefined) return '';
+	if (seconds < 60) return `${seconds}s`;
+	const mins = Math.round(seconds / 60);
+	return mins < 60 ? `${mins} min` : `${(mins / 60).toFixed(1)} h`;
+}
+
+function schedResultHtml(job) {
+	if (!job) return '<span class="muted">never run</span>';
+	const entries = Object.entries(job.outcomes || {});
+	if (!entries.length) return job.running ? '<span class="muted">starting…</span>' : '<span class="muted">nothing to do</span>';
+	const badges = entries
+		.sort((a, b) => b[1] - a[1])
+		.map(([outcome, count]) =>
+			`<span class="badge badge--${SCHED_OUTCOME_TONE[outcome] || 'neutral'}">${count} ${esc(outcome.toLowerCase().replace('_', ' '))}</span>`)
+		.join(' ');
+	const written = job.variantsWritten ? ` <span class="muted">· ${job.variantsWritten} variants written</span>` : '';
+	return badges + written;
+}
+
+function schedRowHtml(name, status, job) {
+	const meta = SCHED_JOBS[name] || { label: name, note: '', runnable: false };
+	const cron = cronText((status.crons || {})[name]);
+	const last = !job ? '<span class="muted">—</span>'
+		: job.running ? `<span class="sched-running"><span class="spinner"></span> running · ${esc(schedDuration(Math.round((Date.now() - Date.parse(job.startedAt)) / 1000)))}</span>`
+			: `${esc(schedAgo(job.startedAt))} <span class="muted">· ${esc(schedDuration(job.seconds))} · ${job.products} products</span>`;
+	const actions = meta.runnable
+		? `<div class="row-actions">
+			<button class="btn btn--sm" data-sched-run="${esc(name)}" data-sched-dry="true"${job && job.running ? ' disabled' : ''}>Dry run</button>
+			<button class="btn btn--sm" data-sched-run="${esc(name)}"${job && job.running ? ' disabled' : ''}>Run now</button>
+		</div>`
+		: '<span class="muted">on schedule only</span>';
+	return `<tr>
+		<td><div class="prod-name">${esc(meta.label)}</div><div class="muted">${esc(meta.note)}</div></td>
+		<td>${esc(cron)}</td>
+		<td>${last}</td>
+		<td>${schedResultHtml(job)}</td>
+		<td class="col-actions">${actions}</td>
+	</tr>`;
+}
+
+function renderSchedule(status) {
+	const jobs = new Map((status.jobs || []).map((j) => [j.job, j]));
+	const names = Object.keys(status.crons || {});
+	el('scheduleBody').innerHTML = names.map((name) => schedRowHtml(name, status, jobs.get(name))).join('')
+		|| `<tr class="row-state"><td colspan="5"><div class="state">No jobs configured.</div></td></tr>`;
+
+	const state = status.enabled
+		? `<span class="badge badge--success">on</span>`
+		: `<span class="badge badge--neutral">off</span>`;
+	const dry = status.dryRun ? ` <span class="badge badge--caution">dry run — nothing is written</span>` : '';
+	const hint = status.enabled
+		? 'Jobs run on their own schedule; each pass pushes only what changed since the last one.'
+		: 'The cron jobs are off. You can still start a single pass here.';
+	el('scheduleMeta').innerHTML = `${state}${dry} <span class="muted">${esc(hint)}</span>`;
+	el('scheduleCard').hidden = false;
+
+	// A pass writes nothing anywhere until it ends, so while one runs this panel is the only place
+	// its progress shows. Poll only then — an idle scheduler needs no traffic.
+	clearTimeout(schedPollTimer);
+	if ((status.jobs || []).some((j) => j.running)) {
+		schedPollTimer = setTimeout(loadSchedule, SCHED_POLL_MS);
+	}
+}
+
+async function loadSchedule() {
+	try {
+		const status = await api('/api/sync/schedule');
+		if (status) renderSchedule(status);
+	} catch (e) {
+		// An older backend has no such endpoint: leave the panel hidden rather than showing an error
+		// on a console whose main job (the catalog) is working fine.
+		clearTimeout(schedPollTimer);
+	}
+}
+
+async function runSchedulePass(kind, dryRun, btn) {
+	const label = SCHED_JOBS[kind] ? SCHED_JOBS[kind].label.toLowerCase() : kind;
+	if (!dryRun && !window.confirm(
+		`Run the ${label} pass now?\n\nIt reads every imported product from the supplier and writes what changed to Shopify. This can take the better part of an hour.`)) {
+		return;
+	}
+	const original = btn.innerHTML;
+	btn.disabled = true; btn.innerHTML = `<span class="spinner"></span>`;
+	try {
+		const status = await api(`/api/sync/schedule/${encodeURIComponent(kind)}?dryRun=${dryRun}`, 'POST');
+		toast(`Started the ${label} pass${dryRun ? ' (dry run — nothing will be written)' : ''}`);
+		if (status) renderSchedule(status);
+		// The pass is submitted, not started, when the call returns; look again once it has begun.
+		clearTimeout(schedPollTimer);
+		schedPollTimer = setTimeout(loadSchedule, 1500);
+	} catch (e) {
+		toast(e.message, true);
+		btn.innerHTML = original; btn.disabled = false;
+	}
+}
+
+el('scheduleReload').addEventListener('click', loadSchedule);
+el('scheduleBody').addEventListener('click', (ev) => {
+	const btn = ev.target.closest('[data-sched-run]');
+	if (btn) runSchedulePass(btn.dataset.schedRun, btn.dataset.schedDry === 'true', btn);
 });

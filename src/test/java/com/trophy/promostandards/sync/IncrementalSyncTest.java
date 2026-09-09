@@ -1,6 +1,7 @@
 package com.trophy.promostandards.sync;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.trophy.promostandards.common.PromoStandardsClientException;
 import com.trophy.promostandards.db.SyncStateStore;
 import com.trophy.promostandards.db.SyncStateStore.Kind;
 import com.trophy.promostandards.discount.DiscountProperties;
@@ -47,6 +48,8 @@ class IncrementalSyncTest {
     private final List<String> operations = new ArrayList<>();
     private RecordingSyncStateStore state;
     private boolean shopifyFails;
+    /** Models the supplier having no record of the product — the id was discontinued. */
+    private boolean supplierFails;
     /** Payload of the last productVariantsBulkUpdate, so the pushed price can be asserted. */
     private Object variantsUpdateVariables;
 
@@ -55,6 +58,7 @@ class IncrementalSyncTest {
         state = new RecordingSyncStateStore();
         operations.clear();
         shopifyFails = false;
+        supplierFails = false;
     }
 
     /** In-memory sync state; {@code failing} models the database being unreachable. */
@@ -154,7 +158,12 @@ class IncrementalSyncTest {
                 new SyncProperties.Schedule(false, "-", "-", "-", false), List.of(), null);
         PricingPolicy policy = new PricingPolicy(props);
         CatalogService catalog = mock(CatalogService.class);
-        when(catalog.aggregate("SAMPLE-001")).thenReturn(product);
+        if (supplierFails) {
+            when(catalog.aggregate("SAMPLE-001"))
+                    .thenThrow(new PromoStandardsClientException("getProduct returned no product"));
+        } else {
+            when(catalog.aggregate("SAMPLE-001")).thenReturn(product);
+        }
 
         return new ShopifySyncService(gql, catalog,
                 new ShopifyProductMapper(props, policy, new ObjectMapper(), shopify),
@@ -265,6 +274,38 @@ class IncrementalSyncTest {
         // at the front of every run.
         assertThat(service.refresh("SAMPLE-001", Kind.INVENTORY, false, false).outcome())
                 .isEqualTo(Outcome.BACKING_OFF);
+    }
+
+    /**
+     * A supplier that has no record of the id is a failure that must be <em>recorded</em>, not one
+     * that escapes the refresh.
+     *
+     * <p>The store covers thousands of ids PaceSetter has stopped selling. Left unrecorded, each one
+     * is a fresh supplier read on every pass, for ever — the backoff exists precisely so a dead id
+     * costs one call every twelve hours instead of one every run.
+     */
+    @Test
+    void aSupplierThatCannotAnswerBacksOffInsteadOfBeingRetriedEveryPass() {
+        supplierFails = true;
+        ShopifySyncService service = service(product(10));
+
+        RefreshResult failure = service.refresh("SAMPLE-001", Kind.INVENTORY, false, false);
+
+        assertThat(failure.outcome()).isEqualTo(Outcome.FAILED);
+        assertThat(failure.error()).contains("no product");
+        assertThat(operations).isEmpty();   // nothing was asked of Shopify
+        assertThat(service.refresh("SAMPLE-001", Kind.INVENTORY, false, false).outcome())
+                .isEqualTo(Outcome.BACKING_OFF);
+    }
+
+    /** But a person asking for that same product still gets the supplier's error, not a silent skip. */
+    @Test
+    void aManualSyncSurfacesASupplierThatCannotAnswer() {
+        supplierFails = true;
+        ShopifySyncService service = service(product(10));
+
+        assertThatThrownBy(() -> service.syncInventory("SAMPLE-001"))
+                .isInstanceOf(PromoStandardsClientException.class);
     }
 
     /** A person clicking "Sync" means now: neither the digest nor a backoff window should stop it. */
