@@ -14,10 +14,15 @@ import com.trophy.promostandards.sync.model.SupplierProduct;
 import com.trophy.promostandards.sync.model.SupplierProduct.Variant;
 import org.junit.jupiter.api.Test;
 
+import com.trophy.promostandards.common.PromoStandardsClientException;
+
 import java.math.BigDecimal;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.entry;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -102,6 +107,88 @@ class CatalogServicePlaceholderTest {
         SupplierProduct product = catalog.aggregate("C0500");
         assertThat(product.variants()).hasSize(1);
         assertThat(product.variants().get(0).sku()).isEqualTo("C0500");
+    }
+
+    /**
+     * CM330: eight colours, each a part with its own price, every one "N/A" with no size and no
+     * Inventory row. Keyed by (colour, size) they all fell on the same empty key and the store got
+     * one variant instead of eight (2026-09-10). Each part id must stay a variant of its own.
+     */
+    @Test
+    void partsWithoutColourSizeOrInventoryStayDistinct() {
+        ProductDataService productData = mock(ProductDataService.class);
+        PricingService pricing = mock(PricingService.class);
+        InventoryService inventory = mock(InventoryService.class);
+        MediaService media = mock(MediaService.class);
+        String description = "2 1/2\" x 1 1/2\" Leatherette Bottle Opener Keychain; Laser Engraved";
+        when(productData.getProduct(eq("CM330"), any(), any())).thenReturn(new Product(
+                "CM330", "Leatherette Bottle Opener Keychain", description, "NULL", List.of(),
+                List.of(new Product.ProductPart("CM330BS", description, "N/A", List.of(), null, null),
+                        new Product.ProductPart("CM330DB", description, "N/A", List.of(), null, null),
+                        new Product.ProductPart("CM330TL", description, "N/A", List.of(), null, null))));
+        when(pricing.getConfigurationAndPricingWithList(eq("CM330"), any(), any(), any(), any(), any()))
+                .thenReturn(new Configuration("CM330", "USD", "Net", List.of(
+                        price("CM330BS", "10.00"), price("CM330DB", "11.00"), price("CM330TL", "12.00")),
+                        List.of()));
+        when(inventory.getInventoryLevels(eq("CM330"), any()))
+                .thenThrow(new PromoStandardsClientException("ProductID not found"));
+        when(media.getMediaContent(eq("CM330"), any(), any())).thenReturn(List.of());
+
+        SupplierProduct product = new CatalogService(productData, pricing, inventory, media, PROPS)
+                .aggregate("CM330");
+
+        assertThat(product.variants()).extracting(Variant::supplierPartId)
+                .containsExactly("CM330BS", "CM330DB", "CM330TL");
+        assertThat(product.variants()).extracting(v -> v.supplierNet().toPlainString())
+                .containsExactly("10.00", "11.00", "12.00");
+        // One description for all three says nothing: no label, and no colour invented either.
+        assertThat(product.variants()).allSatisfy(v -> {
+            assertThat(v.color()).isNull();
+            assertThat(v.label()).isNull();
+        });
+        // So the store shows the part codes.
+        assertThat(VariantOptions.colorLabels(product.variants())).containsExactly("BS", "DB", "TL");
+    }
+
+    /** Where descriptions do differ, the words that differ are the name: a colour, a size, a finish. */
+    @Test
+    void namesPartsByWhatTheirDescriptionsDoNotShare() {
+        Map<String, String> tumblers = new LinkedHashMap<>();
+        tumblers.put("CM711BK", "3 3/8\" x 6 7/8\" Polar Camel 20 oz. Ringneck Tumbler; Black; Laser Engraved; Gift Personalizations $4.00(V)");
+        tumblers.put("CM711BL", "3 3/8\" x 6 7/8\" Polar Camel 20 oz. Ringneck Tumbler; Blue; Laser Engraved; Gift Personalizations $4.00(V)");
+        tumblers.put("CM711DB", "3 3/8\" x 6 7/8\" Polar Camel 20 oz. Ringneck Tumbler; Dark Blue; Laser Engraved; Gift Personalizations $4.00(V)");
+        tumblers.put("CM711BKRG", "Polar Camel 20 oz. Ringneck Tumbler Black/Rose Gold-Laser Imprint");
+        assertThat(CatalogService.distinguishingLabels(tumblers)).containsExactly(
+                entry("CM711BK", "Black"), entry("CM711BL", "Blue"), entry("CM711DB", "Dark Blue"),
+                entry("CM711BKRG", "Black/Rose Gold-Laser Imprint"));
+
+        Map<String, String> towers = new LinkedHashMap<>();
+        towers.put("GM792A", "2 1/2\" x 7 3/4\" x 2 1/2\" Tower of Facets, Small  Sandblasting; Free Personal");
+        towers.put("GM792B", "2 3/4\" x 8 1/4\" x 2 3/4\" Tower of Facets, Med  Sandblasting; Free Personal");
+        towers.put("GM792C", "2 3/4\" x 9 1/4\" x 2 3/4\" Tower of Facets, Large  Sandblasting; Free Personal");
+        assertThat(CatalogService.distinguishingLabels(towers)).containsExactly(
+                entry("GM792A", "Small"), entry("GM792B", "Med"), entry("GM792C", "Large"));
+
+        Map<String, String> plaques = new LinkedHashMap<>();
+        plaques.put("C021ABEF", "8\" x 10\" Ebony Finish Plaque with Marble Mist; Laser Engraved");
+        plaques.put("C021ABWF", "8\" x 10\" Walnut Finish Plaque with Marble Mist; Laser Engraved");
+        assertThat(CatalogService.distinguishingLabels(plaques)).containsExactly(
+                entry("C021ABEF", "Ebony"), entry("C021ABWF", "Walnut"));
+
+        assertThat(CatalogService.distinguishingLabels(Map.of("CM330BS", "Same words", "CM330DB", "Same words")))
+                .isEmpty();
+
+        // What differs is a whole phrase (C071A): that is a description, not a name — the code is
+        // clearer. And punctuation ("#", "-") is never a word of a name.
+        Map<String, String> boards = new LinkedHashMap<>();
+        boards.put("C071AGOEF", "Florentine # Gold Edge Plate on Ebony Board");
+        boards.put("C071ASWF", "Florentine - Silver");
+        assertThat(CatalogService.distinguishingLabels(boards)).containsExactly(entry("C071ASWF", "Silver"));
+    }
+
+    private static Configuration.PartPrice price(String partId, String amount) {
+        return new Configuration.PartPrice(partId, partId, List.of(
+                new Configuration.PriceBreak(1, new BigDecimal(amount), null, "EA")));
     }
 
     /**

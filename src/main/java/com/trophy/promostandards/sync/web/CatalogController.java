@@ -4,6 +4,8 @@ import com.trophy.promostandards.db.CatalogQuery;
 import com.trophy.promostandards.sync.CatalogGroupIndex;
 import com.trophy.promostandards.sync.CatalogSummaryService;
 import com.trophy.promostandards.sync.CatalogTitleIndex;
+import com.trophy.promostandards.sync.PendingDataIndex;
+import com.trophy.promostandards.sync.model.PendingDataView;
 import com.trophy.promostandards.sync.model.CatalogEntry;
 import com.trophy.promostandards.sync.model.CatalogGroupView;
 import com.trophy.promostandards.sync.model.CatalogTitleView;
@@ -30,12 +32,14 @@ public class CatalogController {
     private final CatalogSummaryService summaries;
     private final CatalogGroupIndex groupIndex;
     private final CatalogTitleIndex titleIndex;
+    private final PendingDataIndex pendingData;
 
     public CatalogController(CatalogSummaryService summaries, CatalogGroupIndex groupIndex,
-                             CatalogTitleIndex titleIndex) {
+                             CatalogTitleIndex titleIndex, PendingDataIndex pendingData) {
         this.summaries = summaries;
         this.groupIndex = groupIndex;
         this.titleIndex = titleIndex;
+        this.pendingData = pendingData;
     }
 
     /** Cheap list: one entry (id + imported flag) per discoverable product. */
@@ -113,5 +117,21 @@ public class CatalogController {
     @PostMapping("/product-titles/refresh")
     public CatalogTitleView refreshProductTitles() {
         return titleIndex.refresh();
+    }
+
+    /**
+     * The catalog ids whose Inventory service answers nothing — not ready to import, so the console
+     * keeps them out of "Not imported" and lists them under "Pending data". Builds in the background
+     * like the title index: the first call may return {@code status=building}; poll until ready.
+     */
+    @GetMapping("/pending-data")
+    public PendingDataView pendingData() {
+        return pendingData.view();
+    }
+
+    /** Force a rebuild of the pending-data index in the background. */
+    @PostMapping("/pending-data/refresh")
+    public PendingDataView refreshPendingData() {
+        return pendingData.refresh();
     }
 }

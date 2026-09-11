@@ -26,6 +26,9 @@ let pageSize = 25;
 // When on, sibling product ids the supplier split by size (linked via Common Grouping) collapse
 // into one row; the group index comes from GET /api/catalog/product-groups (cached server-side).
 let grouping = false;
+// Whether an import may create a product the store does not carry (sync.create-products.enabled).
+// Assumed off until the server says otherwise: the console must never offer a create it refuses.
+let canCreateProducts = false;
 let primaryOf = new Map();       // memberId -> primaryId (present only for grouped ids)
 let membersOf = new Map();       // primaryId -> [memberIds...] (sorted, includes the primary)
 let groupPollTimer = null;
@@ -158,7 +161,7 @@ async function bootstrap() {
 		showLogin(status.tokenError);
 	} else {
 		showApp();
-		loadCatalog();
+		loadSettings().then(loadCatalog);
 		loadSchedule();
 	}
 }
@@ -188,7 +191,7 @@ async function doLogin(ev) {
 		canSignOut = true;
 		el('loginPass').value = '';
 		showApp();
-		loadCatalog();
+		loadSettings().then(loadCatalog);
 		loadSchedule();
 	} catch (e) {
 		err.textContent = 'Could not reach the server. Please try again.';
@@ -252,6 +255,7 @@ async function loadCatalog() {
 		updateShopifyStatus();
 		renderTable();
 		ensureTitles();
+		ensurePendingData();
 		if (grouping) ensureGroups();
 	} catch (e) {
 		body.innerHTML = `<tr class="row-state"><td colspan="9"><div class="state state--err">⚠ ${esc(e.message)}</div></td></tr>`;
@@ -292,6 +296,39 @@ function scheduleTitlePoll() {
 			if (v.status === 'building') scheduleTitlePoll(); else renderTable({ enrich: false });
 		} catch (e) { /* stop polling on error */ }
 	}, 2500);
+}
+
+// --- pending data ------------------------------------------------------
+// Ids PaceSetter has no inventory data for ("No data"): not ready to import. The table only loads
+// the visible page's detail, so this comes from a catalog-wide index built in the background — and
+// a row whose loaded detail shows no data counts too, so the two can never disagree on screen.
+let pendingIds = new Set();
+let pendingPollTimer = null;
+
+async function ensurePendingData() {
+	try {
+		const v = await api('/api/catalog/pending-data');
+		pendingIds = new Set(v && v.productIds || []);
+		if (v && v.status === 'building') schedulePendingPoll(); else renderTable({ enrich: false });
+	} catch (e) {
+		/* an enrichment: without it only rows with loaded detail can be told apart */
+	}
+}
+
+function schedulePendingPoll() {
+	clearTimeout(pendingPollTimer);
+	pendingPollTimer = setTimeout(ensurePendingData, 5000);
+}
+
+function hasNoInventoryData(d) {
+	if (!d) return false;
+	const s = stockCounts(d);
+	return !s || (s.inStock + s.low + s.out) === 0;
+}
+
+/** Not imported, and nothing to publish as stock: waiting for the supplier, not for a click. */
+function isPending(e) {
+	return e.imported !== true && (pendingIds.has(e.productId) || hasNoInventoryData(e.detail));
 }
 
 // --- group index -------------------------------------------------------
@@ -351,7 +388,8 @@ function filtered() {
 			if (!hay.includes(q)) return false;
 		}
 		if (statusFilter === 'imported') return e.imported === true;
-		if (statusFilter === 'not-imported') return e.imported !== true;
+		if (statusFilter === 'not-imported') return e.imported !== true && !isPending(e);
+		if (statusFilter === 'pending') return isPending(e);
 		if (statusFilter === 'low') { const s = stockCounts(e.detail); return s && (s.low + s.out) > 0; }
 		return true;
 	});
@@ -440,6 +478,9 @@ function actionsHtml(e) {
 					</div>
 				</div>
 			</div>`;
+	}
+	if (!canCreateProducts) {
+		return `<div class="row-actions"><span class="muted" title="No store product carries this PaceSetter id. The sync only updates products already in Shopify.">Not in store</span></div>`;
 	}
 	return `<div class="row-actions"><button class="btn btn--primary btn--sm" data-act="add" data-pid="${pid}">Add to Shopify</button></div>`;
 }
@@ -1250,6 +1291,16 @@ function renderSchedule(status) {
 	clearTimeout(schedPollTimer);
 	if ((status.jobs || []).some((j) => j.running)) {
 		schedPollTimer = setTimeout(loadSchedule, SCHED_POLL_MS);
+	}
+}
+
+/** Never throws: a server without the endpoint simply leaves product creation off. */
+async function loadSettings() {
+	try {
+		const settings = await api('/api/sync/settings');
+		canCreateProducts = !!(settings && settings.createProducts);
+	} catch (_) {
+		canCreateProducts = false;
 	}
 }
 

@@ -220,6 +220,15 @@ sync:
     attach-to-variants: ${SYNC_IMAGES_PER_VARIANT:true}
 
   # ---------------------------------------------------------------------------
+  # Creating products. The store's catalogue is the migration's: the sync UPDATES the products
+  # Matrixify brought in (matched on custom.ps_product_id / ps_product_ids) and never adds one. A
+  # PaceSetter id no store product lists is refused with a 409 — nothing is read, nothing written.
+  # true = the old behaviour: such an import creates ps-<supplier>-<id>.
+  # ---------------------------------------------------------------------------
+  create-products:
+    enabled: ${SYNC_CREATE_PRODUCTS:false}
+
+  # ---------------------------------------------------------------------------
   # Postgres persistence master switch.
   #
   # false (default) = today's behaviour exactly: catalog indexes in memory + data/*.json, and the
@@ -307,6 +316,14 @@ sync:
     enabled: true                    # false = search matches product ids only
     cache-file: data/catalog-titles.json
     ttl: 24h
+
+  # Ids whose Inventory service answers nothing ("No data" in the console): not ready to import, so
+  # the console keeps them out of "Not imported" and lists them under "Pending data". One throttled
+  # getInventoryLevels per sellable id (~1 min for ~1,300), built on demand, cached and persisted.
+  pending-data:
+    enabled: true
+    cache-file: data/pending-data.json
+    ttl: 6h
 
   # "Group variants" index for the console table: collapses sibling product ids (one product the
   # supplier split across ids, e.g. one per size) into one row, keyed on Common Grouping related

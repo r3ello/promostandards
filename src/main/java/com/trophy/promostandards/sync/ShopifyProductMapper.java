@@ -125,7 +125,12 @@ public class ShopifyProductMapper {
         if (withSku) {
             item.put("sku", v.sku());
         }
-        item.put("tracked", true);
+        // Tracking is switched on only when the supplier gives a quantity to track. A migrated variant
+        // arrives untracked, which is what keeps it sellable; switching tracking on with nothing to
+        // put in it left 20 products at 0 and sold out (2026-09-10). Absent = leave it as it is.
+        if (v.onHand() != null) {
+            item.put("tracked", true);
+        }
         String unit = weightUnit(v.weightUom());
         if (v.weight() != null && v.weight().signum() > 0 && unit != null) {
             item.put("measurement", Map.of("weight",

@@ -169,7 +169,7 @@ class IncrementalSyncTest {
                 new ShopifyProductMapper(props, policy, new ObjectMapper(), shopify),
                 policy, shopify, props, new ObjectMapper(), providerOf(state),
                 new DiscountProperties(null, null, null, null),
-                new ImageProperties(null, null));
+                new ImageProperties(null, null), new ProductCreationProperties(null));
     }
 
     private static SupplierProduct product(int onHand) {
@@ -379,7 +379,7 @@ class IncrementalSyncTest {
                 catalog, new ShopifyProductMapper(props, policy, new ObjectMapper(), shopify),
                 policy, shopify, props, new ObjectMapper(), providerOf(null),
                 new DiscountProperties(null, null, null, null),
-                new ImageProperties(null, null));
+                new ImageProperties(null, null), new ProductCreationProperties(null));
 
         assertThat(service.refresh("SAMPLE-001", Kind.INVENTORY, false, false).outcome())
                 .isEqualTo(Outcome.PUSHED);

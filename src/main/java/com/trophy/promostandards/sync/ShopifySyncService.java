@@ -87,10 +87,14 @@ public class ShopifySyncService {
         }
     }
 
+    private final ProductCreationProperties creation;
+
     public ShopifySyncService(ShopifyGraphQLClient gql, CatalogService catalog, ShopifyProductMapper mapper,
                               PricingPolicy pricingPolicy, ShopifyProperties shopify, SyncProperties props,
                               ObjectMapper objectMapper, ObjectProvider<SyncStateStore> syncStates,
-                              DiscountProperties discounts, ImageProperties images) {
+                              DiscountProperties discounts, ImageProperties images,
+                              ProductCreationProperties creation) {
+        this.creation = creation;
         this.discounts = discounts;
         this.gql = gql;
         this.catalog = catalog;
@@ -139,20 +143,31 @@ public class ShopifySyncService {
         return importProduct(productId, List.of());
     }
 
+    /** @return whether an import may create a product the store does not carry yet. */
+    public boolean canCreateProducts() {
+        return creation.isEnabled();
+    }
+
     /**
      * Create or update the Shopify product for {@code productId}, additionally stamping the
      * user-picked {@code extraMetafields}, then push inventory.
      */
     public SyncResult importProduct(String productId, List<SyncProperties.Metafield> extraMetafields) {
-        SupplierProduct product = catalog.aggregate(productId);
+        // Where the product lives is settled before the supplier is asked anything: with creation
+        // off, an id no store product carries is refused, and that must not cost an aggregate.
         JsonNode existing = findByHandle(mapper.handle(productId));
+        JsonNode foreign = null;
         if (existing == null) {
             // Creating is the irreversible half: a wrong "not in the store" duplicates the product,
             // so this lookup is allowed to pay for a fresh index.
-            JsonNode foreign = findForeign(productId, true);
-            if (foreign != null) {
-                return updateForeignInPlace(productId, product, foreign);
+            foreign = findForeign(productId, true);
+            if (foreign == null && !creation.isEnabled()) {
+                throw new ProductNotInStoreException(productId);
             }
+        }
+        SupplierProduct product = catalog.aggregate(productId);
+        if (foreign != null) {
+            return updateForeignInPlace(productId, product, foreign);
         }
         String existingGid = existing == null ? null : existing.path("id").asText(null);
 

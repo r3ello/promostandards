@@ -170,6 +170,37 @@ class DiscountSyncServiceTest {
         verify(shopifySync).invalidateImportedIndex();
     }
 
+    /**
+     * A supplier product sold in several colours puts its id on every one of them — CM330's eight
+     * colours all carry CM330. The ladder belongs on all of them, not on the first: keeping one
+     * variant per id left seven priced wrong above the first break (2026-09-10).
+     */
+    @Test
+    void writesTheLadderOnEveryVariantOfTheSameId() {
+        supplierHasGi307();
+        storeHasProduct("""
+                {
+                  "id": "gid://shopify/Product/902",
+                  "handle": "p-8782-keychain",
+                  "title": "Leatherette Bottle Opener Keychain",
+                  "variants": { "nodes": [
+                    { "id": "gid://shopify/ProductVariant/81", "sku": "PS10854-BS", "price": "207.99",
+                      "psId": {"value":"GI307"} },
+                    { "id": "gid://shopify/ProductVariant/82", "sku": "PS10854-DB", "price": "207.99",
+                      "psId": {"value":"GI307"} },
+                    { "id": "gid://shopify/ProductVariant/83", "sku": "PS10854-TL", "price": "207.99",
+                      "psId": {"value":"GI307"} }
+                  ]}
+                }""");
+
+        service().sync("GI307");
+
+        verify(shopifySync).setVariantMetafield(eq("gid://shopify/Product/902"),
+                eq(List.of("gid://shopify/ProductVariant/81", "gid://shopify/ProductVariant/82",
+                        "gid://shopify/ProductVariant/83")),
+                eq("trophy_discount"), eq("discount_tiers"), eq("json"), any());
+    }
+
     /** The metafield is configuration: the consuming app names it, and nothing else knows the name. */
     @Test
     void writesIntoTheConfiguredMetafield() {

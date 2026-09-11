@@ -93,6 +93,15 @@ public class SyncController {
         throw new IllegalArgumentException("Unknown refresh kind '" + kind + "': expected inventory or price");
     }
 
+    /**
+     * What the console needs to know before offering an action: {@code createProducts} false means
+     * a supplier id no store product carries cannot be imported, so there is no "Add to Shopify".
+     */
+    @GetMapping("/settings")
+    public Map<String, Object> settings() {
+        return Map.of("createProducts", sync.canCreateProducts());
+    }
+
     /** List the store's existing product metafield definitions so the UI can offer them at import. */
     @GetMapping("/metafield-definitions")
     public List<MetafieldDefinitionView> metafieldDefinitions() {

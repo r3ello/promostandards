@@ -61,4 +61,42 @@ class VariantOptionsTest {
         assertThat(VariantOptions.size(null)).isEqualTo("One Size");
         assertThat(VariantOptions.hasSize(variants)).isFalse();
     }
+
+    /**
+     * A variant PaceSetter gives no colour is named by its description when that says something, and
+     * by its part code when it does not — "BS", never "Default (BS)". Two parts whose descriptions
+     * name the same thing still get told apart by their codes.
+     */
+    @Test
+    void namesUncolouredVariantsByLabelThenByCode() {
+        assertThat(VariantOptions.colorLabels(List.of(
+                uncoloured("CM330BS", null), uncoloured("CM330DB", null))))
+                .containsExactly("BS", "DB");
+        assertThat(VariantOptions.colorLabels(List.of(
+                uncoloured("C021ABEF", "Ebony"), uncoloured("C021AGEF", "Ebony"),
+                uncoloured("C021ABWF", "Walnut"))))
+                .containsExactly("Ebony (BEF)", "Ebony (GEF)", "Walnut");
+    }
+
+    /**
+     * One unnamed part among named ones (CM731: Black, Black/Rose Gold, Blue) takes its code, not
+     * "Default" — but a product with no names at all (one part in several sizes) keeps "Default",
+     * as it always has.
+     */
+    @Test
+    void anUnnamedVariantAmongNamedOnesShowsItsCode() {
+        assertThat(VariantOptions.colorLabels(List.of(
+                new Variant("CM731BK", "Black", null, "CM731BK", null, null, null, List.of(), null, null),
+                uncoloured("CM731BKRG", null),
+                new Variant("CM731CR", "Coral", null, "CM731CR", null, null, null, List.of(), null, null))))
+                .containsExactly("Black", "BKRG", "Coral");
+        assertThat(VariantOptions.colorLabels(List.of(
+                new Variant("SAMPLE-001", null, "S", "SAMPLE-001-S", null, null, null, List.of(), null, null),
+                new Variant("SAMPLE-001", null, "M", "SAMPLE-001-M", null, null, null, List.of(), null, null))))
+                .containsExactly("Default", "Default");
+    }
+
+    private static Variant uncoloured(String partId, String label) {
+        return new Variant(partId, null, null, partId, null, null, null, List.of(), null, null, label);
+    }
 }

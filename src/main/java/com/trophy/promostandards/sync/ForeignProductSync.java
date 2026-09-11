@@ -107,7 +107,8 @@ class ForeignProductSync {
 
         List<String> colorLabels = VariantOptions.colorLabels(union.variants());
         boolean emitSize = VariantOptions.hasSize(union.variants()) || options.containsKey("size");
-        ForeignVariantPlan plan = ForeignVariantPlan.of(union.variants(), colorLabels, emitSize, store);
+        ForeignVariantPlan plan = ForeignVariantPlan.of(union.variants(), colorLabels, emitSize, store,
+                v -> unioned.supplierIdByKey().get(variantKey(v)));
 
         // The store keeps its own numbering: the legacy catalogue's SKU plus what tells the
         // supplier's parts apart. The join back to PaceSetter is the vendor_sku metafield, not this.
@@ -131,7 +132,7 @@ class ForeignProductSync {
         Map<String, String> createdIds = writable && !single
                 ? createMissing(gid, plan, emitSize, skuByPart) : Map.of();
         int inventory = pushInventory(gid, plan, writable);
-        int published = syncMedia(gid, union, storeProduct, plan, createdIds);
+        int published = syncMedia(gid, union, storeProduct, plan, createdIds, skuByPart);
         List<String> added = extendSupplierIds(gid, imported, unioned.discoveredIds());
 
         log.info("Synced foreign product {} -> {}: {} supplier variants ({} created, {} updated, "
@@ -155,18 +156,25 @@ class ForeignProductSync {
         Map<String, Variant> byKey = new LinkedHashMap<>();
         Set<String> authoritative = new LinkedHashSet<>();
         Set<String> known = new LinkedHashSet<>();
+        // Which id each variant was collected under, and which ids answered as products of their own:
+        // together they say what supplier product a variant stands for (see supplierIdByKey below).
+        Map<String, String> sources = new LinkedHashMap<>();
+        Set<String> products = new LinkedHashSet<>();
+        products.add(upper(seed.productId()));
         // Every id's own photo, not just the seed's: PaceSetter serves each colour as a product with
         // one image, so a family's variant photos only exist across these calls. They have to reach
         // the product's gallery or there would be nothing for a variant to be pointed at.
         Set<String> gallery = new LinkedHashSet<>(seed.imageUrls());
         known.add(upper(seed.productId()));
-        collect(byKey, authoritative, seed.productId(), seed.variants());
+        collect(byKey, authoritative, sources, seed.productId(), seed.variants());
         if (imported != null) {
             for (String id : imported.supplierIds()) {
                 if (!known.add(upper(id))) {
                     continue;
                 }
-                aggregateInto(byKey, authoritative, id, seed.productId(), gallery);
+                if (aggregateInto(byKey, authoritative, sources, id, seed.productId(), gallery)) {
+                    products.add(upper(id));
+                }
             }
         }
 
@@ -179,7 +187,8 @@ class ForeignProductSync {
             if (!known.add(upper(partId))) {
                 continue;
             }
-            if (aggregateInto(byKey, authoritative, partId, seed.productId(), gallery)) {
+            if (aggregateInto(byKey, authoritative, sources, partId, seed.productId(), gallery)) {
+                products.add(upper(partId));
                 discovered.add(partId);
             }
         }
@@ -187,19 +196,33 @@ class ForeignProductSync {
         SupplierProduct product = new SupplierProduct(seed.productId(), seed.title(),
                 seed.descriptionHtml(), seed.vendor(), seed.productType(), seed.tags(),
                 List.copyOf(byKey.values()), List.copyOf(gallery), seed.priceParts(), seed.warnings());
-        return new Union(product, List.copyOf(discovered));
+        // A variant stands for its own part id when that id is a supplier product (CM297LB answers as
+        // one), and otherwise for the product it came in with: CM330's eight colours are parts of
+        // CM330 only, and stamping them CM330BS… left the discount ladder, published per supplier
+        // product, with no variant to land on (2026-09-10).
+        Map<String, String> supplierIdByKey = new LinkedHashMap<>();
+        byKey.forEach((key, variant) -> supplierIdByKey.put(key,
+                products.contains(upper(variant.supplierPartId())) ? variant.supplierPartId()
+                        : sources.getOrDefault(key, variant.supplierPartId())));
+        return new Union(product, List.copyOf(discovered), supplierIdByKey);
     }
 
-    /** The union so far, plus the supplier ids it turned up that {@code ps_product_ids} did not list. */
-    private record Union(SupplierProduct product, List<String> discoveredIds) {
+    /**
+     * The union so far, plus the supplier ids it turned up that {@code ps_product_ids} did not list.
+     *
+     * @param supplierIdByKey the supplier product each variant stands for, by (part id, size) key
+     */
+    private record Union(SupplierProduct product, List<String> discoveredIds,
+                         Map<String, String> supplierIdByKey) {
     }
 
     /** @return whether the supplier serves {@code id} as a product of its own. */
-    private boolean aggregateInto(Map<String, Variant> byKey, Set<String> authoritative, String id,
-                                  String forProduct, Set<String> gallery) {
+    private boolean aggregateInto(Map<String, Variant> byKey, Set<String> authoritative,
+                                  Map<String, String> sources, String id, String forProduct,
+                                  Set<String> gallery) {
         try {
             SupplierProduct aggregate = catalog.aggregate(id);
-            collect(byKey, authoritative, id, aggregate.variants());
+            collect(byKey, authoritative, sources, id, aggregate.variants());
             gallery.addAll(aggregate.imageUrls());
             return true;
         } catch (RuntimeException e) {
@@ -221,20 +244,25 @@ class ForeignProductSync {
         return ids;
     }
 
-    private void collect(Map<String, Variant> byKey, Set<String> authoritative, String sourceId,
-                         List<Variant> variants) {
+    private void collect(Map<String, Variant> byKey, Set<String> authoritative, Map<String, String> sources,
+                         String sourceId, List<Variant> variants) {
         for (Variant v : variants) {
             Variant variant = withPartId(v, sourceId);
-            String key = upper(variant.supplierPartId()) + "|" + upper(variant.size());
+            String key = variantKey(variant);
             boolean own = variant.supplierPartId().equalsIgnoreCase(sourceId);
             if (!byKey.containsKey(key) || (own && !authoritative.contains(key))) {
                 // The id's own aggregate carries its own prices; a family-wide copy is the fallback.
                 byKey.put(key, variant);
+                sources.put(key, sourceId);
             }
             if (own) {
                 authoritative.add(key);
             }
         }
+    }
+
+    private static String variantKey(Variant v) {
+        return upper(v.supplierPartId()) + "|" + upper(v.size());
     }
 
     /** A variant the supplier gave no part id for stands for the id it was fetched under. */
@@ -246,7 +274,7 @@ class ForeignProductSync {
                 && v.size() != null && !v.size().isBlank();
         String sku = sized ? sourceId + "-" + v.size() : sourceId;
         return new Variant(sourceId, v.color(), v.size(), sku, v.supplierNet(), v.listPrice(),
-                v.onHand(), v.imageUrls(), v.weight(), v.weightUom());
+                v.onHand(), v.imageUrls(), v.weight(), v.weightUom(), v.label());
     }
 
     // ---------------------------------------------------------------- store side
@@ -452,6 +480,11 @@ class ForeignProductSync {
                 variant.put("price", price.toPlainString());
             }
             Map<String, Object> item = ShopifyProductMapper.inventoryItemInput(e.variant(), false);
+            if (e.variant().onHand() == null) {
+                // A new variant has no state to keep: with no quantity to track it is sold untracked,
+                // like the migrated variant it sits beside.
+                item.put("tracked", false);
+            }
             item.put("sku", storeSku(e, skuByPart));
             variant.put("inventoryItem", item);
             variant.put("metafields", variantMetafields(e));
@@ -504,7 +537,8 @@ class ForeignProductSync {
      * @return how many images were published
      */
     private int syncMedia(String gid, SupplierProduct product, JsonNode storeProduct,
-                          ForeignVariantPlan plan, Map<String, String> createdIds) {
+                          ForeignVariantPlan plan, Map<String, String> createdIds,
+                          Map<String, String> skuByPart) {
         List<String> gallery = product.imageUrls();
         if (gallery.isEmpty()) {
             log.debug("No supplier images for {}; leaving the product's own images alone", gid);
@@ -564,7 +598,7 @@ class ForeignProductSync {
         checkUserErrors(data, "productUpdate(media)");
         if (images.isAttachToVariants()) {
             attachVariantMedia(gid, readyMedia(gid, data.path("product").path("media").path("nodes")),
-                    plan, createdIds);
+                    plan, createdIds, skuByPart);
         }
         return media.size();
     }
@@ -621,7 +655,7 @@ class ForeignProductSync {
      * Fifteen products were published with their photo sitting on the product and on no variant.
      */
     private void attachVariantMedia(String gid, JsonNode publishedMedia, ForeignVariantPlan plan,
-                                    Map<String, String> createdIds) {
+                                    Map<String, String> createdIds, Map<String, String> skuByPart) {
         Map<String, String> mediaIdByFile = new LinkedHashMap<>();
         for (JsonNode node : publishedMedia) {
             String status = node.path("status").asText(null);
@@ -643,8 +677,12 @@ class ForeignProductSync {
             String file = e.variant().imageUrls().isEmpty() ? null
                     : fileName(e.variant().imageUrls().get(0));
             String mediaId = file == null ? null : mediaIdByFile.get(file);
+            // A created variant is found by the SKU it was created with, which is the store's own
+            // number (PS11592-DB), not the supplier-derived one: looking it up by the latter found
+            // nothing, so every created variant was left without its photo (CM297BL, 2026-09-10).
+            String createdSku = storeSku(e, skuByPart);
             String variantId = e.target() != null ? e.target().id()
-                    : createdIds.get(e.variant().sku() == null ? "" : e.variant().sku().toUpperCase(Locale.ROOT));
+                    : createdIds.get(createdSku == null ? "" : createdSku.toUpperCase(Locale.ROOT));
             if (mediaId != null && variantId != null) {
                 variantMedia.add(Map.of("variantId", variantId, "mediaIds", List.of(mediaId)));
             }
