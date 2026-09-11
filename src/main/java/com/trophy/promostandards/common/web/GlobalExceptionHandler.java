@@ -4,6 +4,7 @@ import com.trophy.promostandards.common.PromoStandardsClientException;
 import com.trophy.promostandards.common.PromoStandardsNotFoundException;
 import com.trophy.promostandards.shopify.ShopifyGraphQLException;
 import com.trophy.promostandards.sync.CatalogSearchUnavailableException;
+import com.trophy.promostandards.sync.ProductNotInStoreException;
 import com.trophy.promostandards.sync.ShopifySyncException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,6 +47,17 @@ public class GlobalExceptionHandler {
 	public ResponseEntity<ErrorResponse> handleIllegalArgument(IllegalArgumentException ex) {
 		return ResponseEntity.status(HttpStatus.BAD_REQUEST)
 				.body(ErrorResponse.of(HttpStatus.BAD_REQUEST.value(), ex.getMessage(), List.of()));
+	}
+
+	/**
+	 * An import of an id the store does not carry, with product creation off. A 409, not a 404: the
+	 * id may well exist at the supplier; it is this store's configuration that refuses to add it.
+	 */
+	@ExceptionHandler(ProductNotInStoreException.class)
+	public ResponseEntity<ErrorResponse> handleNotInStore(ProductNotInStoreException ex) {
+		log.info("Import refused: {}", ex.getMessage());
+		return ResponseEntity.status(HttpStatus.CONFLICT)
+				.body(ErrorResponse.of(HttpStatus.CONFLICT.value(), ex.getMessage(), List.of()));
 	}
 
 	/** A capability that needs the database, in an install running without one. */

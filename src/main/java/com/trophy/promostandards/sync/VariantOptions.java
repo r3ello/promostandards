@@ -19,6 +19,10 @@ import java.util.Set;
  * as "Grey"). When a colour collides, every variant of that colour is suffixed with the
  * distinguishing tail of its part id — "Dark Brown (BL)", "Dark Brown (LB)" — which keeps the option
  * readable, the variants distinct, and each part's stock on its own variant instead of merged.
+ *
+ * <p>A variant with no colour at all (PaceSetter answers "N/A") is named by its {@code label} — what
+ * its description says that the other parts' do not ("Black", "Small") — and, failing that, by its
+ * part code alone: "BS", never "Default (BS)".
  */
 final class VariantOptions {
 
@@ -53,7 +57,7 @@ final class VariantOptions {
     static List<String> colorLabels(List<Variant> variants) {
         List<String> labels = new ArrayList<>(variants.size());
         for (Variant v : variants) {
-            labels.add(color(v.color()));
+            labels.add(color(v.color() != null && !v.color().isBlank() ? v.color() : v.label()));
         }
 
         // A collision is two variants sharing (colour, size); disambiguate every variant of that
@@ -67,6 +71,14 @@ final class VariantOptions {
                 ambiguous.add(key(labels.get(i)));
                 ambiguous.add(key(labels.get(first)));
             }
+        }
+        // "Default" next to named variants (Black, Default, Blue) reads as a colour called Default:
+        // there the unnamed one takes its code too. Only when NO variant has a name does "Default"
+        // stay, e.g. one part sold in several sizes, where it is the product's only Color value.
+        boolean anyNamed = labels.stream().anyMatch(l -> !key(l).equals(key(DEFAULT_COLOR)));
+        boolean anyUnnamed = labels.stream().anyMatch(l -> key(l).equals(key(DEFAULT_COLOR)));
+        if (anyNamed && anyUnnamed) {
+            ambiguous.add(key(DEFAULT_COLOR));
         }
         for (String colour : ambiguous) {
             applySuffixes(variants, labels, colour);
@@ -87,7 +99,19 @@ final class VariantOptions {
                 partIds.add(variants.get(i).supplierPartId());
             }
         }
-        int prefix = commonPrefixLength(partIds);
+        // An unnamed variant's code is what its part id adds over EVERY part of the product (CM731BKRG
+        // among CM731BK, CM731BL… reads "BKRG"), not just over the other unnamed ones — alone, it
+        // would share its whole id with itself and show the full part id.
+        List<String> basis = partIds;
+        if (colour.equals(key(DEFAULT_COLOR))) {
+            basis = new ArrayList<>();
+            for (Variant v : variants) {
+                if (v.supplierPartId() != null) {
+                    basis.add(v.supplierPartId());
+                }
+            }
+        }
+        int prefix = commonPrefixLength(basis);
         for (String partId : partIds) {
             if (partId.length() <= prefix) {
                 prefix = 0;     // one id is a prefix of another (EP2 / EP2PK): use the ids whole
@@ -96,7 +120,10 @@ final class VariantOptions {
         }
         for (int n = 0; n < indexes.size(); n++) {
             int i = indexes.get(n);
-            labels.set(i, labels.get(i) + " (" + partIds.get(n).substring(prefix) + ")");
+            String tail = partIds.get(n).substring(prefix);
+            // A variant with no name at all is just its code: "Default (BS)" says nothing "BS" does not.
+            labels.set(i, key(labels.get(i)).equals(key(DEFAULT_COLOR)) ? tail
+                    : labels.get(i) + " (" + tail + ")");
         }
     }
 

@@ -65,6 +65,17 @@ record ForeignVariantPlan(List<Entry> entries, List<StoreVariant> orphans) {
      */
     static ForeignVariantPlan of(List<Variant> supplier, List<String> colorLabels, boolean emitSize,
                                  List<StoreVariant> store) {
+        return of(supplier, colorLabels, emitSize, store, Variant::supplierPartId);
+    }
+
+    /**
+     * @param supplierIdOf the supplier product a variant stands for — its own part id when that is a
+     *                     product id (CM297LB), else the product it is a part of (CM330BS → CM330);
+     *                     null falls back to the part id
+     */
+    static ForeignVariantPlan of(List<Variant> supplier, List<String> colorLabels, boolean emitSize,
+                                 List<StoreVariant> store,
+                                 java.util.function.Function<Variant, String> supplierIdOf) {
         Map<String, StoreVariant> byVendorSku = index(store, StoreVariant::vendorSku);
         Map<String, StoreVariant> bySku = index(store, StoreVariant::sku);
         Map<String, StoreVariant> byPromoId = uniqueIndex(store, StoreVariant::promoStandardId);
@@ -90,7 +101,8 @@ record ForeignVariantPlan(List<Entry> entries, List<StoreVariant> orphans) {
             if (target != null) {
                 claimed.add(target.id());
             }
-            entries.add(new Entry(v, v.supplierPartId(), colorLabel, sizeLabel,
+            String supplierId = supplierIdOf.apply(v);
+            entries.add(new Entry(v, supplierId != null ? supplierId : v.supplierPartId(), colorLabel, sizeLabel,
                     target == null ? Action.CREATE : Action.UPDATE, target));
         }
 

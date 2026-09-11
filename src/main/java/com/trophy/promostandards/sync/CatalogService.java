@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -124,14 +125,17 @@ public class CatalogService {
         }
 
         // Union the variants: Product Data parts × sizes first, then Inventory rows folded into them.
+        // Keyed by PART id, never by colour: PaceSetter answers "N/A" for the colour of most parts,
+        // so keyed by colour CM330's eight priced colours all fell on the same empty key and the
+        // store got one variant instead of eight (2026-09-10) — 134 products collapsed that way.
         List<VariantAcc> accs = new ArrayList<>();
-        Map<String, VariantAcc> byColorSize = new LinkedHashMap<>();
+        Map<String, VariantAcc> byPartSize = new LinkedHashMap<>();
         for (Product.ProductPart part : product.parts()) {
             String color = norm(part.primaryColor());
             List<String> sizes = part.sizes() == null || part.sizes().isEmpty()
                     ? java.util.Collections.singletonList(null) : part.sizes();
             for (String size : sizes) {
-                VariantAcc acc = byColorSize.computeIfAbsent(key(color, norm(size)), k -> {
+                VariantAcc acc = byPartSize.computeIfAbsent(key(part.partId(), norm(size)), k -> {
                     VariantAcc fresh = new VariantAcc();
                     accs.add(fresh);
                     return fresh;
@@ -171,6 +175,19 @@ public class CatalogService {
 
         List<String> distinctGallery = new ArrayList<>(new LinkedHashSet<>(gallery));
 
+        // A name for the parts that have no colour, so the store can tell them apart.
+        Map<String, String> descriptionByPart = new LinkedHashMap<>();
+        for (VariantAcc acc : accs) {
+            if (acc.color == null && acc.partId != null) {
+                Product.ProductPart part = partById.get(acc.partId.toUpperCase(Locale.ROOT));
+                if (part != null) {
+                    descriptionByPart.putIfAbsent(acc.partId.toUpperCase(Locale.ROOT), part.description());
+                }
+            }
+        }
+        Map<String, String> labels = descriptionByPart.size() > 1
+                ? distinguishingLabels(descriptionByPart) : Map.of();
+
         // Resolve each variant: price (colour part id -> single fallback), SKU, images.
         List<Variant> variants = new ArrayList<>();
         for (VariantAcc acc : accs) {
@@ -203,11 +220,13 @@ public class CatalogService {
             if (weightPart == null && colorPart != null) {
                 weightPart = partById.get(colorPart.toUpperCase(Locale.ROOT));
             }
+            String label = acc.color == null && partId != null
+                    ? labels.get(partId.toUpperCase(Locale.ROOT)) : null;
             variants.add(new Variant(partId, acc.color, acc.size, sku(partId, acc.size),
                     price == null ? null : price.net(), price == null ? null : price.list(),
                     acc.onHand, variantImages,
                     weightPart == null ? null : weightPart.weight(),
-                    weightPart == null ? null : weightPart.weightUom()));
+                    weightPart == null ? null : weightPart.weightUom(), label));
         }
 
         List<String> tags = product.categories() == null ? List.of() : product.categories();
@@ -247,6 +266,68 @@ public class CatalogService {
             return partId;
         }
         return partId + "-" + size;
+    }
+
+    /** Longer than this is a sentence, not an option value: the part code reads better. */
+    private static final int MAX_LABEL = 30;
+    /** "Black/Rose Gold-Laser Imprint" is a name; "Gold Edge Plate on Ebony Board" is a description. */
+    private static final int MAX_LABEL_WORDS = 3;
+
+    /**
+     * A readable name for each part that has no colour, taken from its description.
+     *
+     * <p>PaceSetter answers "N/A" for the colour of most parts and often has no Inventory row that
+     * would name them, yet they are different things with their own prices — CM711's nineteen
+     * tumbler colours, GM792's Small/Med/Large. What tells them apart is the word or two their
+     * descriptions do not share: "…Tumbler; <b>Black</b>; Laser Engraved…", "Tower of Facets,
+     * <b>Small</b> …". So a part's label is the words of its description that at most half of the
+     * parts carry, measurements left out (dimensions change with the size but are nothing a shopper
+     * picks by). A label that comes out empty — CM330's eight parts share one description — or too
+     * long to be an option value is left out, and {@link VariantOptions} shows the part code instead.
+     *
+     * @param descriptionByPart part id -> description, for the parts that need a name
+     * @return part id -> label, only for the parts that got one
+     */
+    static Map<String, String> distinguishingLabels(Map<String, String> descriptionByPart) {
+        int parts = descriptionByPart.size();
+        Map<String, List<String>> tokensByPart = new LinkedHashMap<>();
+        Map<String, Integer> carriedBy = new HashMap<>();
+        for (Map.Entry<String, String> e : descriptionByPart.entrySet()) {
+            List<String> tokens = new ArrayList<>();
+            for (String raw : (e.getValue() == null ? "" : e.getValue()).trim().split("\\s+")) {
+                String token = raw.replaceAll("^[;,.:()*]+|[;,.:()*]+$", "");
+                if (!token.isEmpty()) {
+                    tokens.add(token);
+                }
+            }
+            tokensByPart.put(e.getKey(), tokens);
+            Set<String> distinct = new LinkedHashSet<>();
+            tokens.forEach(t -> distinct.add(t.toLowerCase(Locale.ROOT)));
+            distinct.forEach(t -> carriedBy.merge(t, 1, Integer::sum));
+        }
+        Map<String, String> labels = new LinkedHashMap<>();
+        tokensByPart.forEach((part, tokens) -> {
+            List<String> own = new ArrayList<>();
+            for (String token : tokens) {
+                boolean shared = carriedBy.get(token.toLowerCase(Locale.ROOT)) * 2 > parts;
+                // A token without a letter ("-", "#") is punctuation, not a word of a name.
+                if (!shared && !isMeasure(token) && token.chars().anyMatch(Character::isLetter)
+                        && !own.contains(token)) {
+                    own.add(token);
+                }
+            }
+            String label = String.join(" ", own);
+            if (!label.isBlank() && own.size() <= MAX_LABEL_WORDS && label.length() <= MAX_LABEL) {
+                labels.put(part, label);
+            }
+        });
+        return labels;
+    }
+
+    /** A token that only states a size: "x", "3/8\"", "20", "$4.00(V)". */
+    private static boolean isMeasure(String token) {
+        return token.equalsIgnoreCase("x") || token.chars().anyMatch(Character::isDigit)
+                || token.indexOf('"') >= 0 || token.indexOf('\'') >= 0;
     }
 
     private static String key(String color, String size) {

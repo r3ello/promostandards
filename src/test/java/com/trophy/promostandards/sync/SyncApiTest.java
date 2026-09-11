@@ -13,6 +13,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
@@ -41,6 +42,22 @@ class SyncApiTest {
 
     @MockitoBean
     private MetafieldCatalogService metafieldCatalog;
+
+    /** The console (and the server, which has no terminal) reads the automation's state here. */
+    @Test
+    void reportsTheScheduleState() throws Exception {
+        mockMvc.perform(get("/api/sync/schedule"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.enabled").value(false))
+                .andExpect(jsonPath("$.crons.inventory").exists());
+    }
+
+    /** An unknown kind is the caller's mistake, not an upstream failure. */
+    @Test
+    void refusesAnUnknownRefreshKind() throws Exception {
+        mockMvc.perform(post("/api/sync/schedule/colours"))
+                .andExpect(status().isBadRequest());
+    }
 
     @Test
     void importProductReturnsResult() throws Exception {
@@ -88,6 +105,27 @@ class SyncApiTest {
                 .andExpect(jsonPath("$[0].namespace").value("custom"))
                 .andExpect(jsonPath("$[0].key").value("country_of_origin"))
                 .andExpect(jsonPath("$[0].type").value("single_line_text_field"));
+    }
+
+    /** With creation off, an id no store product carries is refused as a conflict, saying why. */
+    @Test
+    void importOfAnIdTheStoreDoesNotCarryIsAConflict() throws Exception {
+        when(sync.importProduct(eq("CM813"), any())).thenThrow(new ProductNotInStoreException("CM813"));
+
+        mockMvc.perform(post("/api/sync/products/CM813"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.message").value(containsString("CM813")));
+    }
+
+    /** The console asks this before offering "Add to Shopify". */
+    @Test
+    void reportsWhetherProductsCanBeCreated() throws Exception {
+        when(sync.canCreateProducts()).thenReturn(false);
+
+        mockMvc.perform(get("/api/sync/settings"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.createProducts").value(false));
     }
 
     @Test

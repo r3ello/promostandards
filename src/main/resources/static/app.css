@@ -395,3 +395,10 @@ body {
 	font-size: var(--p-font-size-275);
 	white-space: pre;
 }
+
+/* ---------- scheduled sync ---------- */
+/* The automation panel sits above the catalog; cards are stacked, so they need their own gap. */
+.card + .card { margin-top: var(--p-space-500); }
+.card--sched .card__sub { display: flex; align-items: center; gap: var(--p-space-200); flex-wrap: wrap; }
+.card--sched .index-table td { vertical-align: top; }
+.sched-running { display: inline-flex; align-items: center; gap: var(--p-space-200); color: var(--p-color-text); }

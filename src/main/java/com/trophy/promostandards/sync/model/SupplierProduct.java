@@ -46,7 +46,7 @@ public record SupplierProduct(
 
     /**
      * @param supplierPartId color-level supplier part id (from Product Data / Pricing)
-     * @param color          color option value
+     * @param color          the supplier's colour name, null when it gives none (PaceSetter's "N/A")
      * @param size           size option value (may be null when the part has no sizes)
      * @param sku            derived variant SKU
      * @param supplierNet    supplier net unit price at the lowest quantity break (may be null)
@@ -58,6 +58,10 @@ public record SupplierProduct(
      *                       same numbers the inventory row already states as its size ("9.25 X 7"),
      *                       whereas the weight exists nowhere else and is what quotes postage
      * @param weightUom      unit of {@code weight} as the supplier states it (PaceSetter: {@code LB})
+     * @param label          what tells this part apart when it has no colour — the words of its
+     *                       description the other parts do not share ("Black", "Small"); null when
+     *                       the descriptions say nothing, and then the store shows the part code.
+     *                       Never a colour: it only names the option value
      */
     public record Variant(
             String supplierPartId,
@@ -69,7 +73,16 @@ public record SupplierProduct(
             Integer onHand,
             List<String> imageUrls,
             BigDecimal weight,
-            String weightUom
+            String weightUom,
+            String label
     ) {
+
+        /** A variant whose colour, when it has none, needs no other name. */
+        public Variant(String supplierPartId, String color, String size, String sku, BigDecimal supplierNet,
+                       BigDecimal listPrice, Integer onHand, List<String> imageUrls, BigDecimal weight,
+                       String weightUom) {
+            this(supplierPartId, color, size, sku, supplierNet, listPrice, onHand, imageUrls, weight,
+                    weightUom, null);
+        }
     }
 }

@@ -249,7 +249,7 @@ public class DiscountSyncService {
             warnings.add("not in the store yet (" + e.getMessage()
                     + "), so this preview cannot say which variants would carry the ladder");
         }
-        Map<String, String> variantsBySupplierId = variantsOf(storeProduct);
+        Map<String, List<String>> variantsBySupplierId = variantsOf(storeProduct);
 
         // Ids producing the same JSON share a value; the rest need one each. Grouping on the value
         // itself is what matters: it is the payload, not the ladder behind it, that has to agree.
@@ -264,9 +264,10 @@ public class DiscountSyncService {
             List<String> ids = entry.getValue();
             List<String> variantGids = new ArrayList<>();
             for (String id : ids) {
-                String gid = variantsBySupplierId.get(id.toUpperCase(Locale.ROOT));
-                if (gid != null && !variantGids.contains(gid)) {
-                    variantGids.add(gid);
+                for (String gid : variantsBySupplierId.getOrDefault(id.toUpperCase(Locale.ROOT), List.of())) {
+                    if (!variantGids.contains(gid)) {
+                        variantGids.add(gid);
+                    }
                 }
             }
             groups.add(new Group(ids.get(0), List.copyOf(ids), ladders.get(ids.get(0)),
@@ -339,9 +340,14 @@ public class DiscountSyncService {
         return byIds;
     }
 
-    /** @return variant gid per supplier id, from {@code custom.promo_standard_id}. */
-    private Map<String, String> variantsOf(JsonNode storeProduct) {
-        Map<String, String> bySupplierId = new LinkedHashMap<>();
+    /**
+     * @return every variant gid per supplier id, from {@code custom.promo_standard_id}. Every one,
+     * not the first: a supplier product sold in several colours or sizes puts its id on each of
+     * them (CM330's eight colours all carry CM330), and keeping one gid per id wrote the ladder on
+     * one variant and left seven priced wrong above the first break (2026-09-10).
+     */
+    private Map<String, List<String>> variantsOf(JsonNode storeProduct) {
+        Map<String, List<String>> bySupplierId = new LinkedHashMap<>();
         if (storeProduct == null) {
             return bySupplierId;
         }
@@ -350,8 +356,8 @@ public class DiscountSyncService {
             if (supplierId == null || supplierId.isBlank()) {
                 continue;
             }
-            bySupplierId.putIfAbsent(supplierId.trim().toUpperCase(Locale.ROOT),
-                    variant.path("id").asText());
+            bySupplierId.computeIfAbsent(supplierId.trim().toUpperCase(Locale.ROOT), k -> new ArrayList<>())
+                    .add(variant.path("id").asText());
         }
         return bySupplierId;
     }

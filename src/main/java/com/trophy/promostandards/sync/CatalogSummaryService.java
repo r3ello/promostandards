@@ -323,6 +323,20 @@ public class CatalogSummaryService {
     }
 
     /**
+     * What the supplier still sells, upper-cased for matching. The scheduled refreshes use it to
+     * skip the imported ids PaceSetter has dropped — the store's tagged products cover far more ids
+     * than the supplier serves — and it costs them nothing: this is the same list the console
+     * already pays for, cached for {@link CatalogCacheProperties#listTtl()}.
+     */
+    public Set<String> sellableProductIds() {
+        Set<String> ids = new LinkedHashSet<>();
+        for (String productId : discoverProductIds()) {
+            ids.add(productId.toUpperCase(Locale.ROOT));
+        }
+        return ids;
+    }
+
+    /**
      * Distinct sellable product ids — a single upstream call (the catalog's id source), cached for
      * {@link CatalogCacheProperties#listTtl()}: the sellable catalog changes daily at most, while
      * every console load, tab and user asks for it.

@@ -26,6 +26,9 @@ let pageSize = 25;
 // When on, sibling product ids the supplier split by size (linked via Common Grouping) collapse
 // into one row; the group index comes from GET /api/catalog/product-groups (cached server-side).
 let grouping = false;
+// Whether an import may create a product the store does not carry (sync.create-products.enabled).
+// Assumed off until the server says otherwise: the console must never offer a create it refuses.
+let canCreateProducts = false;
 let primaryOf = new Map();       // memberId -> primaryId (present only for grouped ids)
 let membersOf = new Map();       // primaryId -> [memberIds...] (sorted, includes the primary)
 let groupPollTimer = null;
@@ -158,7 +161,8 @@ async function bootstrap() {
 		showLogin(status.tokenError);
 	} else {
 		showApp();
-		loadCatalog();
+		loadSettings().then(loadCatalog);
+		loadSchedule();
 	}
 }
 
@@ -187,7 +191,8 @@ async function doLogin(ev) {
 		canSignOut = true;
 		el('loginPass').value = '';
 		showApp();
-		loadCatalog();
+		loadSettings().then(loadCatalog);
+		loadSchedule();
 	} catch (e) {
 		err.textContent = 'Could not reach the server. Please try again.';
 		err.hidden = false;
@@ -250,6 +255,7 @@ async function loadCatalog() {
 		updateShopifyStatus();
 		renderTable();
 		ensureTitles();
+		ensurePendingData();
 		if (grouping) ensureGroups();
 	} catch (e) {
 		body.innerHTML = `<tr class="row-state"><td colspan="9"><div class="state state--err">⚠ ${esc(e.message)}</div></td></tr>`;
@@ -290,6 +296,39 @@ function scheduleTitlePoll() {
 			if (v.status === 'building') scheduleTitlePoll(); else renderTable({ enrich: false });
 		} catch (e) { /* stop polling on error */ }
 	}, 2500);
+}
+
+// --- pending data ------------------------------------------------------
+// Ids PaceSetter has no inventory data for ("No data"): not ready to import. The table only loads
+// the visible page's detail, so this comes from a catalog-wide index built in the background — and
+// a row whose loaded detail shows no data counts too, so the two can never disagree on screen.
+let pendingIds = new Set();
+let pendingPollTimer = null;
+
+async function ensurePendingData() {
+	try {
+		const v = await api('/api/catalog/pending-data');
+		pendingIds = new Set(v && v.productIds || []);
+		if (v && v.status === 'building') schedulePendingPoll(); else renderTable({ enrich: false });
+	} catch (e) {
+		/* an enrichment: without it only rows with loaded detail can be told apart */
+	}
+}
+
+function schedulePendingPoll() {
+	clearTimeout(pendingPollTimer);
+	pendingPollTimer = setTimeout(ensurePendingData, 5000);
+}
+
+function hasNoInventoryData(d) {
+	if (!d) return false;
+	const s = stockCounts(d);
+	return !s || (s.inStock + s.low + s.out) === 0;
+}
+
+/** Not imported, and nothing to publish as stock: waiting for the supplier, not for a click. */
+function isPending(e) {
+	return e.imported !== true && (pendingIds.has(e.productId) || hasNoInventoryData(e.detail));
 }
 
 // --- group index -------------------------------------------------------
@@ -349,7 +388,8 @@ function filtered() {
 			if (!hay.includes(q)) return false;
 		}
 		if (statusFilter === 'imported') return e.imported === true;
-		if (statusFilter === 'not-imported') return e.imported !== true;
+		if (statusFilter === 'not-imported') return e.imported !== true && !isPending(e);
+		if (statusFilter === 'pending') return isPending(e);
 		if (statusFilter === 'low') { const s = stockCounts(e.detail); return s && (s.low + s.out) > 0; }
 		return true;
 	});
@@ -438,6 +478,9 @@ function actionsHtml(e) {
 					</div>
 				</div>
 			</div>`;
+	}
+	if (!canCreateProducts) {
+		return `<div class="row-actions"><span class="muted" title="No store product carries this PaceSetter id. The sync only updates products already in Shopify.">Not in store</span></div>`;
 	}
 	return `<div class="row-actions"><button class="btn btn--primary btn--sm" data-act="add" data-pid="${pid}">Add to Shopify</button></div>`;
 }
@@ -1141,4 +1184,160 @@ document.addEventListener('click', async (e) => {
 		applyDiscountResult(pid, r);
 	} catch (err) { toast(err.message, true); }
 	finally { btn.disabled = false; btn.innerHTML = label; }
+});
+
+// --- scheduled sync -----------------------------------------------------
+// The unattended half of the app: cron jobs that re-read the supplier and push only what changed.
+// Two things this panel exists for. One, a pass in flight writes neither a log line nor a database
+// row until it ends, so "is it running?" is otherwise unanswerable — `running` comes straight from
+// the scheduler. Two, a pass can be started here (dry, by default), which is how the automation gets
+// proven before it is trusted to run on its own.
+const SCHED_JOBS = {
+	inventory: { label: 'Inventory', note: 'stock levels of every imported product', runnable: true },
+	price: { label: 'Prices', note: 'retail prices, and the discount ladder of anything that moved', runnable: true },
+	orders: { label: 'Orders', note: 'shipment status and tracking back to Shopify', runnable: false },
+};
+const SCHED_POLL_MS = 5000;
+let schedPollTimer = null;
+
+/** Cron as a person reads it. Falls back to the expression itself rather than guessing wrong. */
+function cronText(expr) {
+	if (!expr) return '—';
+	const m = String(expr).trim().split(/\s+/);
+	if (m.length !== 6) return expr;
+	const [, min, hour, dom, mon] = m;
+	if (/^0\/(\d+)$/.test(min) && hour === '*') return `every ${min.split('/')[1]} min`;
+	if (min === '0' && /^0\/(\d+)$/.test(hour)) return `every ${hour.split('/')[1]} h`;
+	if (/^\d+$/.test(min) && /^\d+$/.test(hour) && dom === '*' && mon === '*') {
+		return `daily at ${String(hour).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+	}
+	return expr;
+}
+
+const SCHED_OUTCOME_TONE = {
+	PUSHED: 'success', UNCHANGED: 'neutral', WOULD_PUSH: 'caution',
+	BACKING_OFF: 'caution', FAILED: 'critical', STATE_UNAVAILABLE: 'critical',
+};
+
+function schedAgo(iso) {
+	const then = Date.parse(iso);
+	if (!then) return '—';
+	const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
+	if (secs < 60) return 'just now';
+	if (secs < 3600) return `${Math.round(secs / 60)} min ago`;
+	if (secs < 86400) return `${Math.round(secs / 3600)} h ago`;
+	return `${Math.round(secs / 86400)} d ago`;
+}
+
+function schedDuration(seconds) {
+	if (seconds === null || seconds === undefined) return '';
+	if (seconds < 60) return `${seconds}s`;
+	const mins = Math.round(seconds / 60);
+	return mins < 60 ? `${mins} min` : `${(mins / 60).toFixed(1)} h`;
+}
+
+function schedResultHtml(job) {
+	if (!job) return '<span class="muted">never run</span>';
+	const entries = Object.entries(job.outcomes || {});
+	if (!entries.length) return job.running ? '<span class="muted">starting…</span>' : '<span class="muted">nothing to do</span>';
+	const badges = entries
+		.sort((a, b) => b[1] - a[1])
+		.map(([outcome, count]) =>
+			`<span class="badge badge--${SCHED_OUTCOME_TONE[outcome] || 'neutral'}">${count} ${esc(outcome.toLowerCase().replace('_', ' '))}</span>`)
+		.join(' ');
+	const written = job.variantsWritten ? ` <span class="muted">· ${job.variantsWritten} variants written</span>` : '';
+	return badges + written;
+}
+
+function schedRowHtml(name, status, job) {
+	const meta = SCHED_JOBS[name] || { label: name, note: '', runnable: false };
+	const cron = cronText((status.crons || {})[name]);
+	const last = !job ? '<span class="muted">—</span>'
+		: job.running ? `<span class="sched-running"><span class="spinner"></span> running · ${esc(schedDuration(Math.round((Date.now() - Date.parse(job.startedAt)) / 1000)))}</span>`
+			: `${esc(schedAgo(job.startedAt))} <span class="muted">· ${esc(schedDuration(job.seconds))} · ${job.products} products</span>`;
+	const actions = meta.runnable
+		? `<div class="row-actions">
+			<button class="btn btn--sm" data-sched-run="${esc(name)}" data-sched-dry="true"${job && job.running ? ' disabled' : ''}>Dry run</button>
+			<button class="btn btn--sm" data-sched-run="${esc(name)}"${job && job.running ? ' disabled' : ''}>Run now</button>
+		</div>`
+		: '<span class="muted">on schedule only</span>';
+	return `<tr>
+		<td><div class="prod-name">${esc(meta.label)}</div><div class="muted">${esc(meta.note)}</div></td>
+		<td>${esc(cron)}</td>
+		<td>${last}</td>
+		<td>${schedResultHtml(job)}</td>
+		<td class="col-actions">${actions}</td>
+	</tr>`;
+}
+
+function renderSchedule(status) {
+	const jobs = new Map((status.jobs || []).map((j) => [j.job, j]));
+	const names = Object.keys(status.crons || {});
+	el('scheduleBody').innerHTML = names.map((name) => schedRowHtml(name, status, jobs.get(name))).join('')
+		|| `<tr class="row-state"><td colspan="5"><div class="state">No jobs configured.</div></td></tr>`;
+
+	const state = status.enabled
+		? `<span class="badge badge--success">on</span>`
+		: `<span class="badge badge--neutral">off</span>`;
+	const dry = status.dryRun ? ` <span class="badge badge--caution">dry run — nothing is written</span>` : '';
+	const hint = status.enabled
+		? 'Jobs run on their own schedule; each pass pushes only what changed since the last one.'
+		: 'The cron jobs are off. You can still start a single pass here.';
+	el('scheduleMeta').innerHTML = `${state}${dry} <span class="muted">${esc(hint)}</span>`;
+	el('scheduleCard').hidden = false;
+
+	// A pass writes nothing anywhere until it ends, so while one runs this panel is the only place
+	// its progress shows. Poll only then — an idle scheduler needs no traffic.
+	clearTimeout(schedPollTimer);
+	if ((status.jobs || []).some((j) => j.running)) {
+		schedPollTimer = setTimeout(loadSchedule, SCHED_POLL_MS);
+	}
+}
+
+/** Never throws: a server without the endpoint simply leaves product creation off. */
+async function loadSettings() {
+	try {
+		const settings = await api('/api/sync/settings');
+		canCreateProducts = !!(settings && settings.createProducts);
+	} catch (_) {
+		canCreateProducts = false;
+	}
+}
+
+async function loadSchedule() {
+	try {
+		const status = await api('/api/sync/schedule');
+		if (status) renderSchedule(status);
+	} catch (e) {
+		// An older backend has no such endpoint: leave the panel hidden rather than showing an error
+		// on a console whose main job (the catalog) is working fine.
+		clearTimeout(schedPollTimer);
+	}
+}
+
+async function runSchedulePass(kind, dryRun, btn) {
+	const label = SCHED_JOBS[kind] ? SCHED_JOBS[kind].label.toLowerCase() : kind;
+	if (!dryRun && !window.confirm(
+		`Run the ${label} pass now?\n\nIt reads every imported product from the supplier and writes what changed to Shopify. This can take the better part of an hour.`)) {
+		return;
+	}
+	const original = btn.innerHTML;
+	btn.disabled = true; btn.innerHTML = `<span class="spinner"></span>`;
+	try {
+		const status = await api(`/api/sync/schedule/${encodeURIComponent(kind)}?dryRun=${dryRun}`, 'POST');
+		toast(`Started the ${label} pass${dryRun ? ' (dry run — nothing will be written)' : ''}`);
+		if (status) renderSchedule(status);
+		// The pass is submitted, not started, when the call returns; look again once it has begun.
+		clearTimeout(schedPollTimer);
+		schedPollTimer = setTimeout(loadSchedule, 1500);
+	} catch (e) {
+		toast(e.message, true);
+		btn.innerHTML = original; btn.disabled = false;
+	}
+}
+
+el('scheduleReload').addEventListener('click', loadSchedule);
+el('scheduleBody').addEventListener('click', (ev) => {
+	const btn = ev.target.closest('[data-sched-run]');
+	if (btn) runSchedulePass(btn.dataset.schedRun, btn.dataset.schedDry === 'true', btn);
 });

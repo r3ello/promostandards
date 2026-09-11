@@ -1,0 +1,29 @@
+# Trying the unattended sync on this machine, before it runs for real on the server.
+#
+# Activate it ALONGSIDE the local profile (which holds the supplier/Shopify credentials):
+#
+#   spring.profiles.active=local,dev
+#
+# In IntelliJ that is the run configuration's "Active profiles" field. On the server none of this
+# applies: production takes the same settings from environment variables in .env (see .env.example
+# and DEPLOY.md §6), and this file is not part of the prod profile.
+#
+# What it turns on:
+#   enabled  - the cron jobs actually fire (off everywhere else, so a stray run can never sync).
+#   dry-run  - the pass evaluates every product and writes NOTHING to Shopify. It also skips the
+#              order job entirely, which creates fulfillments and emails customers tracking numbers.
+#              Set it to false only once the dry pass looks right.
+#   crons    - inventory every 5 minutes so a pass starts while you are watching, instead of at the
+#              next even hour. The real intervals live in application.yaml; do not copy these.
+#              Prices are pinned to a date that does not come round on its own (28 February 03:00)
+#              so the only price pass is one you ask for.
+#
+# You do not have to wait for the cron at all:
+#   POST /api/sync/schedule/inventory?dryRun=true    starts a pass now, in the background
+#   GET  /api/sync/schedule                          what it is doing, or what the last pass did
+sync:
+  schedule:
+    enabled: true
+    dry-run: true
+    inventory-cron: "0 0/5 * * * *"
+    price-cron: "0 0 3 28 2 *"

@@ -2,6 +2,14 @@ spring:
   application:
     name: promostandards
 
+  # The scheduled sync jobs share this pool. It must be > 1: Spring's default is a SINGLE thread,
+  # and the inventory pass takes the better part of an hour — on one thread the order sync (every
+  # 15 min, the job that ships tracking numbers to customers) simply waits behind it.
+  task:
+    scheduling:
+      pool:
+        size: 4
+
   # ---------------------------------------------------------------------------
   # Postgres (opt-in, see sync.persistence.enabled below)
   #
@@ -212,6 +220,15 @@ sync:
     attach-to-variants: ${SYNC_IMAGES_PER_VARIANT:true}
 
   # ---------------------------------------------------------------------------
+  # Creating products. The store's catalogue is the migration's: the sync UPDATES the products
+  # Matrixify brought in (matched on custom.ps_product_id / ps_product_ids) and never adds one. A
+  # PaceSetter id no store product lists is refused with a 409 — nothing is read, nothing written.
+  # true = the old behaviour: such an import creates ps-<supplier>-<id>.
+  # ---------------------------------------------------------------------------
+  create-products:
+    enabled: ${SYNC_CREATE_PRODUCTS:false}
+
+  # ---------------------------------------------------------------------------
   # Postgres persistence master switch.
   #
   # false (default) = today's behaviour exactly: catalog indexes in memory + data/*.json, and the
@@ -267,7 +284,11 @@ sync:
     map-floor: ${SYNC_PRICING_MAP_FLOOR:true}          # never price below the supplier list price
   schedule:
     enabled: false                   # master switch for all scheduled jobs
-    inventory-cron: "0 0/30 * * * *" # every 30 min
+    # Every 2 h, not every 30 min: a pass reads the supplier once per imported product it still
+    # sells (~700 of them), which takes longer than 30 minutes — a cron that cannot finish before it
+    # fires again is a queue, not a schedule. Stock that moves faster than this is what the manual
+    # "Sync" button on a row is for.
+    inventory-cron: "0 0 0/2 * * *"  # every 2 hours
     price-cron: "0 0 3 * * *"        # daily at 03:00
     order-cron: "0 0/15 * * * *"     # every 15 min
     # Evaluate every product and log what WOULD be pushed, without writing to Shopify. Turn this on
@@ -295,6 +316,14 @@ sync:
     enabled: true                    # false = search matches product ids only
     cache-file: data/catalog-titles.json
     ttl: 24h
+
+  # Ids whose Inventory service answers nothing ("No data" in the console): not ready to import, so
+  # the console keeps them out of "Not imported" and lists them under "Pending data". One throttled
+  # getInventoryLevels per sellable id (~1 min for ~1,300), built on demand, cached and persisted.
+  pending-data:
+    enabled: true
+    cache-file: data/pending-data.json
+    ttl: 6h
 
   # "Group variants" index for the console table: collapses sibling product ids (one product the
   # supplier split across ids, e.g. one per size) into one row, keyed on Common Grouping related

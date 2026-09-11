@@ -22,7 +22,11 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class ShopifySyncServiceTest {
@@ -41,6 +45,14 @@ class ShopifySyncServiceTest {
 
     /** Defaults: the supplier's images replace the product's, and each variant gets its colour's. */
     private static final ImageProperties IMAGES = new ImageProperties(null, null);
+
+    /** Most tests below exercise the create path, which the store keeps switched off. */
+    private static final ProductCreationProperties CREATE = new ProductCreationProperties(true);
+
+    /** The default, and how the store runs: only products already in Shopify are synced. */
+    private static final ProductCreationProperties NO_CREATE = new ProductCreationProperties(null);
+
+    private CatalogService catalog;
 
     private final List<String> operations = new ArrayList<>();
     private final Map<String, Map<?, ?>> variablesByOperation = new java.util.LinkedHashMap<>();
@@ -104,6 +116,10 @@ class ShopifySyncServiceTest {
     }
 
     private ShopifySyncService service(ShopifyHttp http) {
+        return service(http, CREATE);
+    }
+
+    private ShopifySyncService service(ShopifyHttp http, ProductCreationProperties creation) {
         ShopifyProperties shopify = new ShopifyProperties("shop.myshopify.com", "id", "secret",
                 "whsec", "2026-04", "gid://shopify/Location/1");
         ShopifyTokenService tokens = mock(ShopifyTokenService.class);
@@ -118,7 +134,7 @@ class ShopifySyncServiceTest {
         PricingPolicy policy = new PricingPolicy(syncProps);
         ShopifyProductMapper mapper = new ShopifyProductMapper(syncProps, policy, new ObjectMapper(), shopify);
 
-        CatalogService catalog = mock(CatalogService.class);
+        catalog = mock(CatalogService.class);
         when(catalog.aggregate("SAMPLE-001")).thenReturn(sample());
         // A grouped migrated product: the sibling id answers for its whole family, CM778 included.
         when(catalog.aggregate("CM777")).thenReturn(sibling());
@@ -127,7 +143,7 @@ class ShopifySyncServiceTest {
                 new BigDecimal("4.00"), null, 7, List.of(), null, null)), List.of(), List.of(), List.of()));
 
         return new ShopifySyncService(gql, catalog, mapper, policy, shopify, syncProps, new ObjectMapper(),
-                CatalogTestSupport.providerOf(syncState), DISCOUNTS, IMAGES);
+                CatalogTestSupport.providerOf(syncState), DISCOUNTS, IMAGES, creation);
     }
 
     private static SupplierProduct sample() {
@@ -322,14 +338,16 @@ class ShopifySyncServiceTest {
                     .containsExactly("Red", "S");
         });
 
-        // The other three are created, each carrying its own supplier id as the variant metafield.
+        // The other three are created, each carrying the supplier PRODUCT it stands for: a part that
+        // is a product of its own (CM777, CM778) carries its own id; SAMPLE-001-RED is only a part of
+        // SAMPLE-001, and carries that — the id its discount ladder is published under.
         assertThat(varsOf("VariantsCreate").get("strategy")).isEqualTo("PRESERVE_STANDALONE_VARIANT");
         List<Object> created = objects(varsOf("VariantsCreate").get("variants"));
         assertThat(created).hasSize(3);
         assertThat(created).extracting(v -> {
             List<?> metafields = (List<?>) ((Map<?, ?>) v).get("metafields");
             return String.valueOf(((Map<?, ?>) metafields.get(0)).get("value"));
-        }).containsExactly("SAMPLE-001-RED", "CM777", "CM778");
+        }).containsExactly("SAMPLE-001", "CM777", "CM778");
 
         // The adopted variant is untracked and stocked nowhere, so it is activated before its
         // quantity is set; the created ones get theirs inside productVariantsBulkCreate.
@@ -459,7 +477,8 @@ class ShopifySyncServiceTest {
                 return real.postJson(path, body, headers);
             }
         };
-        ShopifySyncService service = service(migratedAfterFirstListing);
+        // With creation off, as the store runs: the guard must not stop a product the index finds.
+        ShopifySyncService service = service(migratedAfterFirstListing, NO_CREATE);
 
         // The catalog warms the index while the product is not in the store yet.
         assertThat(service.isImported("SAMPLE-001")).isFalse();
@@ -470,6 +489,130 @@ class ShopifySyncServiceTest {
         assertThat(operations).contains("ImportedProducts");   // it looked again before creating
         assertThat(operations).doesNotContain("ProductSet");   // so it adopted instead of duplicating
         assertThat(result.shopifyProductId()).isEqualTo("gid://shopify/Product/900");
+    }
+
+    /**
+     * Tracking follows the supplier's stock. A variant PaceSetter gives no quantity for is left as
+     * the migration made it — untracked, which is what keeps it sellable; switching tracking on with
+     * nothing to put in it sold out 19 products on 2026-09-10 — and a new one is created untracked.
+     */
+    @Test
+    void tracksInventoryOnlyWhereTheSupplierGivesAQuantity() {
+        ShopifySyncService service = service(migratedStoreHttp());
+        when(catalog.aggregate("SAMPLE-001")).thenReturn(new SupplierProduct("SAMPLE-001", "Sample Polo",
+                "<p>x</p>", "Trophy Apparel", "Polos", List.of("Polos"),
+                List.of(new Variant("SAMPLE-001-RED", "Red", "S", "SAMPLE-001-RED-S",
+                                new BigDecimal("9.50"), null, null, List.of(), null, null),
+                        new Variant("SAMPLE-001-BLUE", "Blue", "S", "SAMPLE-001-BLUE-S",
+                                new BigDecimal("9.50"), null, null, List.of(), null, null)),
+                List.of(), List.of(), List.of()));
+
+        service.importProduct("SAMPLE-001");
+
+        // The adopted legacy variant: no quantity, so its tracking is not touched at all.
+        Map<?, ?> adopted = (Map<?, ?>) ((Map<?, ?>) objects(varsOf("VariantsUpdate").get("variants"))
+                .get(0)).get("inventoryItem");
+        assertThat(adopted.containsKey("tracked")).isFalse();
+        // Created: SAMPLE-001-BLUE has no quantity and is created untracked; the CM777 family does
+        // report stock, and those are tracked.
+        List<Object> created = objects(varsOf("VariantsCreate").get("variants"));
+        assertThat(created).extracting(v -> (Object) ((Map<?, ?>) ((Map<?, ?>) v).get("inventoryItem")).get("tracked"))
+                .containsExactly(false, true, true);
+    }
+
+    /**
+     * Every variant points at its own colour's photo — the created ones too. Those are created under
+     * the store's own SKU (PS11592-…), and looking them up by the supplier-derived one found nothing:
+     * CM297BL went live with twelve photos and a single variant pointing at its own (2026-09-10).
+     */
+    @Test
+    void attachesCreatedVariantsToTheirOwnPhotos() {
+        ShopifyHttp withMedia = new ShopifyHttp() {
+            private final ShopifyHttp real = migratedStoreHttp();
+
+            @Override
+            public JsonNode postJson(String path, Object body, Map<String, String> headers) {
+                String query = String.valueOf(((Map<?, ?>) body).get("query"));
+                Map<?, ?> variables = (Map<?, ?>) ((Map<?, ?>) body).get("variables");
+                String operation;
+                String response;
+                String media = """
+                        [{"id":"gid://shopify/MediaImage/1","status":"READY",
+                          "image":{"url":"https://cdn.shopify.com/files/sample-red.jpg?v=1"}},
+                         {"id":"gid://shopify/MediaImage/2","status":"READY",
+                          "image":{"url":"https://cdn.shopify.com/files/sample-blue.jpg?v=1"}}]""";
+                if (query.contains("VariantsCreate")) {
+                    // Shopify answers each created variant with the SKU it was created under.
+                    List<String> created = new ArrayList<>();
+                    for (Object v : (List<?>) variables.get("variants")) {
+                        Object sku = ((Map<?, ?>) ((Map<?, ?>) v).get("inventoryItem")).get("sku");
+                        created.add("{\"id\":\"gid://shopify/ProductVariant/" + (500 + created.size())
+                                + "\",\"sku\":\"" + sku + "\"}");
+                    }
+                    operation = "VariantsCreate";
+                    response = "{\"data\":{\"productVariantsBulkCreate\":{\"productVariants\":["
+                            + String.join(",", created) + "],\"userErrors\":[]}}}";
+                } else if (query.contains("ProductAddMedia")) {
+                    operation = "ProductAddMedia";
+                    response = "{\"data\":{\"productUpdate\":{\"product\":{\"id\":\"gid://shopify/Product/900\","
+                            + "\"media\":{\"nodes\":" + media + "}},\"userErrors\":[]}}}";
+                } else if (query.contains("query ProductMedia")) {
+                    operation = "ProductMedia";
+                    response = "{\"data\":{\"product\":{\"media\":{\"nodes\":" + media + "}}}}";
+                } else if (query.contains("VariantAppendMedia")) {
+                    operation = "VariantAppendMedia";
+                    response = "{\"data\":{\"productVariantAppendMedia\":{\"productVariants\":[],\"userErrors\":[]}}}";
+                } else {
+                    return real.postJson(path, body, headers);
+                }
+                operations.add(operation);
+                variablesByOperation.put(operation, variables);
+                try {
+                    return MAPPER.readTree(response);
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            }
+        };
+        ShopifySyncService service = service(withMedia);
+        String red = "https://supplier.example/img/sample-red.jpg";
+        String blue = "https://supplier.example/img/sample-blue.jpg";
+        when(catalog.aggregate("SAMPLE-001")).thenReturn(new SupplierProduct("SAMPLE-001", "Sample Polo",
+                "<p>x</p>", "Trophy Apparel", "Polos", List.of("Polos"),
+                List.of(new Variant("SAMPLE-001-RED", "Red", "S", "SAMPLE-001-RED-S",
+                                new BigDecimal("9.50"), null, 3, List.of(red), null, null),
+                        new Variant("SAMPLE-001-BLUE", "Blue", "S", "SAMPLE-001-BLUE-S",
+                                new BigDecimal("9.50"), null, 4, List.of(blue), null, null)),
+                List.of(red, blue), List.of(), List.of()));
+
+        service.importProduct("SAMPLE-001");
+
+        // Both photos reach a variant: the adopted legacy one keeps its id, the other was created.
+        List<?> attached = (List<?>) varsOf("VariantAppendMedia").get("variantMedia");
+        assertThat(attached).hasSize(2);
+        assertThat(attached).extracting(a -> (Object) ((Map<?, ?>) a).get("mediaIds"))
+                .containsExactlyInAnyOrder(List.of("gid://shopify/MediaImage/1"),
+                        List.of("gid://shopify/MediaImage/2"));
+        assertThat(attached).extracting(a -> String.valueOf(((Map<?, ?>) a).get("variantId")))
+                .contains("gid://shopify/ProductVariant/93")
+                .anySatisfy(id -> assertThat(id).startsWith("gid://shopify/ProductVariant/5"));
+    }
+
+    /**
+     * The store's catalogue is the migration's: a PaceSetter id that no store product carries is
+     * refused, not created — and refused before the supplier is asked anything, since there is
+     * nothing to do with its answer.
+     */
+    @Test
+    void refusesToCreateAProductTheStoreDoesNotCarry() {
+        ShopifySyncService service = service(routingHttp(), NO_CREATE);
+
+        assertThatThrownBy(() -> service.importProduct("SAMPLE-001"))
+                .isInstanceOf(ProductNotInStoreException.class)
+                .hasMessageContaining("SAMPLE-001");
+
+        assertThat(operations).doesNotContain("ProductSet");
+        verify(catalog, never()).aggregate(any());
     }
 
     /**
