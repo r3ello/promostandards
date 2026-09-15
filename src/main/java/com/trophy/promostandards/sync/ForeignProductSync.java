@@ -128,6 +128,14 @@ class ForeignProductSync {
                 ensureOptions(gid, options, plan, emitSize);
             }
         }
+        if (!plan.orphans().isEmpty()) {
+            // Reported, never touched. A store variant also lands here when its vendor_sku was
+            // mangled or its options were edited by hand, and when the supplier answered short —
+            // discontinuing those would be wrong, so the decision stays with a person.
+            log.info("{} has {} store variant(s) no supplier id covers: {}", productId,
+                    plan.orphans().size(),
+                    plan.orphans().stream().map(ForeignVariantPlan.StoreVariant::sku).toList());
+        }
         int updated = updateExisting(gid, plan, writable, emitSize, skuByPart, single);
         Map<String, String> createdIds = writable && !single
                 ? createMissing(gid, plan, emitSize, skuByPart) : Map.of();
@@ -143,6 +151,42 @@ class ForeignProductSync {
     }
 
     // ---------------------------------------------------------------- supplier side
+
+    /**
+     * The variants a store product would carry if it covered {@code memberIds} too, with the option
+     * values the store would show them under.
+     *
+     * <p>Reads the supplier and nothing else: no Shopify call, nothing written. It goes through the
+     * very {@link #union} the sync uses, so a preview cannot promise a variant set the sync would
+     * not produce — which is the whole point of showing it before grouping anything.
+     */
+    GroupPreview preview(String parentId, List<String> memberIds) {
+        SupplierProduct seed = catalog.aggregate(parentId);
+        Map<String, String> ids = new LinkedHashMap<>();
+        ids.put(upper(parentId), parentId);
+        for (String id : memberIds) {
+            if (id != null && !id.isBlank()) {
+                ids.putIfAbsent(upper(id), id);
+            }
+        }
+        Union unioned = union(seed, new ImportedProduct(null, null, parentId,
+                List.copyOf(ids.values()), null, null));
+        List<Variant> variants = unioned.product().variants();
+        List<String> supplierIds = new ArrayList<>(variants.size());
+        for (Variant v : variants) {
+            supplierIds.add(unioned.supplierIdByKey().getOrDefault(variantKey(v), v.supplierPartId()));
+        }
+        return new GroupPreview(unioned.product(), VariantOptions.colorLabels(variants),
+                List.copyOf(supplierIds), VariantOptions.hasSize(variants));
+    }
+
+    /**
+     * @param colorLabels the Color option value per variant, in the same order as the variants
+     * @param supplierIds the supplier product each variant would stand for, same order again
+     */
+    record GroupPreview(SupplierProduct product, List<String> colorLabels, List<String> supplierIds,
+                        boolean emitSize) {
+    }
 
     /**
      * The variants of every supplier id the store product covers, keyed by (part id, size).

@@ -14,6 +14,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.IntStream;
 
 import static com.trophy.promostandards.sync.CatalogTestSupport.providerOf;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -24,6 +25,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -53,6 +55,47 @@ class SyncSchedulerTest {
 
     private static RefreshResult result(String productId, Kind kind, Outcome outcome) {
         return new RefreshResult(productId, kind, outcome, outcome == Outcome.PUSHED ? 1 : 0, null);
+    }
+
+    /** NEEDS_VARIANTS until the product is imported, PUSHED on the forced refresh that follows. */
+    private void supplierHasVariantsTheStoreLacks() {
+        when(sync.refresh(anyString(), any(), anyBoolean(), anyBoolean())).thenAnswer(call ->
+                result(call.getArgument(0), call.getArgument(1),
+                        (boolean) call.getArgument(3) ? Outcome.PUSHED : Outcome.NEEDS_VARIANTS));
+    }
+
+    /**
+     * The supplier is the source of truth, so a colour it adds has to reach Shopify on its own. A
+     * scheduled pass only ever writes to variants that already exist, so the product goes through
+     * the import path first — the only one that creates them — and is pushed and sealed after.
+     */
+    @Test
+    void addsTheVariantsTheSupplierHasAndTheStoreDoesNot() {
+        when(sync.listImportedProductIds()).thenReturn(List.of("CM373BS"));
+        when(catalog.sellableProductIds()).thenReturn(Set.of("CM373BS"));
+        supplierHasVariantsTheStoreLacks();
+
+        scheduler().refreshInventory();
+
+        verify(sync).importProduct("CM373BS");
+        verify(sync).refresh(eq("CM373BS"), eq(Kind.INVENTORY), eq(false), eq(true));
+    }
+
+    /**
+     * An import costs far more than a value push — options, variants, images, discounts — so one
+     * pass may only bring so many products up to date. The rest keep their digest unsealed and are
+     * picked up by the passes that follow.
+     */
+    @Test
+    void bringsAtMostOnePassWorthOfProductsUpToDate() {
+        List<String> ids = IntStream.rangeClosed(1, 30).mapToObj(i -> "ID" + i).toList();
+        when(sync.listImportedProductIds()).thenReturn(ids);
+        when(catalog.sellableProductIds()).thenReturn(Set.copyOf(ids));
+        supplierHasVariantsTheStoreLacks();
+
+        scheduler().refreshInventory();
+
+        verify(sync, times(25)).importProduct(anyString());
     }
 
     /**

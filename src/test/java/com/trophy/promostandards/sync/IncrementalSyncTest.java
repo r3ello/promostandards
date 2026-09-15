@@ -366,7 +366,9 @@ class IncrementalSyncTest {
             try {
                 return MAPPER.readTree(query.contains("ProductByHandle") ? """
                         {"data":{"products":{"nodes":[{"id":"gid://shopify/Product/900",
-                          "handle":"ps-pacesetter-sample-001","variants":{"nodes":[]}}]}}}"""
+                          "handle":"ps-pacesetter-sample-001","variants":{"nodes":[
+                            {"id":"gid://shopify/ProductVariant/91","sku":"SAMPLE-001-RED-S",
+                             "inventoryItem":{"id":"gid://shopify/InventoryItem/191"}}]}}]}}}"""
                         : "{\"data\":{\"inventorySetQuantities\":{\"userErrors\":[]},"
                                 + "\"metafieldsSet\":{\"metafields\":[],\"userErrors\":[]}}}");
             } catch (Exception e) {

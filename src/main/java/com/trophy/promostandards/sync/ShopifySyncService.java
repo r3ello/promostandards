@@ -109,6 +109,17 @@ public class ShopifySyncService {
     }
 
     /**
+     * The variants a store product would carry if it also covered {@code memberIds}, with the option
+     * values the store would show. Reads the supplier only — no Shopify call, nothing written — and
+     * goes through the same union the sync uses, so it cannot promise a variant set the sync would
+     * not produce. {@link ForeignProductSync} is not a bean (this class owns the only instance), so
+     * grouping reaches it here.
+     */
+    ForeignProductSync.GroupPreview groupPreview(String parentId, List<String> memberIds) {
+        return foreignSync.preview(parentId, memberIds);
+    }
+
+    /**
      * Result of a sync operation.
      *
      * @param warnings what the supplier could not answer for, carried up from
@@ -290,6 +301,12 @@ public class ShopifySyncService {
         BACKING_OFF,
         /** The push was attempted and failed; the product stays due. */
         FAILED,
+        /**
+         * The supplier has variants this store product does not carry. Values were pushed at the
+         * ones that exist, but the digest was NOT sealed: a scheduled pass only ever writes to
+         * variants that are already there, so recording this as done would lose the new ones.
+         */
+        NEEDS_VARIANTS,
         /** Sync bookkeeping is unreachable, so pushing would be flying blind. Skipped on purpose. */
         STATE_UNAVAILABLE
     }
@@ -360,11 +377,21 @@ public class ShopifySyncService {
             }
 
             try {
-                int updated = push(productId, product, kind);
+                PushResult pushed = push(productId, product, kind);
+                if (pushed.missing() > 0) {
+                    // Sealing the digest here would record variants that were never written as
+                    // pushed, and every later pass would read UNCHANGED: a colour the supplier added
+                    // would never appear. Leave the product due and say so — only the import path
+                    // creates variants.
+                    log.info("{} has {} supplier variant(s) the store does not carry yet", productId,
+                            pushed.missing());
+                    return new RefreshResult(productId, kind, Outcome.NEEDS_VARIANTS,
+                            pushed.updated(), null);
+                }
                 if (store != null) {
                     store.recordSuccess(productId, kind, digest);
                 }
-                return new RefreshResult(productId, kind, Outcome.PUSHED, updated, null);
+                return new RefreshResult(productId, kind, Outcome.PUSHED, pushed.updated(), null);
             } catch (RuntimeException e) {
                 if (store != null) {
                     store.recordFailure(productId, kind, e.getMessage());
@@ -377,8 +404,12 @@ public class ShopifySyncService {
         }
     }
 
+    /** What a push wrote, and what it could not write because no store variant stands for it. */
+    private record PushResult(int updated, int missing) {
+    }
+
     /** Resolves the store product once and writes whichever side this refresh is responsible for. */
-    private int push(String productId, SupplierProduct product, Kind kind) {
+    private PushResult push(String productId, SupplierProduct product, Kind kind) {
         JsonNode existing = resolveOrThrow(productId);
         String gid = existing.path("id").asText();
         Map<String, VariantRef> bySku = parseVariants(existing.path("variants").path("nodes"));
@@ -386,7 +417,15 @@ public class ShopifySyncService {
                 ? pushPrices(product, gid, bySku)
                 : pushInventory(product, bySku);
         stampSyncMetafields(gid, false);
-        return updated;
+        // Both pushes skip a supplier variant the store has nothing to write to. Counting them here
+        // is what tells the caller the product's structure is behind the supplier's.
+        int missing = 0;
+        for (Variant v : product.variants()) {
+            if (variantFor(bySku, v) == null) {
+                missing++;
+            }
+        }
+        return new PushResult(updated, missing);
     }
 
     /** Fixed set of locks striped by product id — bounded, unlike a lock per product id. */
