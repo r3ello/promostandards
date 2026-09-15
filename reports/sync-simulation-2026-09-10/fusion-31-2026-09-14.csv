@@ -1,0 +1,104 @@
+grupo,rol,propuesta,titulo,handle,sku_legacy,ids_actuales,padre,variantes_grupo,aviso
+G01,SUPERVIVIENTE,DECIDE TÚ,Blue Chisel Carve Tower Award,p-5478-blue-chisel-carve-tower-award,PS6160,C701LBL,C609LB C610LB C612LB C701BL C701L,20,sin stock
+G01,ABSORBIDO,,Gold Chisel Carve Tower Award,p-5882-gold-chisel-carve-tower-award,PS6564,C701LGO,C609LB C610LB C612LB C701BL C701L,20,sin stock
+G01,ABSORBIDO,,Green Chisel Carve Tower Award,p-5909-green-chisel-carve-tower-award,PS6591,C701LGR,C609LB C610LB C612LB C701BL C701L,20,sin stock
+G01,ABSORBIDO,,Purple Chisel Carve Tower Award,p-8147-purple-chisel-carve-tower-award,PS9309,C701LPU,C609LB C610LB C612LB C701BL C701L,20,sin stock
+G01,ABSORBIDO,,Teal Chisel Carve Tower Award,p-8891-teal-chisel-carve-tower-award,PS11425,C701LTE,C609LB C610LB C612LB C701BL C701L,20,sin stock
+G01,ABSORBIDO,,Gold Spectrum Chisel Carved Tower Award,p-5897-gold-spectrum-chisel-carved-tower-award,PS6579,C612LGO,C609LB C610LB C612LB C701BL C701L,20,sin stock
+G01,ABSORBIDO,,Red Spectrum Chisel Carved Tower Award,p-6208-red-spectrum-chisel-carved-tower-award,PS6890,C701LRE,C609LB C610LB C612LB C701BL C701L,20,sin stock
+G01,ABSORBIDO,,Blue Spectrum Chisel Carved Tower Small,p-8719-blue-spectrum-chisel-carved-tower-small,PS10106,C612LBL,C609LB C610LB C612LB C701BL C701L,20,sin stock
+G01,ABSORBIDO,,Black Chisel Carve Tower Award on Base,p-5430-black-chisel-carve-tower-award-on-base,PS6112,C701LBK C701BLBK,C609LB C610LB C612LB C701BL C701L,20,sin stock
+G01,ABSORBIDO,,Blue Chisel Carved Tower Award On Base,p-5479-blue-chisel-carved-tower-award-on-base,PS6161,C609LBBL C610LBBL C701BLBL C612LBBL,C609LB C610LB C612LB C701BL C701L,20,sin stock
+G01,ABSORBIDO,,Gold Chisel Carved Tower on Base Award,p-5883-gold-chisel-carved-tower-on-base-award,PS6565,C610LBGO C701BLGO C612LBGO,C609LB C610LB C612LB C701BL C701L,20,sin stock
+G01,ABSORBIDO,,Green Chisel Carve Tower Award on Base,p-5908-green-chisel-carve-tower-award-on-base,PS6590,C701BLGR,C609LB C610LB C612LB C701BL C701L,20,sin stock
+G01,ABSORBIDO,,Purple Chisel Carve Tower Award on Base,p-6182-purple-chisel-carve-tower-award-on-base,PS6864,C701BLPU,C609LB C610LB C612LB C701BL C701L,20,sin stock
+G01,ABSORBIDO,,Red Chisel Carve Tower Award on Base,p-6196-red-chisel-carve-tower-award-on-base,PS6878,C701BLRE,C609LB C610LB C612LB C701BL C701L,20,sin stock
+G01,ABSORBIDO,,Gold Chisel Carved Tower On Base Large,p-8760-gold-chisel-carved-tower-on-base-large,PS10703,C609LBGO,C609LB C610LB C612LB C701BL C701L,20,sin stock
+G01,ABSORBIDO,,Teal Chisel Carve Tower Award on Base,p-8890-teal-chisel-carve-tower-award-on-base,PS11424,C701BLTE,C609LB C610LB C612LB C701BL C701L,20,sin stock
+G02,SUPERVIVIENTE,DECIDE TÚ,Red Marble Florentine Plate on Ebony Board,p-8156-red-marble-florentine-plate-on-ebony-board,PS9339,CD414AREF CD414BREF,CD414*,12,SIN PRECIO: no importable
+G02,ABSORBIDO,,Blue Marble Florentine Plate on Ebony Board,p-8718-blue-marble-florentine-plate-on-ebony-board,PS10096,CD414ABEF,CD414*,12,SIN PRECIO: no importable
+G02,ABSORBIDO,,Green Marble Florentine Plate on Ebony Board,p-8766-green-marble-florentine-plate-on-ebony-board,PS10766,CD414AGREF CD414BGREF,CD414*,12,SIN PRECIO: no importable
+G02,ABSORBIDO,,Blue Marble Florentine Plate on Ebony Finish Board,p-7896-blue-marble-florentine-plate-on-ebony-finish-board,PS8278,CD414BBEF,CD414*,12,SIN PRECIO: no importable
+G02,ABSORBIDO,,Green Marble Florentine Plate on Walnut Finish Board,p-8767-green-marble-florentine-plate-on-walnut-finish-board,PS10767,CD414AGRWF CD414BGRWF,CD414*,12,SIN PRECIO: no importable
+G02,ABSORBIDO,,Red Marble Florentine Plate on Walnut Finish Board,p-8858-red-marble-florentine-plate-on-walnut-finish-board,PS11238,CD414ARWF CD414BRWF,CD414*,12,SIN PRECIO: no importable
+G03,SUPERVIVIENTE,DECIDE TÚ,Walnut Finish Plaque with Black Florentine,p-8219-walnut-finish-plaque-with-black-florentine,PS9563,C071ASWF,C071A C071B,8,sin stock
+G03,ABSORBIDO,,Walnut Finish Plaque with Black Florentine,p-8898-walnut-finish-plaque-with-black-florentine,PS11512,C071BSWF,C071A C071B,8,sin stock
+G03,ABSORBIDO,,Florentine Edge Plate on Ebony Board Medium,p-5734-florentine-edge-plate-on-ebony-board-medium,PS6416,C071ASEF,C071A C071B,8,sin stock
+G03,ABSORBIDO,,Florentine Gold Edge Plate on Ebony Board,p-5737-florentine-gold-edge-plate-on-ebony-board,PS6419,C071AGOEF,C071A C071B,8,sin stock
+G03,ABSORBIDO,,Walnut Finish Plaque with Black Florentine Plate,p-6329-walnut-finish-plaque-with-black-florentine-plate,PS7011,C071AGOWF C071BGOWF,C071A C071B,8,sin stock
+G03,ABSORBIDO,,Florentine Gold Edge Plate on Ebony Board Large,p-5736-florentine-gold-edge-plate-on-ebony-board-large,PS6418,C071BGOEF,C071A C071B,8,sin stock
+G04,SUPERVIVIENTE,DECIDE TÚ,7-Piece Black/Silver Leatherette Manicure Gift Set,p-8696-7-piece-blacksilver-leatherette-manicure-gift-set,PS9786,CM293BS,CM293,6,sin stock
+G04,ABSORBIDO,,7-Piece Pink Leatherette Manicure Gift Set,p-8699-7-piece-pink-leatherette-manicure-gift-set,PS9790,CM293PK,CM293,6,sin stock
+G04,ABSORBIDO,,7-Piece Rawhide Leatherette Manicure Gift Set,p-8700-7-piece-rawhide-leatherette-manicure-gift-set,PS9791,CM293RW,CM293,6,sin stock
+G04,ABSORBIDO,,7-Piece Dark Brown Leatherette Manicure Gift Set,p-8697-7-piece-dark-brown-leatherette-manicure-gift-set,PS9787,CM293DB,CM293,6,sin stock
+G04,ABSORBIDO,,7-Piece Light Brown Leatherette Manicure Gift Set,p-8698-7-piece-light-brown-leatherette-manicure-gift-set,PS9789,CM293LB,CM293,6,sin stock
+G05,SUPERVIVIENTE,DECIDE TÚ,Ebony Finish Certificate/Overlay Plaque,p-5708-ebony-finish-certificateoverlay-plaque,PS6390,C3501AEBG C3501BEBG C3501CEBG,C3501A C3501B C3501C,12,sin stock
+G05,ABSORBIDO,,Genuine Walnut Certificate Plaque,p-5869-genuine-walnut-certificate-plaque,PS6551,C3501AWG,C3501A C3501B C3501C,12,sin stock
+G05,ABSORBIDO,,Walnut Finish Certificate/Overlay Plaque in Gift Box,p-6324-walnut-finish-certificateoverlay-plaque-in-gift-box,PS7006,C3501AWNG C3501BWNG C3501CWNG,C3501A C3501B C3501C,12,sin stock
+G05,ABSORBIDO,,Walnut Finish Certificate/Overlay Plaque in Mailer Box,p-6325-walnut-finish-certificateoverlay-plaque-in-mailer-box,PS7007,C3501AWNM C3501BWNM C3501CWNM C3501AWM C3501BWM,C3501A C3501B C3501C,12,sin stock
+G06,SUPERVIVIENTE,DECIDE TÚ,Anniversary Freestanding 1 Year Award,p-7628-anniversary-freestanding-1-year-award,PS6059-1,CD904Y1,CD904AY*,5,sin stock
+G06,ABSORBIDO,,Anniversary Freestanding 3 Year Award,p-7627-anniversary-freestanding-3-year-award,PS6059-3,CD904Y3,CD904AY*,5,sin stock
+G06,ABSORBIDO,,Anniversary Freestanding 5 Year Award,p-5377-anniversary-freestanding-5-year-award,PS6059,CD904Y5,CD904AY*,5,sin stock
+G07,SUPERVIVIENTE,DECIDE TÚ,Blue Acrylic Color Drops Award,p-7888-blue-acrylic-color-drops-award,PS8232,CD1101AB CD1101BB CD1101CB,CD1101A CD1101B CD1101C,9,sin stock
+G07,ABSORBIDO,,Green Acrylic Color Drops Award,p-8061-green-acrylic-color-drops-award,PS8805,CD1101AG CD1101BG CD1101CG,CD1101A CD1101B CD1101C,9,sin stock
+G07,ABSORBIDO,,Red Acrylic Color Drops Award,p-8153-red-acrylic-color-drops-award,PS9325,CD1101AR CD1101BR,CD1101A CD1101B CD1101C,9,sin stock
+G08,SUPERVIVIENTE,DECIDE TÚ,Cork Round Coaster,p-5623-cork-round-coaster,PS6305,CM240CK,CM240*,12,
+G08,ABSORBIDO,,Leatherette Round Coaster,p-8098-leatherette-round-coaster,PS9099,CM240BB CM240BV CM240WM,CM240*,12,
+G08,ABSORBIDO,,Leatherette Round Coaster,p-8817-leatherette-round-coaster,PS10936,CM240BS CM240DB CM240GR CM240LB CM240PK CM240RS CM240RW CM240TL,CM240*,12,
+G09,SUPERVIVIENTE,DECIDE TÚ,Ebony Finish Plaque with Marble Mist Small,p-5712-ebony-finish-plaque-with-marble-mist-small,PS6394,C021BBEF C021BGEF C021BREF,C021A C021B,12,sin stock
+G09,ABSORBIDO,,Ebony Finish Plaque with Marble Mist Large,p-5713-ebony-finish-plaque-with-marble-mist-large,PS6395,C021ABEF C021AGEF C021AREF,C021A C021B,12,sin stock
+G09,ABSORBIDO,,Walnut Finish Plaque with Marble Mist Plate,p-8899-walnut-finish-plaque-with-marble-mist-plate,PS11513,C021ABWF C021AGWF C021ARWF C021BBWF C021BGWF C021BRWF,C021A C021B,12,sin stock
+G10,SUPERVIVIENTE,DECIDE TÚ,Leatherette Money Clip Large,p-8088-leatherette-money-clip-large,PS9014,CM455BV,CM455,7,sin stock
+G10,ABSORBIDO,,Leatherette Money Clip Small,p-8799-leatherette-money-clip-small,PS10894,CM455BS,CM455,7,sin stock
+G10,ABSORBIDO,,Leatherette Money Clip Large,p-8800-leatherette-money-clip-large,PS10897,CM455DB CM455GR CM455LB CM455RW,CM455,7,sin stock
+G11,SUPERVIVIENTE,DECIDE TÚ,Red Cascade Carved Acrylic Award,p-8154-red-cascade-carved-acrylic-award,PS9330,CD1217RD,CD1217,3,SIN PRECIO: no importable
+G11,ABSORBIDO,,Blue Cascade Carved Acrylic Award,p-8714-blue-cascade-carved-acrylic-award,PS10062,CD1217BL,CD1217,3,SIN PRECIO: no importable
+G12,SUPERVIVIENTE,DECIDE TÚ,Blue Optic Crystal Gemstone Award,p-5509-blue-optic-crystal-gemstone-award,PS6191,GI513AB GI513BB GI513CB,GI513A GI513B GI513C,6,sin stock
+G12,ABSORBIDO,,Green Optic Crystal Gemstone Award,p-8768-green-optic-crystal-gemstone-award,PS10768,GI513AGR GI513BGR GI513CGR,GI513A GI513B GI513C,6,sin stock
+G13,SUPERVIVIENTE,DECIDE TÚ,Bronze Cascade Metal Stars Award,p-5530-bronze-cascade-metal-stars-award,PS6212,CD476BZ CD477BZ CD478BZ,CD476 CD477 CD478,9,sin stock
+G13,ABSORBIDO,,Gold Cascade Metal Stars Award,p-5881-gold-cascade-metal-stars-award,PS6563,CD476GO CD477GO CD478GO,CD476 CD477 CD478,9,sin stock
+G14,SUPERVIVIENTE,DECIDE TÚ,Cork Bottle Opener,p-5618-cork-bottle-opener,PS6300,CM332CK,CM332* CM333,16,
+G14,ABSORBIDO,,Leatherette Bottle Opener,p-8784-leatherette-bottle-opener,PS10860,CM332BS CM332DB CM332GR CM332LB CM332PK CM332RD CM332RS CM332RW CM332TL CM333BS CM333DB CM333GR CM333LB CM333PK CM333RW,CM332* CM333,16,
+G15,SUPERVIVIENTE,DECIDE TÚ,Cork Round,p-5624-cork-round,PS6306,CM282CK,CM282*,7,
+G15,ABSORBIDO,,Leatherette Set of 6 Round Coasters,p-8818-leatherette-set-of-6-round-coasters,PS10937,CM282DB CM282GR CM282LB CM282PK CM282RW CM282TL,CM282*,7,
+G16,SUPERVIVIENTE,DECIDE TÚ,Cork Square Coaster,p-5625-cork-square-coaster,PS6307,CM241CK,CM241*,12,
+G16,ABSORBIDO,,Leatherette Square Coaster,p-8821-leatherette-square-coaster,PS10946,CM241BS CM241DB CM241GR CM241LB CM241PK CM241RS CM241RW CM241TL,CM241*,12,
+G17,SUPERVIVIENTE,DECIDE TÚ,Cork Square Coasters Set,p-5626-cork-square-coasters-set,PS6308,CM283CK,CM283*,9,
+G17,ABSORBIDO,,Leatherette Square Coasters Set,p-8822-leatherette-square-coasters-set,PS10947,CM283DB CM283GR CM283LB CM283PK CM283RW CM283TL,CM283*,9,
+G18,SUPERVIVIENTE,DECIDE TÚ,Large Leatherette Notepad and Pen,p-8805-large-leatherette-notepad-and-pen,PS10904,CM244BL CM244BS CM244BV CM244DB CM244GR CM244LB CM244PK CM244RS CM244RW CM244TL CM244WM,CM244*,11,
+G18,ABSORBIDO,,Leatherette Notepad and Pen Small,p-8806-leatherette-notepad-and-pen-small,PS10905,CM244BB,CM244*,11,
+G19,SUPERVIVIENTE,DECIDE TÚ,Leatherette Slim Small,p-8819-leatherette-slim-small,PS10940,CM292DB CM292GR CM292LB CM292RW,CM292,5,sin stock
+G19,ABSORBIDO,,Leatherette Slim Large,p-8820-leatherette-slim-large,PS10941,CM292BS,CM292,5,sin stock
+G20,SUPERVIVIENTE,DECIDE TÚ,Polar Camel Small,p-8848-polar-camel-small,PS11164,CM713BL CM713DB CM713GR CM713GY CM713LB CM713LP CM713MR CM713OR CM713PK CM713PU CM713RD CM713TL CM713WH CM711BL CM711CR CM711DB CM711GR CM711GY CM711LB CM711LP CM711MR CM711OG CM711OR CM711PK CM711PU CM711RD CM711TL CM711WH CM711YW CM712BK CM726BL CM726CR CM726DB CM726GR CM726GY CM726LB CM726LP CM726MR CM726OR CM726PK CM726PU CM726RD CM726TL CM726WH CM726YW CM731BL CM731CR CM731DB CM731GR CM731GY,CM711 CM712 CM713* CM726* CM731,87,
+G20,ABSORBIDO,,Polar Camel Medium,p-8850-polar-camel-medium,PS11166,CM712BL CM712DB CM712GR CM712GY CM712LB CM712LP CM712MR CM712OR CM712PK CM712PU CM712RD CM712TL CM712WH CM713BK CM731BK,CM711 CM712 CM713* CM726* CM731,87,
+G21,SUPERVIVIENTE,DECIDE TÚ,Polar Camel stainless steel beverage holder. Small,p-8846-polar-camel-stainless-steel-beverage-holder-small,PS11162,CM727BK CM737BK,CM727* CM737*,32,
+G21,ABSORBIDO,,Polar Camel stainless steel beverage holder. Large,p-8847-polar-camel-stainless-steel-beverage-holder-large,PS11163,CM727BL CM727CR CM727DB CM727GR CM727GY CM727LB CM727LP CM727MR CM727OR CM727PK CM727PU CM727RD CM727TL CM727WH CM727YW CM737BL CM737CR CM737DB CM737GR CM737GY CM737LB CM737LP CM737MR CM737OR CM737PK CM737PU CM737RD CM737TL CM737WH CM737YW,CM727* CM737*,32,
+G22,SUPERVIVIENTE,DECIDE TÚ,Powder Coated Tumbler Small,p-8853-powder-coated-tumbler-small,PS11172,CM816BL CM816DB CM816MR CM816PK CM816PU CM816RD CM816TL CM816WH,CM816*,9,
+G22,ABSORBIDO,,Powder Coated Tumbler Large,p-8854-powder-coated-tumbler-large,PS11173,CM816BK,CM816*,9,
+G23,SUPERVIVIENTE,DECIDE TÚ,Slide-in Certificate Walnut Plaque in Gift Box,p-6270-slide-in-certificate-walnut-plaque-in-gift-box,PS6952,C4801AAG C4801AG C4801BG C4801CG,C4801A C4801AA C4801B C4801C,8,sin stock
+G23,ABSORBIDO,,Slide-in Certificate Walnut Plaque in Mailer Box,p-6271-slide-in-certificate-walnut-plaque-in-mailer-box,PS6953,C4801AAM C4801AM C4801BM C4801CM,C4801A C4801AA C4801B C4801C,8,sin stock
+G24,SUPERVIVIENTE,DECIDE TÚ,Tahoe Stemless Cocktail Tumbler,p-8884-tahoe-stemless-cocktail-tumbler,PS11414,CM745BK CM745BL CM745DB CM745LB CM745LP CM745PU,CM745*,15,
+G24,ABSORBIDO,,Tahoe Stemless Cocktail Tumblers,p-8885-tahoe-stemless-cocktail-tumblers,PS11415,CM745PK CM745RD CM745TL,CM745*,15,
+G25,SUPERVIVIENTE,DECIDE TÚ,Tahoe Travel Mug,p-8886-tahoe-travel-mug,PS11416,CM747LB CM746LB,CM746* CM747*,26,
+G25,ABSORBIDO,,Tahoe Travel Tumbler,p-8887-tahoe-travel-tumbler,PS11417,CM747BK CM747BL CM747DB CM747LP CM747OR CM747PK CM747PU CM747RD CM746BK CM746BL CM746DB CM746LP CM746OR CM746PK CM746PU CM746RD,CM746* CM747*,26,
+G26,SUPERVIVIENTE,genérico,Leatherette Oval Keychain,p-8091-leatherette-oval-keychain,PS9044,CM291BB CM291BV CM291WM,CM291*,11,
+G26,ABSORBIDO,,Cork Leatherette Oval Keychain,p-6014-cork-leatherette-oval-keychain,PS6696,CM291CK CM291RG CM291TL,CM291*,11,
+G26,ABSORBIDO,,Black/Silver Leatherette Oval Keychain,p-8710-blacksilver-leatherette-oval-keychain,PS10040,CM291BS,CM291*,11,
+G26,ABSORBIDO,,Grey Leatherette Oval Keychain,p-8770-grey-leatherette-oval-keychain,PS10771,CM291GR,CM291*,11,
+G26,ABSORBIDO,,Pink Leatherette Oval Keychain,p-8843-pink-leatherette-oval-keychain,PS11148,CM291PK,CM291*,11,
+G26,ABSORBIDO,,Rawhide Leatherette Oval Keychain,p-8856-rawhide-leatherette-oval-keychain,PS11203,CM291RW,CM291*,11,
+G26,ABSORBIDO,,Rose Leatherette Oval Keychain,p-8859-rose-leatherette-oval-keychain,PS11251,CM291RS,CM291*,11,
+G26,ABSORBIDO,,Dark Brown Leatherette Oval Keychain,p-8748-dark-brown-leatherette-oval-keychain,PS10404,CM291DB,CM291*,11,
+G26,ABSORBIDO,,Light Brown Leatherette Oval Keychain,p-8829-light-brown-leatherette-oval-keychain,PS10958,CM291LB,CM291*,11,
+G27,SUPERVIVIENTE,genérico,Leatherette Portfolio,p-8096-leatherette-portfolio,PS9082,CM237ABB CM237ABV CM237AWM CM237BBB CM237BBV CM237BWM,CM237A* CM237B*,25,
+G27,ABSORBIDO,,Leatherette Portfolio Small,p-8815-leatherette-portfolio-small,PS10927,CM237ABS CM237ACK CM237ATL CM237BBS CM237BCK CM237BTL,CM237A* CM237B*,25,
+G27,ABSORBIDO,,Leatherette Portfolio with Notepad (lrg),p-8813-leatherette-portfolio-with-notepad-lrg,PS10920,CM237BBL CM237BDB CM237BGR CM237BLB CM237BPK CM237BRS CM237BRW,CM237A* CM237B*,25,
+G27,ABSORBIDO,,Leatherette Portfolio with Notepad (sml),p-8814-leatherette-portfolio-with-notepad-sml,PS10921,CM237ABL CM237ADB CM237AGR CM237ALB CM237APK CM237ARS CM237ARW,CM237A* CM237B*,25,
+G28,SUPERVIVIENTE,genérico,Black Walnut Cutting & Charcuterie Board,p-7882-black-walnut-cutting-charcuterie-board,PS8222,CM750A CM750C CM750D CM750B,CM750,6,sin stock
+G28,ABSORBIDO,,Black Walnut Cutting & Charcuterie Board Large,p-7881-black-walnut-cutting-charcuterie-board-large,PS8221,CM750E CM750F,CM750,6,sin stock
+G29,SUPERVIVIENTE,genérico,Golf Bag Tag with Tees,p-8761-golf-bag-tag-with-tees,PS10734,CM723BB,CM723*,6,
+G29,ABSORBIDO,,Leatherette Golf Bag Tag with Tees,p-8762-leatherette-golf-bag-tag-with-tees,PS10735,CM723BS CM723GR CM723PK CM723RW CM723TL,CM723*,6,
+G30,SUPERVIVIENTE,genérico,Leatherette Cigar Case with Cutter,p-8080-leatherette-cigar-case-with-cutter,PS8947,CM372BB,CM372,8,sin stock
+G30,ABSORBIDO,,Leatherette Cigar Case with Cutter,p-8787-leatherette-cigar-case-with-cutter,PS10866,CM372BS CM372BV CM372DB CM372GR CM372LB CM372RV CM372RW,CM372,8,sin stock
+G31,SUPERVIVIENTE,genérico,Leatherette Hard Business Card Case,p-8084-leatherette-hard-business-card-case,PS8987,CM243BB CM243BV CM243WM,CM243*,10,
+G31,ABSORBIDO,,Leatherette Hard Business Card Case,p-8796-leatherette-hard-business-card-case,PS10885,CM243BS CM243DB CM243GR CM243LB CM243PK CM243RS CM243RW CM243TL,CM243*,10,
