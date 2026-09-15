@@ -118,6 +118,21 @@ class SyncApiTest {
                 .andExpect(jsonPath("$.message").value(containsString("CM813")));
     }
 
+    /**
+     * A grouping the preview refuses is a conflict too, with the reason — here a parent the store
+     * does not carry (the mocked store lists nothing) — and never reaches the sync.
+     */
+    @Test
+    void applyingARefusedGroupingIsAConflict() throws Exception {
+        mockMvc.perform(post("/api/sync/groups")
+                        .contentType("application/json")
+                        .content("{\"parentProductId\":\"CM291BS\",\"memberProductIds\":[\"CM291RS\"]}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(containsString("no store product carries CM291BS")));
+
+        verify(sync, org.mockito.Mockito.never()).importProduct(any());
+    }
+
     /** The console asks this before offering "Add to Shopify". */
     @Test
     void reportsWhetherProductsCanBeCreated() throws Exception {

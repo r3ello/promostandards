@@ -4,6 +4,7 @@ import com.trophy.promostandards.common.PromoStandardsClientException;
 import com.trophy.promostandards.common.PromoStandardsNotFoundException;
 import com.trophy.promostandards.shopify.ShopifyGraphQLException;
 import com.trophy.promostandards.sync.CatalogSearchUnavailableException;
+import com.trophy.promostandards.sync.GroupConflictException;
 import com.trophy.promostandards.sync.ProductNotInStoreException;
 import com.trophy.promostandards.sync.ShopifySyncException;
 import org.slf4j.Logger;
@@ -56,6 +57,17 @@ public class GlobalExceptionHandler {
 	@ExceptionHandler(ProductNotInStoreException.class)
 	public ResponseEntity<ErrorResponse> handleNotInStore(ProductNotInStoreException ex) {
 		log.info("Import refused: {}", ex.getMessage());
+		return ResponseEntity.status(HttpStatus.CONFLICT)
+				.body(ErrorResponse.of(HttpStatus.CONFLICT.value(), ex.getMessage(), List.of()));
+	}
+
+	/**
+	 * A grouping its own preview refuses. A 409 like the one above: nobody failed, the store is in a
+	 * state that makes the request unsafe, and nothing was written.
+	 */
+	@ExceptionHandler(GroupConflictException.class)
+	public ResponseEntity<ErrorResponse> handleGroupConflict(GroupConflictException ex) {
+		log.info("Grouping refused: {}", ex.getMessage());
 		return ResponseEntity.status(HttpStatus.CONFLICT)
 				.body(ErrorResponse.of(HttpStatus.CONFLICT.value(), ex.getMessage(), List.of()));
 	}

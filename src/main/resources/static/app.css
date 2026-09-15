@@ -153,6 +153,8 @@ body {
 .prod-row.is-open { background: var(--p-color-bg-surface-selected); }
 
 .col-expand { width: 34px; }
+.col-select { width: 34px; text-align: center; cursor: default; }
+.col-select input { width: 15px; height: 15px; vertical-align: middle; accent-color: var(--p-color-bg-fill-brand); cursor: pointer; }
 .col-thumb { width: 52px; }
 .col-actions { width: 1%; white-space: nowrap; }
 
@@ -395,6 +397,54 @@ body {
 	font-size: var(--p-font-size-275);
 	white-space: pre;
 }
+
+/* ---------- selection bar ---------- */
+/* What is ticked in the table, across pages and searches, and what can be done with it. */
+.bulkbar {
+	display: flex; align-items: center; gap: var(--p-space-300); flex-wrap: wrap;
+	padding: var(--p-space-300) var(--p-space-500);
+	background: var(--p-color-bg-surface-selected); border-top: 1px solid var(--p-color-border);
+}
+.bulkbar[hidden] { display: none; }
+.bulkbar__count { font-size: var(--p-font-size-325); font-weight: var(--p-font-weight-semibold); }
+.bulkbar__ids { display: flex; flex-wrap: wrap; gap: var(--p-space-150); flex: 1; min-width: 0; }
+.bulkbar__actions { display: inline-flex; gap: var(--p-space-200); margin-left: auto; }
+.chip {
+	display: inline-flex; align-items: center; gap: 2px; padding: 1px 3px 1px 8px;
+	font-family: var(--p-font-family-mono); font-size: var(--p-font-size-300);
+	background: var(--p-color-bg-surface); border: 1px solid var(--p-color-border); border-radius: var(--p-border-radius-full);
+}
+.chip__x { font: inherit; line-height: 1; padding: 1px 4px; border: 0; border-radius: 50%; background: none; color: var(--p-color-icon-secondary); cursor: pointer; }
+.chip__x:hover { color: var(--p-color-text); background: var(--p-color-bg-surface-secondary); }
+
+/* ---------- group modal ---------- */
+.modal__dialog--wide { max-width: 860px; }
+.btn--critical { color: #fff; background: var(--p-color-bg-fill-critical, rgba(199, 10, 10, 1)); border-color: transparent; }
+.btn--critical:hover { background: var(--p-color-bg-fill-critical-hover, rgba(163, 10, 10, 1)); }
+/* The second click writes to the live store: the footer says so in the colour of a destructive act. */
+.modal__foot.is-confirming { background: var(--p-color-bg-fill-critical-secondary); }
+.modal__foot.is-confirming .modal__note { color: var(--p-color-text-critical); font-size: var(--p-font-size-325); }
+.grp-section { margin: var(--p-space-400) 0; }
+.grp-help { font-size: var(--p-font-size-325); margin-bottom: var(--p-space-200); }
+.grp-parents { display: grid; gap: var(--p-space-150); }
+.grp-parent {
+	display: flex; align-items: center; gap: var(--p-space-300); padding: var(--p-space-200) var(--p-space-300);
+	border: 1px solid var(--p-color-border); border-radius: var(--p-border-radius-200); cursor: pointer;
+}
+.grp-parent:has(input:checked) { border-color: var(--p-color-border-focus); background: var(--p-color-bg-surface-selected); }
+.grp-parent.is-disabled { cursor: default; opacity: .7; }
+.grp-parent input { accent-color: var(--p-color-bg-fill-brand); }
+.grp-parent__text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.grp-summary { font-size: var(--p-font-size-325); margin-bottom: var(--p-space-200); }
+.grp-absorbed { list-style: none; display: grid; gap: var(--p-space-150); font-size: var(--p-font-size-325); }
+.state--crit {
+	color: var(--p-color-text-critical); background: var(--p-color-bg-fill-critical-secondary);
+	border-radius: var(--p-border-radius-200); padding: var(--p-space-300) var(--p-space-400);
+	text-align: left; font-size: var(--p-font-size-325); margin: var(--p-space-400) 0;
+}
+.state--crit ul, .state--warn ul { margin: var(--p-space-150) 0 0 var(--p-space-500); }
+.state--crit p { margin-top: var(--p-space-150); }
+.state--crit .grp-include { margin-top: var(--p-space-300); }
 
 /* ---------- scheduled sync ---------- */
 /* The automation panel sits above the catalog; cards are stacked, so they need their own gap. */

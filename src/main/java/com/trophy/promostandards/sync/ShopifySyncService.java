@@ -120,6 +120,15 @@ public class ShopifySyncService {
     }
 
     /**
+     * @return the handle a product this app created for {@code productId} carries. A store product
+     * under it is synced with {@code productSet}, which replaces the variant list rather than unioning
+     * {@code ps_product_ids} — so grouping has to know.
+     */
+    String appHandle(String productId) {
+        return mapper.handle(productId);
+    }
+
+    /**
      * Result of a sync operation.
      *
      * @param warnings what the supplier could not answer for, carried up from

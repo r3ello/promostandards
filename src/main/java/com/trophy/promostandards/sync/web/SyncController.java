@@ -6,6 +6,7 @@ import com.trophy.promostandards.discount.DiscountSyncService.DiscountResult;
 import com.trophy.promostandards.sync.MetafieldCatalogService;
 import com.trophy.promostandards.sync.OrderSyncService;
 import com.trophy.promostandards.sync.OrderSyncService.OrderSyncResult;
+import com.trophy.promostandards.sync.ProductGroupService;
 import com.trophy.promostandards.sync.ShopifySyncService;
 import com.trophy.promostandards.sync.ShopifySyncService.SyncResult;
 import com.trophy.promostandards.sync.SyncProperties;
@@ -44,10 +45,12 @@ public class SyncController {
     private final MetafieldCatalogService metafieldCatalog;
     private final DiscountSyncService discounts;
     private final SyncScheduler scheduler;
+    private final ProductGroupService groups;
 
     public SyncController(ShopifySyncService sync, OrderSyncService orderSync,
                           MetafieldCatalogService metafieldCatalog, DiscountSyncService discounts,
-                          SyncScheduler scheduler) {
+                          SyncScheduler scheduler, ProductGroupService groups) {
+        this.groups = groups;
         this.sync = sync;
         this.orderSync = orderSync;
         this.metafieldCatalog = metafieldCatalog;
@@ -161,6 +164,31 @@ public class SyncController {
                     e.getMessage());
             return ImportResponse.of(result, null, e.getMessage());
         }
+    }
+
+    /**
+     * Sells several supplier products as one store product: writes the grouping into the store,
+     * archives the products whose ids moved, and syncs the parent — then publishes its discounts,
+     * as an import does, since a grouped product's ladder is written per variant.
+     *
+     * <p>The preview ({@code POST /api/catalog/groups}) is the same check; this answers 409 with its
+     * conflicts, having written nothing, for any grouping the preview refuses.
+     */
+    @PostMapping("/groups")
+    public GroupResponse applyGroup(@RequestBody CatalogController.GroupRequest request) {
+        ProductGroupService.Applied applied =
+                groups.apply(request.parentProductId(), request.memberProductIds());
+        return new GroupResponse(applied.parentProductId(), applied.parentHandle(), applied.supplierIds(),
+                applied.archived(), applied.sync() == null ? null : withDiscounts(applied.sync()),
+                applied.syncError());
+    }
+
+    /**
+     * @param sync      the parent's import, discounts included; null when it failed — the grouping is
+     *                  written regardless, and {@code syncError} says why
+     */
+    public record GroupResponse(String parentProductId, String parentHandle, List<String> supplierIds,
+                                List<String> archived, ImportResponse sync, String syncError) {
     }
 
     /** Refresh inventory for an already-imported product. */

@@ -98,7 +98,8 @@ public class CatalogController {
      *
      * <p>Answers only: nothing is written, so this can be called as freely as the console needs.
      * Applying a group writes identity metafields on a live store and cannot be undone by writing
-     * them back — the sync never deletes a variant — so that half is deliberately a separate step.
+     * them back — the sync never deletes a variant — so that half is a separate call,
+     * {@code POST /api/sync/groups}, which runs these same checks again before it writes.
      */
     @PostMapping("/groups")
     public ProductGroupPreview previewGroup(@RequestBody GroupRequest request) {

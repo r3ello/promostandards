@@ -110,6 +110,10 @@ CASES: dict[str, dict] = {
                                        "key": "ps_last_sync_at", "type": "date_time",
                                        "value": "2026-01-01T00:00:00Z"}]},
     "IMPORTED_PRODUCTS": {"discountNamespace": "trophy_discount", "discountKey": "discount_tiers"},
+    # Grouping: both against a product that cannot exist, so no identity is removed and nothing archived.
+    "METAFIELDS_DELETE": {"metafields": [{"ownerId": GHOST["product"], "namespace": "custom",
+                                          "key": "ps_product_ids"}]},
+    "PRODUCT_ARCHIVE": {"id": GHOST["product"]},
     # Media: all three run against ids that cannot exist, so nothing is added or deleted for real.
     "PRODUCT_ADD_MEDIA": {"id": GHOST["product"],
                           "media": [{"originalSource": "https://example.invalid/probe.jpg",

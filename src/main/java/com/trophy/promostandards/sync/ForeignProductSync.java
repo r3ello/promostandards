@@ -120,7 +120,7 @@ class ForeignProductSync {
         // only render a selector with nothing to select — and this app is what put them there.
         boolean single = union.variants().size() == 1;
 
-        boolean writable = writableShape(productId, gid, options, store);
+        boolean writable = writableShape(productId, gid, storeProduct);
         if (writable) {
             if (single) {
                 revertToSimpleProduct(gid, options);
@@ -359,20 +359,39 @@ class ForeignProductSync {
      * options we do not model (Material, Style, …) keeps its variants untouched — only the prices and
      * quantities of variants that already match are refreshed.
      */
-    private boolean writableShape(String productId, String gid, Map<String, JsonNode> options,
-                                  List<StoreVariant> store) {
-        List<String> unknown = options.keySet().stream().filter(n -> !KNOWN_OPTIONS.contains(n)).toList();
-        if (!unknown.isEmpty()) {
-            log.warn("Store product {} ({}) uses options {} this app does not model; leaving its "
-                    + "variants alone and only refreshing matched ones", gid, productId, unknown);
-            return false;
-        }
-        if (options.containsKey("title") && store.size() > 1) {
-            log.warn("Store product {} ({}) still has the default Title option across {} variants; "
-                    + "leaving its variants alone", gid, productId, store.size());
+    private boolean writableShape(String productId, String gid, JsonNode storeProduct) {
+        String reason = unmodelledShape(storeProduct);
+        if (reason != null) {
+            log.warn("Store product {} ({}) {}; leaving its variants alone and only refreshing matched "
+                    + "ones", gid, productId, reason);
             return false;
         }
         return true;
+    }
+
+    /**
+     * @return why the sync would leave this product's variants alone, or {@code null} when it may add
+     * and rewrite them. Grouping asks too, before it writes anything: a product the sync will not add
+     * variants to cannot take in another product's.
+     */
+    static String unmodelledShape(JsonNode storeProduct) {
+        List<String> unknown = new ArrayList<>();
+        boolean title = false;
+        for (JsonNode o : storeProduct.path("options")) {
+            String name = o.path("name").asText("").toLowerCase(Locale.ROOT);
+            title |= name.equals("title");
+            if (!KNOWN_OPTIONS.contains(name)) {
+                unknown.add(name);
+            }
+        }
+        if (!unknown.isEmpty()) {
+            return "uses options " + unknown + " this app does not model";
+        }
+        int variants = storeProduct.path("variants").path("nodes").size();
+        if (title && variants > 1) {
+            return "still has the default Title option across " + variants + " variants";
+        }
+        return null;
     }
 
     // ---------------------------------------------------------------- mutations
