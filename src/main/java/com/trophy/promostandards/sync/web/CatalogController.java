@@ -5,7 +5,9 @@ import com.trophy.promostandards.sync.CatalogGroupIndex;
 import com.trophy.promostandards.sync.CatalogSummaryService;
 import com.trophy.promostandards.sync.CatalogTitleIndex;
 import com.trophy.promostandards.sync.PendingDataIndex;
+import com.trophy.promostandards.sync.ProductGroupService;
 import com.trophy.promostandards.sync.model.PendingDataView;
+import com.trophy.promostandards.sync.model.ProductGroupPreview;
 import com.trophy.promostandards.sync.model.CatalogEntry;
 import com.trophy.promostandards.sync.model.CatalogGroupView;
 import com.trophy.promostandards.sync.model.CatalogTitleView;
@@ -13,6 +15,7 @@ import com.trophy.promostandards.sync.model.ProductDetail;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -33,13 +36,16 @@ public class CatalogController {
     private final CatalogGroupIndex groupIndex;
     private final CatalogTitleIndex titleIndex;
     private final PendingDataIndex pendingData;
+    private final ProductGroupService groups;
 
     public CatalogController(CatalogSummaryService summaries, CatalogGroupIndex groupIndex,
-                             CatalogTitleIndex titleIndex, PendingDataIndex pendingData) {
+                             CatalogTitleIndex titleIndex, PendingDataIndex pendingData,
+                             ProductGroupService groups) {
         this.summaries = summaries;
         this.groupIndex = groupIndex;
         this.titleIndex = titleIndex;
         this.pendingData = pendingData;
+        this.groups = groups;
     }
 
     /** Cheap list: one entry (id + imported flag) per discoverable product. */
@@ -85,6 +91,23 @@ public class CatalogController {
     @GetMapping("/products/{productId}")
     public ProductDetail product(@PathVariable String productId) {
         return summaries.detail(productId);
+    }
+
+    /**
+     * What selling several supplier products as one store product would produce.
+     *
+     * <p>Answers only: nothing is written, so this can be called as freely as the console needs.
+     * Applying a group writes identity metafields on a live store and cannot be undone by writing
+     * them back — the sync never deletes a variant — so that half is a separate call,
+     * {@code POST /api/sync/groups}, which runs these same checks again before it writes.
+     */
+    @PostMapping("/groups")
+    public ProductGroupPreview previewGroup(@RequestBody GroupRequest request) {
+        return groups.preview(request.parentProductId(), request.memberProductIds());
+    }
+
+    /** @param memberProductIds the supplier ids to sell under {@code parentProductId} */
+    public record GroupRequest(String parentProductId, List<String> memberProductIds) {
     }
 
     /**

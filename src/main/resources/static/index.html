@@ -135,11 +135,23 @@
 				</label>
 			</div>
 
+			<!-- Bulk bar: what is ticked in the table, across pages and searches, and what can be done
+			     with it. Grouping sells several PaceSetter ids as one Shopify product. -->
+			<div class="bulkbar" id="bulkBar" hidden>
+				<span class="bulkbar__count" id="bulkCount">0 selected</span>
+				<div class="bulkbar__ids" id="bulkIds"></div>
+				<div class="bulkbar__actions">
+					<button class="btn btn--sm" id="bulkClear">Clear</button>
+					<button class="btn btn--primary btn--sm" id="bulkGroup" title="Sell the selected PaceSetter ids as one Shopify product">Group into one product…</button>
+				</div>
+			</div>
+
 			<!-- Products table -->
 			<div class="table-wrap">
 				<table class="index-table" id="productsTable">
 					<thead>
 						<tr>
+							<th class="col-select" aria-label="Select"></th>
 							<th class="col-expand" aria-label="Expand"></th>
 							<th class="col-thumb" aria-label="Image"></th>
 							<th>Product</th>
@@ -152,7 +164,7 @@
 						</tr>
 					</thead>
 					<tbody id="productsBody">
-						<tr class="row-state"><td colspan="9"><div class="state"><span class="spinner"></span> Loading products…</div></td></tr>
+						<tr class="row-state"><td colspan="10"><div class="state"><span class="spinner"></span> Loading products…</div></td></tr>
 					</tbody>
 				</table>
 			</div>
@@ -191,6 +203,30 @@
 				<div class="modal__actions">
 					<button class="btn" id="mfSkip">Skip &amp; import</button>
 					<button class="btn btn--primary" id="mfImport">Import</button>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<!-- Group modal: choose which store product keeps its identity, see what the grouped product
+	     would carry (POST /api/catalog/groups, writes nothing), then apply (POST /api/sync/groups). -->
+	<div class="modal" id="groupModal" hidden>
+		<div class="modal__overlay" data-group-close></div>
+		<div class="modal__dialog modal__dialog--wide" role="dialog" aria-modal="true" aria-labelledby="groupTitle">
+			<div class="modal__head">
+				<div>
+					<h2 class="modal__title" id="groupTitle">Group into one product</h2>
+					<p class="modal__sub" id="groupSub">Sell several PaceSetter ids as one Shopify product.</p>
+				</div>
+				<button class="modal__close" data-group-close aria-label="Close">✕</button>
+			</div>
+			<div class="modal__body" id="groupBody"></div>
+			<div class="modal__foot" id="groupFoot">
+				<span class="modal__note" id="groupNote">The variants a grouping creates stay on the product: it cannot be undone from here.</span>
+				<div class="modal__actions">
+					<button class="btn" id="groupBack" hidden>Back</button>
+					<button class="btn" data-group-close id="groupCancel">Cancel</button>
+					<button class="btn btn--primary" id="groupApply" disabled>Group products</button>
 				</div>
 			</div>
 		</div>

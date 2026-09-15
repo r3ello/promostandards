@@ -120,13 +120,21 @@ class ForeignProductSync {
         // only render a selector with nothing to select — and this app is what put them there.
         boolean single = union.variants().size() == 1;
 
-        boolean writable = writableShape(productId, gid, options, store);
+        boolean writable = writableShape(productId, gid, storeProduct);
         if (writable) {
             if (single) {
                 revertToSimpleProduct(gid, options);
             } else {
                 ensureOptions(gid, options, plan, emitSize);
             }
+        }
+        if (!plan.orphans().isEmpty()) {
+            // Reported, never touched. A store variant also lands here when its vendor_sku was
+            // mangled or its options were edited by hand, and when the supplier answered short —
+            // discontinuing those would be wrong, so the decision stays with a person.
+            log.info("{} has {} store variant(s) no supplier id covers: {}", productId,
+                    plan.orphans().size(),
+                    plan.orphans().stream().map(ForeignVariantPlan.StoreVariant::sku).toList());
         }
         int updated = updateExisting(gid, plan, writable, emitSize, skuByPart, single);
         Map<String, String> createdIds = writable && !single
@@ -143,6 +151,42 @@ class ForeignProductSync {
     }
 
     // ---------------------------------------------------------------- supplier side
+
+    /**
+     * The variants a store product would carry if it covered {@code memberIds} too, with the option
+     * values the store would show them under.
+     *
+     * <p>Reads the supplier and nothing else: no Shopify call, nothing written. It goes through the
+     * very {@link #union} the sync uses, so a preview cannot promise a variant set the sync would
+     * not produce — which is the whole point of showing it before grouping anything.
+     */
+    GroupPreview preview(String parentId, List<String> memberIds) {
+        SupplierProduct seed = catalog.aggregate(parentId);
+        Map<String, String> ids = new LinkedHashMap<>();
+        ids.put(upper(parentId), parentId);
+        for (String id : memberIds) {
+            if (id != null && !id.isBlank()) {
+                ids.putIfAbsent(upper(id), id);
+            }
+        }
+        Union unioned = union(seed, new ImportedProduct(null, null, parentId,
+                List.copyOf(ids.values()), null, null));
+        List<Variant> variants = unioned.product().variants();
+        List<String> supplierIds = new ArrayList<>(variants.size());
+        for (Variant v : variants) {
+            supplierIds.add(unioned.supplierIdByKey().getOrDefault(variantKey(v), v.supplierPartId()));
+        }
+        return new GroupPreview(unioned.product(), VariantOptions.colorLabels(variants),
+                List.copyOf(supplierIds), VariantOptions.hasSize(variants));
+    }
+
+    /**
+     * @param colorLabels the Color option value per variant, in the same order as the variants
+     * @param supplierIds the supplier product each variant would stand for, same order again
+     */
+    record GroupPreview(SupplierProduct product, List<String> colorLabels, List<String> supplierIds,
+                        boolean emitSize) {
+    }
 
     /**
      * The variants of every supplier id the store product covers, keyed by (part id, size).
@@ -315,20 +359,39 @@ class ForeignProductSync {
      * options we do not model (Material, Style, …) keeps its variants untouched — only the prices and
      * quantities of variants that already match are refreshed.
      */
-    private boolean writableShape(String productId, String gid, Map<String, JsonNode> options,
-                                  List<StoreVariant> store) {
-        List<String> unknown = options.keySet().stream().filter(n -> !KNOWN_OPTIONS.contains(n)).toList();
-        if (!unknown.isEmpty()) {
-            log.warn("Store product {} ({}) uses options {} this app does not model; leaving its "
-                    + "variants alone and only refreshing matched ones", gid, productId, unknown);
-            return false;
-        }
-        if (options.containsKey("title") && store.size() > 1) {
-            log.warn("Store product {} ({}) still has the default Title option across {} variants; "
-                    + "leaving its variants alone", gid, productId, store.size());
+    private boolean writableShape(String productId, String gid, JsonNode storeProduct) {
+        String reason = unmodelledShape(storeProduct);
+        if (reason != null) {
+            log.warn("Store product {} ({}) {}; leaving its variants alone and only refreshing matched "
+                    + "ones", gid, productId, reason);
             return false;
         }
         return true;
+    }
+
+    /**
+     * @return why the sync would leave this product's variants alone, or {@code null} when it may add
+     * and rewrite them. Grouping asks too, before it writes anything: a product the sync will not add
+     * variants to cannot take in another product's.
+     */
+    static String unmodelledShape(JsonNode storeProduct) {
+        List<String> unknown = new ArrayList<>();
+        boolean title = false;
+        for (JsonNode o : storeProduct.path("options")) {
+            String name = o.path("name").asText("").toLowerCase(Locale.ROOT);
+            title |= name.equals("title");
+            if (!KNOWN_OPTIONS.contains(name)) {
+                unknown.add(name);
+            }
+        }
+        if (!unknown.isEmpty()) {
+            return "uses options " + unknown + " this app does not model";
+        }
+        int variants = storeProduct.path("variants").path("nodes").size();
+        if (title && variants > 1) {
+            return "still has the default Title option across " + variants + " variants";
+        }
+        return null;
     }
 
     // ---------------------------------------------------------------- mutations

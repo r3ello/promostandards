@@ -272,6 +272,13 @@ public class CatalogService {
     private static final int MAX_LABEL = 30;
     /** "Black/Rose Gold-Laser Imprint" is a name; "Gold Edge Plate on Ebony Board" is a description. */
     private static final int MAX_LABEL_WORDS = 3;
+    /**
+     * "*Please Specify: 1, 3, 5, 10 …" is a note to the buyer listing every choice, and PaceSetter
+     * repeats it on most parts of a family. Left in, every year is carried by most parts and so
+     * distinguishes none of them: CD981Y*'s twelve anniversary plaques lost their year to it and
+     * imported as "1", "10", "45".
+     */
+    private static final String BUYER_NOTE = "(?is)\\*?\\s*Please Specify.*$";
 
     /**
      * A readable name for each part that has no colour, taken from its description.
@@ -291,40 +298,102 @@ public class CatalogService {
     static Map<String, String> distinguishingLabels(Map<String, String> descriptionByPart) {
         int parts = descriptionByPart.size();
         Map<String, List<String>> tokensByPart = new LinkedHashMap<>();
+        Map<String, List<String>> rawByPart = new LinkedHashMap<>();
         Map<String, Integer> carriedBy = new HashMap<>();
         for (Map.Entry<String, String> e : descriptionByPart.entrySet()) {
+            String description = (e.getValue() == null ? "" : e.getValue()).replaceAll(BUYER_NOTE, "");
             List<String> tokens = new ArrayList<>();
-            for (String raw : (e.getValue() == null ? "" : e.getValue()).trim().split("\\s+")) {
+            List<String> raws = new ArrayList<>();
+            for (String raw : description.trim().split("\\s+")) {
                 String token = raw.replaceAll("^[;,.:()*]+|[;,.:()*]+$", "");
                 if (!token.isEmpty()) {
                     tokens.add(token);
+                    raws.add(raw);
                 }
             }
             tokensByPart.put(e.getKey(), tokens);
+            rawByPart.put(e.getKey(), raws);
             Set<String> distinct = new LinkedHashSet<>();
             tokens.forEach(t -> distinct.add(t.toLowerCase(Locale.ROOT)));
             distinct.forEach(t -> carriedBy.merge(t, 1, Integer::sum));
         }
         Map<String, String> labels = new LinkedHashMap<>();
-        tokensByPart.forEach((part, tokens) -> {
+        for (Map.Entry<String, List<String>> e : tokensByPart.entrySet()) {
+            String part = e.getKey();
+            List<String> tokens = e.getValue();
+            List<String> raws = rawByPart.get(part);
             List<String> own = new ArrayList<>();
-            for (String token : tokens) {
-                boolean shared = carriedBy.get(token.toLowerCase(Locale.ROOT)) * 2 > parts;
-                // A token without a letter ("-", "#") is punctuation, not a word of a name.
-                if (!shared && !isMeasure(token) && token.chars().anyMatch(Character::isLetter)
-                        && !own.contains(token)) {
-                    own.add(token);
+            for (int i = 0; i < tokens.size(); i++) {
+                String token = tokens.get(i);
+                if (carriedBy.get(token.toLowerCase(Locale.ROOT)) * 2 > parts || own.contains(token)) {
+                    continue;
                 }
+                // A token without a letter ("-", "#") is punctuation, not a word of a name. A plain
+                // number is the exception: the year in "10 Years" is the whole of what tells an
+                // anniversary award's parts apart.
+                boolean number = isNumber(token);
+                if (!number && (isMeasure(token) || token.chars().noneMatch(Character::isLetter))) {
+                    continue;
+                }
+                // "Green GR" on CD1260Y10GR names the part after its own code: it says nothing the
+                // code does not, and it is what makes two colours read alike.
+                if (isPartCode(token, part)) {
+                    continue;
+                }
+                if (number) {
+                    // A count names a part only together with the unit it counts. Alone it reads as
+                    // the part code it replaces — and most numbers here are not counts at all: a
+                    // measurement written "7 3/4\"" splits into "7" and "3/4\"", and that 7 named
+                    // GM792's towers "7 Small" until this asked what follows the number.
+                    String unit = i + 1 < tokens.size() ? tokens.get(i + 1) : null;
+                    if (unit == null || isMeasure(unit) || own.contains(unit)
+                            || unit.chars().noneMatch(Character::isLetter)
+                            // "…and year 10,. Digi-color" is prose: the words after it count nothing.
+                            || raws.get(i).matches(".*[.,;:]$")) {
+                        continue;
+                    }
+                    own.add(token);
+                    own.add(unit);
+                    continue;
+                }
+                own.add(token);
             }
             String label = String.join(" ", own);
             if (!label.isBlank() && own.size() <= MAX_LABEL_WORDS && label.length() <= MAX_LABEL) {
                 labels.put(part, label);
             }
-        });
+        }
+        // A count only reads as a name when every part carries one. "10" next to "Green 10" (CD1260)
+        // says nothing about what makes the first one different, and a part left unnamed among them
+        // shows a code that reads as just another number. Where the names are words this does not
+        // apply: a part without one keeps its code and is no worse off, which is what C071A's
+        // half-named pair documents.
+        boolean counted = labels.values().stream().anyMatch(CatalogService::startsWithCount);
+        if (counted && (labels.size() != parts
+                || !labels.values().stream().allMatch(CatalogService::startsWithCount))) {
+            return Map.of();
+        }
         return labels;
     }
 
-    /** A token that only states a size: "x", "3/8\"", "20", "$4.00(V)". */
+    /** A plain integer: "10", but not "3/4\"" or "$60.00". */
+    private static boolean isNumber(String token) {
+        return !token.isEmpty() && token.chars().allMatch(Character::isDigit);
+    }
+
+    /** Whether the label leads with a count — "10 Years", not "Dark Blue". */
+    private static boolean startsWithCount(String label) {
+        int space = label.indexOf(' ');
+        return isNumber(space < 0 ? label : label.substring(0, space));
+    }
+
+    /** Whether the token is the part's own code tail ("GR" on CD1260Y10GR). */
+    private static boolean isPartCode(String token, String partId) {
+        return token.length() <= 3 && token.chars().allMatch(Character::isLetter)
+                && partId.toUpperCase(Locale.ROOT).endsWith(token.toUpperCase(Locale.ROOT));
+    }
+
+    /** A token that only states a size: "x", "3/8\"", "$4.00(V)". */
     private static boolean isMeasure(String token) {
         return token.equalsIgnoreCase("x") || token.chars().anyMatch(Character::isDigit)
                 || token.indexOf('"') >= 0 || token.indexOf('\'') >= 0;

@@ -249,6 +249,37 @@ public class SyncScheduler {
         }
     }
 
+    /**
+     * How many products one pass may bring structurally up to date. An import is far dearer than a
+     * value push — options, variants, images and discounts, per product — so the first pass after a
+     * catalogue change must not try to rewrite half the store in one go. The rest are picked up by
+     * the passes that follow, because their digest was deliberately left unsealed.
+     */
+    private static final int STRUCTURE_LIMIT = 25;
+
+    /**
+     * Adds the variants the supplier has and the store does not, then pushes this pass's values at
+     * them. The scheduled jobs only ever write to variants that already exist, so without this a
+     * colour PaceSetter adds would never reach Shopify on its own — and the supplier is the source
+     * of truth. {@code importProduct} is the only path that creates variants, and it is idempotent:
+     * it matches what is there by vendor_sku, SKU, identity metafield and option values, creates
+     * only what is missing, and never deletes.
+     */
+    private ShopifySyncService.RefreshResult addMissingVariants(
+            String productId, SyncStateStore.Kind kind, String label,
+            ShopifySyncService.RefreshResult before) {
+        try {
+            sync.importProduct(productId);
+        } catch (RuntimeException e) {
+            // Includes the product the store does not carry at all: creating products stays off, and
+            // a pass must not die over one id.
+            log.warn("Scheduled {}: could not add the missing variants of {}: {}",
+                    label, productId, e.getMessage());
+            return before;
+        }
+        return sync.refresh(productId, kind, false, true);
+    }
+
     private void walk(SyncStateStore.Kind kind, boolean dryRun) {
         String label = kind.value() + (dryRun ? " (dry run)" : "");
         List<String> productIds = stillSold(sync.listImportedProductIds(), label);
@@ -257,6 +288,7 @@ public class SyncScheduler {
         Map<ShopifySyncService.Outcome, Integer> tally = new EnumMap<>(ShopifySyncService.Outcome.class);
         Instant startedAt = Instant.now();
         int variantsWritten = 0;
+        int structural = 0;
         publish(kind.value(), true, startedAt, productIds.size(), 0, tally);
         for (String productId : productIds) {
             ShopifySyncService.RefreshResult result;
@@ -268,6 +300,11 @@ public class SyncScheduler {
                 log.warn("Scheduled {} refresh failed for {}: {}", label, productId, e.getMessage());
                 tally.merge(ShopifySyncService.Outcome.FAILED, 1, Integer::sum);
                 continue;
+            }
+            if (result.outcome() == ShopifySyncService.Outcome.NEEDS_VARIANTS && !dryRun
+                    && structural < STRUCTURE_LIMIT) {
+                structural++;
+                result = addMissingVariants(productId, kind, label, result);
             }
             tally.merge(result.outcome(), 1, Integer::sum);
             variantsWritten += result.updated();

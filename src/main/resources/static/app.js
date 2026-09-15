@@ -18,6 +18,9 @@ const SUPPLIERS = [{ id: 'pacesetter', name: 'PaceSetter Awards' }];
 let entries = [];               // [{ productId, imported, detail?, inflight?, error? }]
 let loaded = false;
 const expanded = new Set();
+// Ticked rows. Kept across pages, filters and searches on purpose: a family is gathered by searching
+// for one colour, ticking it, then the next.
+const selected = new Set();
 let statusFilter = 'all';
 let page = 0;
 let pageSize = 25;
@@ -205,6 +208,7 @@ async function doLogout() {
 	try { await fetch('/api/auth/logout', { method: 'POST', headers: { Accept: 'application/json' } }); }
 	catch (e) { /* ignore — return to login regardless */ }
 	entries = []; loaded = false;
+	selected.clear(); renderBulkBar();
 	showLogin();
 }
 
@@ -245,7 +249,7 @@ async function loadCatalog() {
 	loaded = false;
 	expanded.clear();
 	pager.hidden = true;
-	body.innerHTML = `<tr class="row-state"><td colspan="9"><div class="state"><span class="spinner"></span> Loading products…</div></td></tr>`;
+	body.innerHTML = `<tr class="row-state"><td colspan="10"><div class="state"><span class="spinner"></span> Loading products…</div></td></tr>`;
 	meta.textContent = 'Querying supplier…';
 	try {
 		const data = await api('/api/catalog/products') || [];
@@ -258,7 +262,7 @@ async function loadCatalog() {
 		ensurePendingData();
 		if (grouping) ensureGroups();
 	} catch (e) {
-		body.innerHTML = `<tr class="row-state"><td colspan="9"><div class="state state--err">⚠ ${esc(e.message)}</div></td></tr>`;
+		body.innerHTML = `<tr class="row-state"><td colspan="10"><div class="state state--err">⚠ ${esc(e.message)}</div></td></tr>`;
 		meta.textContent = 'Error';
 	}
 }
@@ -408,7 +412,7 @@ function renderTable({ enrich = true } = {}) {
 	meta.textContent = `${items.length} of ${entries.length} product${entries.length === 1 ? '' : 's'}`;
 
 	if (!items.length) {
-		body.innerHTML = `<tr class="row-state"><td colspan="9"><div class="state">${entries.length ? 'No products match your filters.' : 'No products.'}</div></td></tr>`;
+		body.innerHTML = `<tr class="row-state"><td colspan="10"><div class="state">${entries.length ? 'No products match your filters.' : 'No products.'}</div></td></tr>`;
 		pager.hidden = true;
 		return;
 	}
@@ -447,6 +451,7 @@ function rowCells(e) {
 	const closeOut = e.closeOut
 		? ` <span class="badge badge--critical" title="The supplier lists this product as close-out (being discontinued / sold off)">Close-out</span>` : '';
 	return `
+		<td class="col-select"><input type="checkbox" data-select="${esc(e.productId)}" aria-label="Select ${esc(e.productId)}"${selected.has(e.productId) ? ' checked' : ''}></td>
 		<td class="col-expand"><span class="chev">▸</span></td>
 		<td class="col-thumb"><span class="thumb-cell ${d && d.imageUrls && d.imageUrls.length ? '' : 'is-empty'}">${d && d.imageUrls && d.imageUrls.length ? `<img src="${esc(d.imageUrls[0])}" alt="" loading="lazy" onerror="this.closest('.thumb-cell').classList.add('is-empty');this.remove()">` : ''}</span></td>
 		<td><div class="prod-name">${title}${fam}${closeOut}${noData}</div><div class="prod-id">${esc(e.productId)}</div></td>
@@ -503,7 +508,7 @@ function enrichVisible(slice) {
 
 // --- expand/collapse ---------------------------------------------------
 function detailRowHtml(pid) {
-	return `<tr class="detail-row" data-detail="${esc(pid)}"><td colspan="9"><div class="detail" id="detail-${cssId(pid)}"><div class="state"><span class="spinner"></span> Loading detail…</div></div></td></tr>`;
+	return `<tr class="detail-row" data-detail="${esc(pid)}"><td colspan="10"><div class="detail" id="detail-${cssId(pid)}"><div class="state"><span class="spinner"></span> Loading detail…</div></div></td></tr>`;
 }
 // A group primary expands into the grouped-variants panel; every other row into its own detail.
 function insertExpansion(pid) {
@@ -991,6 +996,13 @@ const cssAttr = (s) => String(s).replace(/"/g, '\\"');
 el('supplier').innerHTML = SUPPLIERS.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
 
 body.addEventListener('click', (e) => {
+	// Ticking a row selects it; it must not also open it. The whole cell ticks, not just the box.
+	const selectCell = e.target.closest('td.col-select');
+	if (selectCell) {
+		const box = selectCell.querySelector('[data-select]');
+		if (box && e.target !== box) { box.checked = !box.checked; box.dispatchEvent(new Event('change', { bubbles: true })); }
+		return;
+	}
 	const actBtn = e.target.closest('[data-act]');
 	if (actBtn) {
 		e.stopPropagation();
@@ -1341,3 +1353,273 @@ el('scheduleBody').addEventListener('click', (ev) => {
 	const btn = ev.target.closest('[data-sched-run]');
 	if (btn) runSchedulePass(btn.dataset.schedRun, btn.dataset.schedDry === 'true', btn);
 });
+
+// --- grouping into one product ------------------------------------------
+// Several PaceSetter ids sold as one Shopify product. The ids are chosen in the table (tick the rows);
+// the modal then shows what the grouped product would carry — POST /api/catalog/groups reads the
+// supplier and writes nothing — and only a preview the server calls applicable can be applied, with
+// POST /api/sync/groups. That one writes to the live store and cannot be undone from here, so it takes
+// a second, explicit click that says what will be archived. The server checks everything again.
+const entryOf = (id) => entries.find((x) => x.productId === id);
+
+body.addEventListener('change', (e) => {
+	const box = e.target.closest('[data-select]');
+	if (!box) return;
+	if (box.checked) selected.add(box.dataset.select); else selected.delete(box.dataset.select);
+	renderBulkBar();
+});
+
+function renderBulkBar() {
+	const bar = el('bulkBar');
+	bar.hidden = selected.size === 0;
+	if (bar.hidden) return;
+	el('bulkCount').textContent = `${selected.size} selected`;
+	el('bulkIds').innerHTML = [...selected].map((id) =>
+		`<span class="chip">${esc(id)}<button class="chip__x" data-unselect="${esc(id)}" aria-label="Unselect ${esc(id)}">×</button></span>`).join('');
+	const group = el('bulkGroup');
+	group.disabled = selected.size < 2;
+	group.title = selected.size < 2 ? 'Select at least two PaceSetter ids' : 'Sell the selected PaceSetter ids as one Shopify product';
+}
+
+function unselect(pid) {
+	selected.delete(pid);
+	const box = body.querySelector(`[data-select="${cssAttr(pid)}"]`);
+	if (box) box.checked = false;
+	renderBulkBar();
+}
+
+el('bulkIds').addEventListener('click', (e) => {
+	const x = e.target.closest('[data-unselect]');
+	if (x) unselect(x.dataset.unselect);
+});
+el('bulkClear').addEventListener('click', () => [...selected].forEach(unselect));
+el('bulkGroup').addEventListener('click', openGroupModal);
+
+const groupModal = el('groupModal');
+let groupIds = [];            // the ids being grouped, in the order they were ticked
+let groupParent = null;       // the id whose store product keeps its identity
+let groupPreview = null;      // the server's answer for groupParent, or { error }
+let groupError = null;        // why the last apply failed; shown above a fresh preview
+let groupSeq = 0;             // drops answers for a parent the user has since changed
+let groupConfirming = false;
+let groupApplying = false;
+
+const groupMembers = () => groupIds.filter((id) => id !== groupParent);
+
+function openGroupModal() {
+	groupIds = [...selected];
+	// A group is led by a product the store already sells; the first ticked one that is, by default.
+	groupParent = groupIds.find((id) => (entryOf(id) || {}).imported === true) || null;
+	groupPreview = null;
+	groupError = null;
+	el('groupBody').innerHTML = '<div id="groupParents"></div><div id="groupPreview"></div>';
+	paintGroupParents();
+	groupModal.hidden = false;
+	setGroupConfirming(false);
+	if (groupParent) loadGroupPreview(); else paintGroupPreview();
+}
+
+function closeGroupModal() {
+	if (groupApplying) return;     // the write is under way; its answer closes the modal
+	groupModal.hidden = true;
+	groupSeq++;
+}
+
+function paintGroupParents() {
+	el('groupSub').textContent = `${groupIds.length} PaceSetter ids sold as one Shopify product`;
+	el('groupParents').innerHTML = groupParentsHtml();
+}
+
+function groupParentsHtml() {
+	const rows = groupIds.map((id) => {
+		const e = entryOf(id);
+		const inStore = !!e && e.imported === true;
+		// An id outside the catalog list came in with "Include": PaceSetter no longer sells it, so it
+		// only moves along with its product and can never lead the group.
+		const badge = !e
+			? '<span class="badge badge--neutral" title="Not in PaceSetter\'s sellable list: it moves with its store product and adds no variants">No longer sold</span>'
+			: inStore ? syncBadge(true)
+				: '<span class="badge badge--neutral" title="No store product carries this id: it can join a group, not lead one">Not in store</span>';
+		return `<label class="grp-parent${inStore ? '' : ' is-disabled'}">
+			<input type="radio" name="groupParent" value="${esc(id)}"${id === groupParent ? ' checked' : ''}${inStore ? '' : ' disabled'}>
+			<span class="grp-parent__text"><span class="prod-name">${esc(e ? titleOf(e) : id)}</span><span class="prod-id">${esc(id)}</span></span>
+			${badge}
+		</label>`;
+	}).join('');
+	return `<div class="grp-section">
+		<div class="sub-title">Keep as the Shopify product</div>
+		<p class="muted grp-help">Its store product keeps its title, description, handle and order history, and takes in the variants of the others.</p>
+		<div class="grp-parents">${rows}</div>
+	</div>`;
+}
+
+function groupPreviewHtml() {
+	const failed = groupError ? `<div class="state state--crit"><strong>The grouping did not finish</strong><p>${esc(groupError)}</p></div>` : '';
+	if (!groupParent) {
+		return `<div class="state state--warn">None of the selected ids is in the store. A group has to be led by a product the store already sells.</div>`;
+	}
+	if (!groupPreview) {
+		return `${failed}<div class="state"><span class="spinner"></span> Reading the supplier for ${groupIds.length} ids…</div>`;
+	}
+	if (groupPreview.error) return `${failed}<div class="state state--err">⚠ ${esc(groupPreview.error)}</div>`;
+
+	const p = groupPreview;
+	const list = (items) => `<ul>${items.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`;
+	// Ids a product to be archived carries but nobody ticked. Usually ones PaceSetter no longer sells,
+	// which the table never lists — so they can only be added from here.
+	const stranded = strandedIds();
+	const include = stranded.length
+		? `<button class="btn btn--sm grp-include" data-group-include>Include ${stranded.length === 1 ? 'it' : `these ${stranded.length}`}: ${stranded.map(esc).join(', ')}</button>` : '';
+	const conflicts = (p.conflicts || []).length
+		? `<div class="state state--crit"><strong>Can't group these as selected</strong>${list(p.conflicts)}${include}</div>` : '';
+	const warnings = (p.warnings || []).length
+		? `<div class="state state--warn"><strong>Worth knowing</strong>${list(p.warnings)}</div>` : '';
+	const variants = p.variants || [];
+	const rows = variants.map((v) => `<tr>
+		<td class="sku">${esc(v.supplierProductId || '—')}</td>
+		<td class="sku">${esc(v.partId || '—')}</td>
+		<td>${esc(v.color || '—')}</td>
+		<td>${esc(v.size || '—')}</td>
+		<td class="num">${v.onHand == null ? '—' : v.onHand.toLocaleString()}</td>
+	</tr>`).join('');
+	const absorbed = p.absorbed || [];
+	const archived = absorbed.length
+		? `<p class="muted grp-help">Their ids move to the product above. They are archived, not deleted: their order history stays, and the admin can restore them.</p>
+			<ul class="grp-absorbed">${absorbed.map((a) => `<li><strong>${esc(a.handle)}</strong> <span class="prod-id">${(a.supplierIds || []).map(esc).join(', ')}</span></li>`).join('')}</ul>`
+		: '<p class="muted grp-help">No other store product carries these ids, so nothing is archived.</p>';
+
+	return `${failed}${conflicts}${warnings}
+		<div class="grp-section">
+			<div class="sub-title">The grouped product</div>
+			<p class="grp-summary"><strong>${esc(p.parentHandle || p.parentProductId)}</strong> would list ${(p.supplierIds || []).length} PaceSetter ids and carry ${variants.length} variant${variants.length === 1 ? '' : 's'}.</p>
+			<table class="variants">
+				<thead><tr><th>PaceSetter id</th><th>Part</th><th>Color</th><th>Size</th><th class="num">On hand</th></tr></thead>
+				<tbody>${rows || '<tr><td colspan="5" class="muted">The supplier returned no variants.</td></tr>'}</tbody>
+			</table>
+		</div>
+		<div class="grp-section">
+			<div class="sub-title">Archived after grouping</div>
+			${archived}
+		</div>`;
+}
+
+/** The ids the previewed products to be archived carry that the grouping does not name yet. */
+function strandedIds() {
+	const have = new Set(groupIds.map((id) => id.toUpperCase()));
+	const out = [];
+	for (const a of (groupPreview && groupPreview.absorbed) || []) {
+		for (const id of a.notRequested || []) {
+			if (!have.has(id.toUpperCase())) { have.add(id.toUpperCase()); out.push(id); }
+		}
+	}
+	return out;
+}
+
+function includeStranded() {
+	const more = strandedIds();
+	if (!more.length) return;
+	groupIds.push(...more);
+	groupError = null;
+	paintGroupParents();
+	loadGroupPreview();
+}
+
+function paintGroupPreview() {
+	const node = el('groupPreview');
+	if (node) node.innerHTML = groupPreviewHtml();
+	el('groupApply').disabled = !(groupPreview && groupPreview.applicable) || groupApplying;
+}
+
+async function loadGroupPreview() {
+	const seq = ++groupSeq;
+	groupPreview = null;
+	setGroupConfirming(false);
+	paintGroupPreview();
+	let answer;
+	try {
+		answer = await api('/api/catalog/groups', 'POST', { parentProductId: groupParent, memberProductIds: groupMembers() });
+	} catch (e) {
+		answer = { error: e.message };
+	}
+	if (seq !== groupSeq) return;
+	groupPreview = answer;
+	paintGroupPreview();
+}
+
+function setGroupConfirming(on) {
+	groupConfirming = on;
+	el('groupBack').hidden = !on;
+	el('groupCancel').hidden = on;
+	el('groupFoot').classList.toggle('is-confirming', on);
+	const apply = el('groupApply');
+	apply.classList.toggle('btn--critical', on);
+	apply.textContent = on ? 'Yes, group them' : 'Group products';
+	const note = el('groupNote');
+	if (!on) {
+		note.textContent = 'The variants a grouping creates stay on the product: it cannot be undone from here.';
+		return;
+	}
+	const n = (groupPreview.absorbed || []).length;
+	note.innerHTML = `<strong>Write this to the live store?</strong> ${esc(groupPreview.parentHandle)} will list ${groupPreview.supplierIds.length} ids${n ? `, and ${n} product${n === 1 ? '' : 's'} will be archived` : ''}.`;
+}
+
+async function applyGroup() {
+	if (!groupPreview || !groupPreview.applicable) return;
+	if (!groupConfirming) { setGroupConfirming(true); return; }
+	const btn = el('groupApply');
+	groupApplying = true;
+	btn.disabled = true; el('groupBack').disabled = true;
+	btn.innerHTML = `<span class="spinner"></span> Grouping…`;
+	try {
+		const r = await api('/api/sync/groups', 'POST', { parentProductId: groupParent, memberProductIds: groupMembers() });
+		groupApplying = false;
+		applyGroupResult(r);
+		closeGroupModal();
+	} catch (e) {
+		// Refused (the store changed since the preview) or stopped part-way: either way the answer is
+		// a fresh look at the store, with the reason kept above it.
+		groupApplying = false;
+		groupError = e.message;
+		el('groupBack').disabled = false;
+		loadGroupPreview();
+	}
+}
+
+function applyGroupResult(r) {
+	for (const id of r.supplierIds || []) {
+		const e = entryOf(id);
+		if (e) { e.imported = true; refreshRow(e); }
+	}
+	updateShopifyStatus();
+	[...selected].forEach(unselect);
+
+	const pid = r.parentProductId;
+	const s = r.sync;
+	const archived = (r.archived || []).length;
+	toast(`Grouped ${(r.supplierIds || []).length} ids under ${r.parentHandle}${s ? `: ${s.variantCount} variants` : ''}${archived ? ` · ${archived} archived` : ''}`);
+	if (r.syncError) {
+		// The grouping is written; only the variants are missing, and syncing the product brings them.
+		toast(`Grouped, but syncing ${pid} failed: ${r.syncError} — Sync ▾ → Re-import on ${pid} finishes it`, true);
+		return;
+	}
+	for (const w of (s && s.warnings) || []) toast(`${pid}: ${w}`, true);
+	if (s && s.discountError) toast(`Discounts for ${pid}: ${s.discountError}`, true);
+	else if (s && s.discounts) {
+		if (s.discounts.outcome !== 'NO_DISCOUNTS') toast(discountMessage(pid, s.discounts), discountFailed(s.discounts));
+		applyDiscountResult(pid, s.discounts);
+	}
+}
+
+el('groupApply').addEventListener('click', applyGroup);
+el('groupBack').addEventListener('click', () => setGroupConfirming(false));
+el('groupBody').addEventListener('click', (e) => {
+	if (e.target.closest('[data-group-include]')) includeStranded();
+});
+el('groupBody').addEventListener('change', (e) => {
+	if (e.target.name !== 'groupParent') return;
+	groupParent = e.target.value;
+	groupError = null;
+	loadGroupPreview();
+});
+groupModal.querySelectorAll('[data-group-close]').forEach((n) => n.addEventListener('click', closeGroupModal));
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !groupModal.hidden) closeGroupModal(); });

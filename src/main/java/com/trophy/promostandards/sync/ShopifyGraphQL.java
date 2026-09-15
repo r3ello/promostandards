@@ -225,6 +225,34 @@ final class ShopifyGraphQL {
             """;
 
     /**
+     * Remove metafields. Grouping takes the identity ({@code custom.ps_product_id} / {@code ps_product_ids})
+     * off a product whose ids moved to another one: writing an empty value would leave a metafield
+     * the store index still reads, and deleting is the only way to leave nothing.
+     */
+    static final String METAFIELDS_DELETE = """
+            mutation MetafieldsDelete($metafields: [MetafieldIdentifierInput!]!) {
+              metafieldsDelete(metafields: $metafields) {
+                deletedMetafields { ownerId namespace key }
+                userErrors { field message }
+              }
+            }
+            """;
+
+    /**
+     * Archive a product. What happens to a product whose supplier ids were grouped into another one:
+     * its variants now live there, and archiving — unlike deleting — keeps its order history and can
+     * be undone from the admin.
+     */
+    static final String PRODUCT_ARCHIVE = """
+            mutation ProductArchive($id: ID!) {
+              productUpdate(product: {id: $id, status: ARCHIVED}) {
+                product { id status }
+                userErrors { field message }
+              }
+            }
+            """;
+
+    /**
      * Page through every PromoStandards-tagged product: those imported by this app AND those the
      * one-shot trophypartner migration created (which carry the same tag + metafield contract).
      * {@code ps_product_ids} is the full list of supplier ids a migrated product covers (canonical

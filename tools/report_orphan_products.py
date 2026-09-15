@@ -21,9 +21,17 @@ Three kinds of problem, and the report separates them:
 Usage:
     python tools/report_orphan_products.py                       # -> informe-ids-huerfanos.html
     python tools/report_orphan_products.py --out other.html --run <sync-run.jsonl>
+    python tools/report_orphan_products.py --from-simulation reports/sync-simulation-2026-09-10
 
 Reads the supplier's live sellable list through the running app (`/api/catalog/products`) and the
 store through the Admin API. Writes nothing anywhere but the HTML file.
+
+`--from-simulation <dir>` reads neither: it rebuilds the report from a `simulate_store_sync.py` run
+(store_products.csv, supplier_ids.csv, unclaimed_sellable.csv, supplier_cache.json). No credentials,
+no app, no supplier calls - and reproducible, which the live mode is not: it reports the catalogue as
+it was the day that simulation ran. That mode answers a narrower question - which store products have
+no PaceSetter behind them at all - so it separates the ids by what the supplier actually knows about
+them (nothing, a wildcard family, or a product it will not sell) instead of the live mode's buckets.
 
 Requires: standard library only.
 Origin: 2026-09-04, after the first full pass showed 217 unsyncable products.
@@ -37,6 +45,7 @@ import glob
 import html
 import json
 import sys
+import urllib.parse
 import urllib.request
 from datetime import date
 from pathlib import Path
@@ -64,6 +73,71 @@ query Tagged($cursor: String) {
   }
 }
 """
+
+
+DEFAULT_OUT = "informe-ids-huerfanos.html"
+
+STYLE = """<style>
+:root {
+  --bg:#F3F5F7; --surface:#FFFFFF; --surface-2:#E9EDF1; --ink:#16202B; --muted:#58697A;
+  --line:#D8E0E7; --accent:#1F5E6B; --accent-wash:#E3EEF0; --loss:#A32C2C; --loss-wash:#F8EAEA;
+  --gain:#2F6B4F; --gain-wash:#E8F1EC; --brass:#8A6A22; --code-bg:#EDF1F4;
+  --sans:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,Arial,sans-serif;
+  --mono:"Cascadia Mono",Consolas,ui-monospace,"SF Mono",monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg:#0F161D; --surface:#16202A; --surface-2:#1C2833; --ink:#DFE7ED; --muted:#94A5B4;
+  --line:#26343F; --accent:#6FB2BF; --accent-wash:#122730; --loss:#E08585; --loss-wash:#2A1718;
+  --gain:#86C2A0; --gain-wash:#16241D; --brass:#C9A653; --code-bg:#0D1720;
+} }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans); line-height:1.55; }
+.wrap { max-width:1180px; margin:0 auto; padding:2.5rem 1.5rem 5rem; }
+h1 { font-size:1.9rem; line-height:1.2; margin:0 0 .35rem; }
+h2 { font-size:1.15rem; margin:2.5rem 0 .75rem; }
+.sub { color:var(--muted); margin:0 0 2rem; }
+.card { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:1.25rem 1.4rem; }
+.card + .card { margin-top:1rem; }
+.stats { display:flex; flex-wrap:wrap; gap:.75rem; margin:1.5rem 0 2rem; }
+.stat { background:var(--surface); border:1px solid var(--line); border-radius:12px;
+         padding:.85rem 1.1rem; min-width:9rem; }
+.stat b { display:block; font-size:1.6rem; line-height:1.1; }
+.stat span { color:var(--muted); font-size:.85rem; }
+.stat.bad b { color:var(--loss); } .stat.warn b { color:var(--brass); } .stat.good b { color:var(--gain); }
+p { margin:.6rem 0; }
+code { font-family:var(--mono); font-size:.85em; background:var(--code-bg); padding:.1rem .35rem; border-radius:4px; }
+code.dead { color:var(--loss); background:var(--loss-wash); }
+code.live { color:var(--gain); background:var(--gain-wash); }
+.controls { display:flex; flex-wrap:wrap; gap:.6rem; align-items:center; margin:1.25rem 0 .75rem;
+             position:sticky; top:0; background:var(--bg); padding:.75rem 0; z-index:2; }
+input[type=search] { flex:1; min-width:14rem; padding:.6rem .8rem; border-radius:8px;
+    border:1px solid var(--line); background:var(--surface); color:var(--ink); font:inherit; }
+button { padding:.55rem .9rem; border-radius:8px; border:1px solid var(--line);
+          background:var(--surface); color:var(--ink); font:inherit; cursor:pointer; }
+button.on { background:var(--accent-wash); border-color:var(--accent); color:var(--accent); font-weight:600; }
+.tablewrap { overflow-x:auto; border:1px solid var(--line); border-radius:12px; background:var(--surface); }
+table { border-collapse:collapse; width:100%; font-size:.92rem; }
+th, td { text-align:left; padding:.7rem .9rem; border-bottom:1px solid var(--line); vertical-align:top; }
+th { position:sticky; top:0; background:var(--surface-2); font-size:.8rem; text-transform:uppercase;
+      letter-spacing:.04em; color:var(--muted); }
+tr:last-child td { border-bottom:0; }
+td a { color:var(--accent); font-weight:600; text-decoration:none; }
+td a:hover { text-decoration:underline; }
+.handle { font-family:var(--mono); font-size:.78rem; color:var(--muted); }
+.meta { font-size:.78rem; color:var(--muted); }
+.idrow { margin-bottom:.35rem; }
+.sugg { display:block; font-size:.78rem; color:var(--muted); font-family:var(--mono); }
+.sugg.none { font-style:italic; font-family:var(--sans); }
+.sugg.fam { font-family:var(--sans); color:var(--accent); }
+.badge { display:inline-block; padding:.15rem .5rem; border-radius:999px; font-size:.78rem;
+          font-weight:600; background:var(--loss-wash); color:var(--loss); margin-bottom:.25rem; }
+.sugg.fam b { font-family:var(--mono); }
+.answer { font-size:.82rem; color:var(--muted); max-width:22rem; }
+.muted { color:var(--muted); }
+ol, ul { padding-left:1.2rem; }
+li { margin:.3rem 0; }
+footer { margin-top:3rem; color:var(--muted); font-size:.85rem; }
+</style>"""
 
 
 def store_products(shop: str, version: str, token: str) -> list[dict]:
@@ -104,15 +178,21 @@ def family_of(dead_id: str, families: list[str]) -> str | None:
 
 
 def family_detail(op, base: str, family: str, cache: dict) -> dict:
-    """What the supplier actually serves under the family code - asked once per family."""
+    """What the supplier actually serves under the family code - asked once per family.
+
+    `/api/catalog/products/{id}` carries no variant list, so asking it for one always answered zero.
+    What tells you whether a product could be built there is `productDataMissing` - no parts, nothing
+    to make variants from - plus the inventory rows and price entries the aggregate did join.
+    """
     if family in cache:
         return cache[family]
-    import urllib.parse
     try:
         detail = json.load(op.open(f"{base}/api/catalog/products/"
                                    + urllib.parse.quote(family, safe=""), timeout=300))
-        cache[family] = {"title": detail.get("title"), "variants": len(detail.get("variants") or []),
+        cache[family] = {"title": detail.get("title"),
+                         "parts": 0 if detail.get("productDataMissing") else None,
                          "pricing": len(detail.get("pricing") or []),
+                         "inventory": len(detail.get("inventory") or []),
                          "images": len(detail.get("imageUrls") or []),
                          "warnings": detail.get("warnings") or []}
     except Exception as e:  # a family that also fails is worth showing as such
@@ -143,11 +223,243 @@ def candidates(dead_id: str, sellable: list[str], limit: int = 5) -> list[str]:
     return [f"{code} ({shared})" for shared, code in top]
 
 
+# ------------------------------------------------- offline: rebuilt from a simulate_store_sync run
+
+# The kinds simulate_store_sync.py assigns to an id, and what each means for someone reading this.
+KIND_LABEL = {
+    "ORPHAN": ("sin producto", "PaceSetter no lo sirve como producto: no está en el catálogo "
+                               "vendible, Product Data no tiene ficha y no hay precio. Su servicio "
+                               "de Inventory todavía responde por algunos de estos códigos."),
+    "FAMILY_PART": ("parte de una familia", "El id cae bajo un código de familia con comodín, pero "
+                                            "ninguna respuesta del proveedor lo lista por su cuenta."),
+    "NO_PRICE": ("sin precio", "PaceSetter tiene ficha del producto pero no publica tabla de precios. "
+                               "La importación lo rechaza a propósito: se publicaría a 0."),
+    "NO_PRODUCT_DATA": ("sin ficha", "El proveedor lo lista como vendible, pero Product Data no "
+                                     "devuelve partes: no hay de qué crear las variantes."),
+}
+# What getProductSellable answered, and — narrower — what can actually seed a sync today.
+SIM_SELLABLE_KINDS = ("PRODUCT", "PRODUCT_UNLISTED", "NO_PRICE", "NO_PRODUCT_DATA")
+SIM_LIVE_KINDS = ("PRODUCT", "PRODUCT_UNLISTED")
+
+
+def read_sim_csv(path: Path) -> list[dict]:
+    with open(path, encoding="utf-8-sig", newline="") as handle:
+        return list(csv.DictReader(handle, delimiter=";"))
+
+
+def load_simulation(directory: Path) -> tuple[list[dict], list[str], dict]:
+    """Store products, the supplier's sellable ids and its cached answers, from a simulation run."""
+    products = []
+    for row in read_sim_csv(directory / "store_products.csv"):
+        products.append({
+            "gid": "", "handle": row["handle"], "title": row["title"].strip(),
+            "status": row["status"], "inventory": None, "canonical": row["ps_product_id"],
+            "ids": row["ps_product_ids"].split(),
+            "kinds": dict(pair.split("=", 1) for pair in row["kinds"].split() if "=" in pair),
+            "legacy_sku": row["legacy_sku"], "synced": row["synced"] == "si",
+            "skus": [""] * int(row["variants_now"] or 0), "images": None, "variantImages": None,
+        })
+    sellable = {row["supplier_id"].upper() for row in read_sim_csv(directory / "supplier_ids.csv")
+                if row["kind"] in SIM_SELLABLE_KINDS}
+    sellable |= {row["supplier_id"].upper()
+                 for row in read_sim_csv(directory / "unclaimed_sellable.csv")}
+    cache_path = directory / "supplier_cache.json"
+    cache = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
+    return products, sorted(sellable), cache
+
+
+def family_detail_cached(family: str, cache: dict) -> dict:
+    """What the simulation's cached supplier answers say a family code actually serves.
+
+    Same rule as the simulator: an entry carrying an `error` is not an answer. A family code can be
+    listed in getProductSellable and still 404 on every service, and saying so beats reporting it as
+    a product with zero of everything.
+    """
+    def answered(kind: str) -> dict | None:
+        entry = cache.get(f"{kind}:{family}")
+        return entry if isinstance(entry, dict) and "error" not in entry else None
+
+    product, price, inventory = answered("p"), answered("c"), answered("i")
+    if not product:
+        failed = cache.get("p:" + family)
+        return {"error": (failed or {}).get("error")
+                if isinstance(failed, dict) else f"{family} no figura en la caché de la simulación"}
+    return {"title": product.get("name"),
+            "parts": len(product.get("parts") or []),
+            "pricing": len(price.get("parts") or []) if price else 0,
+            "inventory": len(inventory.get("rows") or []) if inventory else 0}
+
+
+def classify_simulation(products: list[dict], sellable_list: list[str], cache: dict):
+    """Split the store by what PaceSetter knows about its ids. Only what has no product behind it.
+
+    A product whose ids are PARTs of a real PaceSetter product is deliberately left out: it exists
+    upstream, and what it needs is a repointing decision, not this list.
+    """
+    families = sorted({i[:-1] for i in sellable_list if i.endswith("*")}, key=len, reverse=True)
+    orphans, familied, unimportable, partials = [], [], [], []
+    for p in products:
+        kinds = p["kinds"]
+        p["live"] = [i for i in p["ids"] if kinds.get(i) in SIM_LIVE_KINDS]
+        p["dead"] = [i for i in p["ids"] if kinds.get(i) not in SIM_LIVE_KINDS]
+        p["families"] = {d: family_of(d, families) for d in p["dead"]}
+        p["answer"], p["suggestions"], p["familyDetail"] = "", {}, {}
+        present = {kinds.get(i) for i in p["ids"]}
+        if p["live"] and p["dead"]:
+            bucket = partials
+        elif p["live"] or present <= {"PART"}:
+            continue
+        elif present <= {"ORPHAN"}:
+            bucket = orphans
+        elif present <= {"FAMILY_PART"}:
+            bucket = familied
+        elif present & {"NO_PRICE", "NO_PRODUCT_DATA"}:
+            bucket = unimportable
+        else:
+            continue  # parts mixed with dead ids: also a repointing decision
+        if bucket is unimportable:
+            p["kindLabel"] = KIND_LABEL[next(k for k in ("NO_PRICE", "NO_PRODUCT_DATA")
+                                             if k in present)]
+        else:
+            p["suggestions"] = {d: candidates(d, sellable_list) for d in p["dead"]}
+            p["familyDetail"] = {f + "*": family_detail_cached(f + "*", cache)
+                                 for f in {v for v in p["families"].values() if v}}
+        bucket.append(p)
+    return orphans, familied, unimportable, partials
+
+
+def render_offline(products, orphans, familied, unimportable, partials, sellable_list, shop_name,
+                   source) -> str:
+    listed = len(orphans) + len(familied) + len(unimportable) + len(partials)
+    return f"""<!doctype html>
+<html lang="es">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Productos de la tienda sin producto en PaceSetter</title>
+{STYLE}
+
+<div class="wrap">
+<h1>Productos de la tienda sin producto en PaceSetter</h1>
+<p class="sub">Tienda {shop_name} · {date.today().isoformat()} · fuente: {html.escape(source)} ·
+catálogo vendible del proveedor ese día: {len(sellable_list)} ids</p>
+
+<div class="stats">
+  <div class="stat"><b>{len(products)}</b><span>productos<br>PromoStandards</span></div>
+  <div class="stat bad"><b>{len(orphans)}</b><span>sin producto<br>en el proveedor</span></div>
+  <div class="stat warn"><b>{len(familied)}</b><span>sólo bajo una<br>familia con comodín</span></div>
+  <div class="stat warn"><b>{len(unimportable)}</b><span>existen pero<br>no se pueden importar</span></div>
+  <div class="stat warn"><b>{len(partials)}</b><span>parciales<br>(algún id muerto)</span></div>
+  <div class="stat good"><b>{len(products) - listed}</b><span>con producto<br>detrás (fuera de aquí)</span></div>
+</div>
+
+<div class="card">
+<h2 style="margin-top:0">Qué es esta lista</h2>
+<p>Cada producto migrado guarda los ids de PaceSetter de los que procede, en
+<code>custom.ps_product_id</code> y <code>custom.ps_product_ids</code>. <b>Ese id es la única unión con
+el proveedor</b>: con él se piden ficha, precios, stock e imágenes. Aquí están los productos de la
+tienda <b>cuyos ids no corresponden a ningún producto de PaceSetter</b>, separados por lo que el
+proveedor sabe de ellos. Ninguno de los {len(orphans) + len(familied) + len(unimportable)} primeros se
+ha sincronizado nunca, y todos siguen <b>a la venta</b> en la tienda.</p>
+<p class="muted">Contrastado con el proveedor en vivo el 2026-09-13: su catálogo vendible sigue
+teniendo los mismos 1278 ids que el día de la simulación —ni una alta ni una baja— y ninguno de los
+398 ids que llevan estos productos aparece en él.</p>
+
+<h2>Sin producto en PaceSetter ({len(orphans)} productos)</h2>
+<p>Su id no está en el catálogo vendible, Product Data no tiene ficha y no hay tabla de precios: ni
+con qué construir variantes, ni a qué precio publicarlas. <b>No significa que el proveedor haya
+borrado el código</b>: en una muestra de 20 de estos ids consultada en vivo el 2026-09-13, 12
+contestaron 404 en todos los servicios y <b>8 seguían devolviendo filas de stock</b> — códigos
+descatalogados que aún están en su almacén, pero sin ficha ni precio. La conclusión práctica es la
+misma: no hay nada que importar mientras el id no se corrija.</p>
+<p>La columna del medio propone los códigos vivos que más se parecen — el número entre paréntesis es
+cuántos caracteres comparten desde el principio. <b>Son una pista, no una respuesta</b>: hay que
+confirmarla en el catálogo del proveedor. La decisión, producto a producto: corregir el id, dejar de
+publicarlo, o mantenerlo como producto manual fuera de la sincronización.</p>
+
+<h2>Sólo bajo una familia con comodín ({len(familied)} productos)</h2>
+<p>PaceSetter agrupa familias bajo un código con asterisco (<code>CM717*</code>) y el id de la tienda
+cae ahí dentro, pero el proveedor no lo sirve por su cuenta. La columna dice qué devuelve esa familia:
+si no trae partes ni filas de stock, repuntar el metafield a la familia daría un producto con
+<b>0 variantes</b>, así que no basta con cambiarlo.</p>
+
+<h2>Existen pero no se pueden importar ({len(unimportable)} productos)</h2>
+<p>PaceSetter sí los conoce y aun así no entran: o no publica tabla de precios (se rechaza a
+propósito, porque se publicarían a 0), o los lista como vendibles sin ficha de Product Data, sin nada
+con lo que construir variantes. Aquí no hay id que corregir; es una pregunta para el proveedor.</p>
+
+<h2>Y aparte: parciales ({len(partials)} productos)</h2>
+<p>Estos <b>sí</b> se sincronizan, pero arrastran algún id muerto en <code>ps_product_ids</code>. No
+rompen nada: ensucian los avisos de cada pasada y conviene limpiarlos.</p>
+
+<h2>Lo que no está aquí</h2>
+<p>Los productos cuyos ids <b>sí</b> existen en PaceSetter pero como <b>partes</b> de otro producto
+suyo. Esos no son un agujero de catálogo sino una decisión de a qué id apuntar, y van en
+<code>revision-manual.csv</code>, junto a la simulación.</p>
+</div>
+
+<div class="controls">
+  <input type="search" id="q" placeholder="Buscar por nombre, handle o id…">
+  <button data-f="all" class="on">Todos</button>
+  <button data-f="orphan">Sin producto ({len(orphans)})</button>
+  <button data-f="family">Bajo familia ({len(familied)})</button>
+  <button data-f="unimportable">No importables ({len(unimportable)})</button>
+  <button data-f="partial">Parciales ({len(partials)})</button>
+  <span class="muted" id="count"></span>
+</div>
+
+<div class="tablewrap">
+<table>
+<thead><tr><th>Producto</th><th>Ids sin producto · candidatos / motivo</th><th>Ids vivos</th><th>Qué se sabe</th></tr></thead>
+<tbody id="body">
+{rows_html(orphans, shop_name, "orphan")}
+{rows_html(familied, shop_name, "family")}
+{rows_html(unimportable, shop_name, "unimportable")}
+{rows_html(partials, shop_name, "partial")}
+</tbody>
+</table>
+</div>
+
+<footer>
+Generado por <code>tools/report_orphan_products.py --from-simulation</code> sobre
+{html.escape(source)}: sin llamadas al proveedor ni a la tienda, así que refleja el catálogo tal como
+estaba el día de esa simulación. El nombre enlaza a una búsqueda en el admin por su SKU de migración.
+</footer>
+</div>
+
+<script>
+const rows = [...document.querySelectorAll('#body tr')];
+const count = document.getElementById('count');
+let filter = 'all';
+function apply() {{
+  const q = document.getElementById('q').value.trim().toLowerCase();
+  let shown = 0;
+  for (const tr of rows) {{
+    const okKind = filter === 'all' || tr.dataset.kind === filter;
+    const okText = !q || tr.dataset.search.includes(q);
+    const show = okKind && okText;
+    tr.hidden = !show;
+    if (show) shown++;
+  }}
+  count.textContent = shown + ' de ' + rows.length;
+}}
+document.getElementById('q').addEventListener('input', apply);
+for (const b of document.querySelectorAll('button[data-f]')) {{
+  b.addEventListener('click', () => {{
+    filter = b.dataset.f;
+    document.querySelectorAll('button[data-f]').forEach(x => x.classList.toggle('on', x === b));
+    apply();
+  }});
+}}
+apply();
+</script>
+"""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base", default="http://localhost:8080")
-    parser.add_argument("--out", default="informe-ids-huerfanos.html")
+    parser.add_argument("--out", default=DEFAULT_OUT)
     parser.add_argument("--csv", default="",
                         help="also write the id overlaps here: one row per (product, shared id), "
                              "with who else claims it — the working list for repairing "
@@ -155,7 +467,27 @@ def main() -> int:
     parser.add_argument("--run", default="",
                         help="sync_store_catalog reports, comma-separated or a glob — the real "
                              "errors, and which products the sync could not finish")
+    parser.add_argument("--from-simulation", default="",
+                        help="rebuild from a simulate_store_sync.py output directory instead of the "
+                             "live store and app: no credentials, no supplier calls, reproducible")
+    parser.add_argument("--store", default="trophy-partner",
+                        help="store name for the admin links in --from-simulation mode")
     args = parser.parse_args()
+
+    if args.from_simulation:
+        directory = Path(args.from_simulation)
+        products, sellable_list, cache = load_simulation(directory)
+        orphans, familied, unimportable, partials = classify_simulation(products, sellable_list, cache)
+        out = (str(directory / "productos-sin-pacesetter.html")
+               if args.out == DEFAULT_OUT else args.out)
+        Path(out).write_text(
+            render_offline(products, orphans, familied, unimportable, partials, sellable_list,
+                           args.store, str(directory).replace("\\", "/")),
+            encoding="utf-8")
+        print(f"{len(orphans)} sin producto · {len(familied)} bajo familia · "
+              f"{len(unimportable)} no importables · {len(partials)} parciales "
+              f"(de {len(products)} productos) -> {out}")
+        return 0
 
     shop, client_id, client_secret, version = local_credentials()
     token = access_token(shop, client_id, client_secret)
@@ -296,24 +628,44 @@ def reason(error: str) -> tuple[str, str]:
     return ("otro", error[:160])
 
 
+def admin_url(product: dict, shop_name: str) -> str:
+    """The product's admin page - or, with no gid (offline mode), a search that lands on it."""
+    if product.get("gid"):
+        return f"https://admin.shopify.com/store/{shop_name}/products/{product['gid'].rsplit('/', 1)[-1]}"
+    query = product.get("legacy_sku") or product.get("handle") or product.get("title", "")
+    return f"https://admin.shopify.com/store/{shop_name}/products?query={urllib.parse.quote(query)}"
+
+
 def rows_html(products: list[dict], shop_name: str, kind: str) -> str:
     out = []
     for p in sorted(products, key=lambda x: x["title"].lower()):
-        numeric = p["gid"].rsplit("/", 1)[-1]
-        admin = f"https://admin.shopify.com/store/{shop_name}/products/{numeric}"
+        admin = admin_url(p, shop_name)
         if kind == "shared":
             filas = "".join(
                 f'<div class="idrow"><code class="dead">{html.escape(i)}</code>'
                 f'<span class="sugg">también en {html.escape(", ".join(otros))}</span></div>'
                 for i, otros in p["sharedWith"].items())
             out.append(f"""<tr data-kind="shared" data-search="{html.escape((p['title'] + ' ' + p['handle'] + ' ' + ' '.join(p['ids'])).lower())}">
-  <td><a href="https://admin.shopify.com/store/{shop_name}/products/{p['gid'].rsplit('/', 1)[-1]}" target="_blank" rel="noopener">{html.escape(p['title'])}</a>
+  <td><a href="{admin}" target="_blank" rel="noopener">{html.escape(p['title'])}</a>
       <div class="handle">{html.escape(p['handle'])}</div>
       <div class="meta">{p['status'].lower()} · {len(p['skus'])} variante(s) · {'sincronizado' if p['synced'] else 'sin sincronizar'}</div></td>
   <td><span class="badge">id compartido</span>{filas}</td>
   <td>{"".join(f'<code class="live">{html.escape(i)}</code> ' for i in p["live"]) or "—"}</td>
   <td class="answer"><span class="muted">La app resuelve un id a un solo producto: sincronizarlo
       actualiza al primero que lo reclama y deja al otro intacto.</span></td>
+</tr>""")
+            continue
+        if kind == "unimportable":
+            short, meaning = p["kindLabel"]
+            ids = "".join(f'<div class="idrow"><code class="dead">{html.escape(i)}</code></div>'
+                          for i in p["ids"])
+            out.append(f"""<tr data-kind="unimportable" data-search="{html.escape((p['title'] + ' ' + p['handle'] + ' ' + ' '.join(p['ids'])).lower())}">
+  <td><a href="{admin}" target="_blank" rel="noopener">{html.escape(p['title'])}</a>
+      <div class="handle">{html.escape(p['handle'])}</div>
+      <div class="meta">{p['status'].lower()} · {len(p['skus'])} variante(s)</div></td>
+  <td><span class="badge">{html.escape(short)}</span>{ids}</td>
+  <td><span class="muted">ninguno</span></td>
+  <td class="answer">{html.escape(meaning)}</td>
 </tr>""")
             continue
         if kind in ("failed", "incomplete"):
@@ -329,7 +681,7 @@ def rows_html(products: list[dict], shop_name: str, kind: str) -> str:
                                       "imagen que aún está procesando. Se arregla resincronizando.")
             live = "".join(f'<code class="live">{html.escape(i)}</code> ' for i in p["live"]) or "—"
             out.append(f"""<tr data-kind="{kind}" data-search="{html.escape((p['title'] + ' ' + p['handle'] + ' ' + ' '.join(p['ids'])).lower())}">
-  <td><a href="https://admin.shopify.com/store/{shop_name}/products/{p['gid'].rsplit('/', 1)[-1]}" target="_blank" rel="noopener">{html.escape(p['title'])}</a>
+  <td><a href="{admin}" target="_blank" rel="noopener">{html.escape(p['title'])}</a>
       <div class="handle">{html.escape(p['handle'])}</div>
       <div class="meta">{p['status'].lower()} · {len(p['skus'])} variante(s) · {p['images']} imagen(es) · {p['variantImages']} con foto propia</div></td>
   <td><span class="badge">{html.escape(short)}</span><span class="sugg">{html.escape(meaning)}</span></td>
@@ -342,9 +694,15 @@ def rows_html(products: list[dict], shop_name: str, kind: str) -> str:
             fam = p["families"].get(d)
             if fam:
                 info = p["familyDetail"].get(fam + "*", {})
-                served = (f'título «{html.escape(str(info.get("title")))}», {info.get("pricing")} precios, '
-                          f'{info.get("variants")} variantes, {info.get("images")} imagen(es)'
-                          if "error" not in info else html.escape(info["error"]))
+                # Offline the cache has no media, so show only what this source actually knows.
+                served = (html.escape(info["error"]) if "error" in info else ", ".join(
+                    piece for piece in [
+                        f'título «{html.escape(str(info.get("title")))}»',
+                        f'{info["parts"]} partes en Product Data' if info.get("parts") is not None else "",
+                        f'{info["pricing"]} precios' if info.get("pricing") is not None else "",
+                        f'{info["inventory"]} filas de stock' if info.get("inventory") is not None else "",
+                        f'{info["images"]} imagen(es)' if info.get("images") is not None else "",
+                    ] if piece))
                 extra = (f'<span class="sugg fam">es parte de <b>{html.escape(fam)}*</b> → {served}</span>')
             elif p["suggestions"].get(d):
                 extra = f'<span class="sugg">≈ {html.escape(", ".join(p["suggestions"][d]))}</span>'
@@ -374,67 +732,7 @@ def render(products, familied, orphans, partials, failed, incomplete, shared, he
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ids PromoStandards sin correspondencia en PaceSetter</title>
-<style>
-:root {{
-  --bg:#F3F5F7; --surface:#FFFFFF; --surface-2:#E9EDF1; --ink:#16202B; --muted:#58697A;
-  --line:#D8E0E7; --accent:#1F5E6B; --accent-wash:#E3EEF0; --loss:#A32C2C; --loss-wash:#F8EAEA;
-  --gain:#2F6B4F; --gain-wash:#E8F1EC; --brass:#8A6A22; --code-bg:#EDF1F4;
-  --sans:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,Arial,sans-serif;
-  --mono:"Cascadia Mono",Consolas,ui-monospace,"SF Mono",monospace;
-}}
-@media (prefers-color-scheme: dark) {{ :root:not([data-theme="light"]) {{
-  --bg:#0F161D; --surface:#16202A; --surface-2:#1C2833; --ink:#DFE7ED; --muted:#94A5B4;
-  --line:#26343F; --accent:#6FB2BF; --accent-wash:#122730; --loss:#E08585; --loss-wash:#2A1718;
-  --gain:#86C2A0; --gain-wash:#16241D; --brass:#C9A653; --code-bg:#0D1720;
-}} }}
-* {{ box-sizing:border-box; }}
-body {{ margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans); line-height:1.55; }}
-.wrap {{ max-width:1180px; margin:0 auto; padding:2.5rem 1.5rem 5rem; }}
-h1 {{ font-size:1.9rem; line-height:1.2; margin:0 0 .35rem; }}
-h2 {{ font-size:1.15rem; margin:2.5rem 0 .75rem; }}
-.sub {{ color:var(--muted); margin:0 0 2rem; }}
-.card {{ background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:1.25rem 1.4rem; }}
-.card + .card {{ margin-top:1rem; }}
-.stats {{ display:flex; flex-wrap:wrap; gap:.75rem; margin:1.5rem 0 2rem; }}
-.stat {{ background:var(--surface); border:1px solid var(--line); border-radius:12px;
-         padding:.85rem 1.1rem; min-width:9rem; }}
-.stat b {{ display:block; font-size:1.6rem; line-height:1.1; }}
-.stat span {{ color:var(--muted); font-size:.85rem; }}
-.stat.bad b {{ color:var(--loss); }} .stat.warn b {{ color:var(--brass); }} .stat.good b {{ color:var(--gain); }}
-p {{ margin:.6rem 0; }}
-code {{ font-family:var(--mono); font-size:.85em; background:var(--code-bg); padding:.1rem .35rem; border-radius:4px; }}
-code.dead {{ color:var(--loss); background:var(--loss-wash); }}
-code.live {{ color:var(--gain); background:var(--gain-wash); }}
-.controls {{ display:flex; flex-wrap:wrap; gap:.6rem; align-items:center; margin:1.25rem 0 .75rem;
-             position:sticky; top:0; background:var(--bg); padding:.75rem 0; z-index:2; }}
-input[type=search] {{ flex:1; min-width:14rem; padding:.6rem .8rem; border-radius:8px;
-    border:1px solid var(--line); background:var(--surface); color:var(--ink); font:inherit; }}
-button {{ padding:.55rem .9rem; border-radius:8px; border:1px solid var(--line);
-          background:var(--surface); color:var(--ink); font:inherit; cursor:pointer; }}
-button.on {{ background:var(--accent-wash); border-color:var(--accent); color:var(--accent); font-weight:600; }}
-.tablewrap {{ overflow-x:auto; border:1px solid var(--line); border-radius:12px; background:var(--surface); }}
-table {{ border-collapse:collapse; width:100%; font-size:.92rem; }}
-th, td {{ text-align:left; padding:.7rem .9rem; border-bottom:1px solid var(--line); vertical-align:top; }}
-th {{ position:sticky; top:0; background:var(--surface-2); font-size:.8rem; text-transform:uppercase;
-      letter-spacing:.04em; color:var(--muted); }}
-tr:last-child td {{ border-bottom:0; }}
-td a {{ color:var(--accent); font-weight:600; text-decoration:none; }}
-td a:hover {{ text-decoration:underline; }}
-.handle {{ font-family:var(--mono); font-size:.78rem; color:var(--muted); }}
-.meta {{ font-size:.78rem; color:var(--muted); }}
-.idrow {{ margin-bottom:.35rem; }}
-.sugg {{ display:block; font-size:.78rem; color:var(--muted); font-family:var(--mono); }}
-.sugg.none {{ font-style:italic; font-family:var(--sans); }}
-.sugg.fam {{ font-family:var(--sans); color:var(--accent); }}
-.badge {{ display:inline-block; padding:.15rem .5rem; border-radius:999px; font-size:.78rem;
-          font-weight:600; background:var(--loss-wash); color:var(--loss); margin-bottom:.25rem; }}
-.sugg.fam b {{ font-family:var(--mono); }}
-.answer {{ font-size:.82rem; color:var(--muted); max-width:22rem; }}
-.muted {{ color:var(--muted); }}
-ol, ul {{ padding-left:1.2rem; }}
-li {{ margin:.3rem 0; }}
-footer {{ margin-top:3rem; color:var(--muted); font-size:.85rem; }}
-</style>
+{STYLE}
 
 <div class="wrap">
 <h1>Ids PromoStandards sin correspondencia en PaceSetter</h1>
