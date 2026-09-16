@@ -13,8 +13,15 @@ It is sequential on purpose (the supplier is the bottleneck and the app already 
 and every result is appended to a JSONL report as it happens, so a run that dies half way loses
 nothing: re-run with --skip-done <report> and it carries on.
 
+Creating products the store does not carry yet is the one exception to "the unit is the store
+product" (--create, 2026-09-16): the unit is then a supplier id, in the order given. The app must run
+with `SYNC_CREATE_PRODUCTS=true`. A product's union can take in its family's other ids (CD950ABS
+brings CD950AGR, ARS, ARW), so after each creation its `ps_product_ids` is read back and those ids
+are skipped rather than synced into the same product again.
+
 Usage:
     python tools/sync_store_catalog.py --dry-run                  # how many, and which
+    python tools/sync_store_catalog.py --create @ids.txt --report create.jsonl   # new products
     python tools/sync_store_catalog.py --report run.jsonl
     python tools/sync_store_catalog.py --report run.jsonl --skip-done run.jsonl   # resume
     python tools/sync_store_catalog.py --limit 5                  # a careful first slice
@@ -128,6 +135,8 @@ def sync_one(op, base: str, product_id: str, timeout: int) -> dict:
         discounts = body.get("discounts") or {}
         return {
             "productId": product_id, "ok": True, "seconds": round(time.time() - started, 1),
+            "handle": body.get("handle"), "shopifyProductId": body.get("shopifyProductId"),
+            "created": body.get("updated") is False, "warnings": body.get("warnings") or [],
             "variants": body.get("variantCount"), "inventoryUpdated": body.get("inventoryUpdated"),
             "discountOutcome": discounts.get("outcome"), "discountReason": discounts.get("reason"),
             "discountVariants": sum(len(v.get("variantGids") or []) for v in discounts.get("variants") or []),
@@ -166,8 +175,13 @@ def main() -> int:
                              "--skip-done would otherwise skip for being 'ok'")
     parser.add_argument("--only", default="",
                         help="comma-separated supplier ids, or @file with one per line")
+    parser.add_argument("--create", default="",
+                        help="supplier ids NEW to the store (comma-separated, or @file): each is "
+                             "created by the app, in order; ids the store already carries are skipped")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    if args.create:
+        return create(args)
 
     products = store_products()
     if args.only_sellable:
@@ -254,6 +268,92 @@ def main() -> int:
     print(f"\ndone: {counts['ok']} ok, {counts['failed']} failed · discounts: "
           f"{counts['published']} published, {counts['no_discounts']} none to publish, "
           f"{counts['not_written']} not written", flush=True)
+    return 1 if counts["failed"] else 0
+
+
+CREATED_PRODUCT = """
+query CreatedProduct($id: ID!) {
+  product(id: $id) {
+    handle status
+    psIds: metafield(namespace: "custom", key: "ps_product_ids") { value }
+  }
+}
+"""
+
+
+def id_list(raw: str) -> list[str]:
+    values = Path(raw[1:]).read_text(encoding="utf-8").split() if raw.startswith("@") else raw.split(",")
+    return list(dict.fromkeys(v.strip() for v in values if v.strip()))
+
+
+def create(args) -> int:
+    """Create the products the store does not carry, one supplier id at a time."""
+    wanted = id_list(args.create)
+    covered = {}
+    for product in store_products():
+        for i in product["ids"]:
+            covered[i.upper()] = product["handle"]
+    done = set()
+    if args.skip_done and Path(args.skip_done).exists():
+        for line in Path(args.skip_done).read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if row.get("ok"):
+                done.add(row["productId"].upper())
+                for i in row.get("covers") or []:
+                    done.add(i.upper())
+    already = [w for w in wanted if w.upper() in covered]
+    todo = [w for w in wanted if w.upper() not in covered and w.upper() not in done]
+    if args.limit:
+        todo = todo[:args.limit]
+    print(f"{len(wanted)} id(s) asked for; {len(already)} already in the store; "
+          f"{len(done)} done in a previous run; {len(todo)} to create", flush=True)
+    for w in already:
+        print(f"  skip {w:<12} already in the store as {covered[w.upper()]}", flush=True)
+    if args.dry_run:
+        for w in todo[:20]:
+            print(f"  {w}")
+        return 0
+
+    report = Path(args.report) if args.report else None
+    if report:
+        report.parent.mkdir(parents=True, exist_ok=True)
+    shop, client_id, client_secret, version = local_credentials()
+    token = access_token(shop, client_id, client_secret)
+    op = opener(args.base)
+    counts = {"created": 0, "covered": 0, "failed": 0}
+    for i, product_id in enumerate(todo, 1):
+        if product_id.upper() in covered:
+            # Taken in by a product created earlier in this run: it is a variant there already.
+            counts["covered"] += 1
+            print(f"[{i}/{len(todo)}] {product_id:<12} covered by {covered[product_id.upper()]}", flush=True)
+            continue
+        result = sync_one(op, args.base, product_id, args.timeout)
+        if result["ok"] and result.get("shopifyProductId"):
+            payload = graphql(shop, version, token, CREATED_PRODUCT, {"id": result["shopifyProductId"]})
+            node = (payload.get("data") or {}).get("product") or {}
+            try:
+                ids = json.loads((node.get("psIds") or {}).get("value") or "[]")
+            except json.JSONDecodeError:
+                ids = []
+            result["covers"] = ids
+            result["status"] = node.get("status")
+            for covered_id in ids:
+                covered[covered_id.upper()] = result.get("handle")
+        counts["created" if result["ok"] else "failed"] += 1
+        if report:
+            with report.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(result) + "\n")
+        print(f"[{i}/{len(todo)}] {product_id:<12} "
+              + (f"ok · {result.get('handle')} · {result.get('status')} · {result['variants']} variants · "
+                 f"covers {len(result.get('covers') or [])} · discounts {result.get('discountOutcome')}"
+                 if result["ok"] else f"FAILED · {result['error'][:160]}")
+              + f" · {result['seconds']}s", flush=True)
+
+    print(f"\ndone: {counts['created']} created, {counts['covered']} taken in by another, "
+          f"{counts['failed']} failed", flush=True)
     return 1 if counts["failed"] else 0
 
 

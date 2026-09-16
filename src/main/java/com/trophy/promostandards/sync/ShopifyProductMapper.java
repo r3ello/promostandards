@@ -225,6 +225,69 @@ public class ShopifyProductMapper {
         return Map.of("input", buildInput(product, existingProductGid, extraMetafields), "synchronous", true);
     }
 
+    /**
+     * Builds {@code {input, synchronous}} for creating a product the way the migration left every
+     * product in the store: the supplier's title and body, the store's vendor and type, only the
+     * {@code promostandards} tag, <b>one</b>
+     * {@code Title / Default Title} variant, and the identity metafields ({@code ps_product_id},
+     * {@code ps_product_ids}) the store index matches on. No options, no other variants, no images —
+     * {@link ForeignProductSync} adopts that variant and adds the rest straight after, so a created
+     * product goes through the very code every migrated product does, then and on every later sync.
+     *
+     * @param handle the store-numbered handle ({@link StoreHandle})
+     * @param status {@code DRAFT} unless configured otherwise
+     * @param sku    the lone variant's SKU until the sync renumbers it
+     * @param vendor      the vendor to create it with (the store's, {@code TrophyPartner})
+     * @param productType the type to create it with (the store's, {@code Generic Product})
+     */
+    public Map<String, Object> newProductVariables(SupplierProduct product, String handle, String status,
+                                                   String sku, String vendor, String productType,
+                                                   List<SyncProperties.Metafield> extraMetafields) {
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("handle", handle);
+        input.put("title", product.title());
+        if (product.descriptionHtml() != null) {
+            input.put("descriptionHtml", product.descriptionHtml());
+        }
+        if (vendor != null) {
+            input.put("vendor", vendor);
+        }
+        if (productType != null) {
+            input.put("productType", productType);
+        }
+        input.put("status", status);
+        // The owner tag and nothing else, as on every migrated product: the supplier's categories
+        // would be the one thing marking these out in the admin's tag filter.
+        input.put("tags", List.of(OWNER_TAG));
+        input.put("productOptions", List.of(Map.of("name", "Title", "position", 1,
+                "values", List.of(Map.of("name", "Default Title")))));
+        Map<String, Object> variant = new LinkedHashMap<>();
+        variant.put("optionValues", List.of(Map.of("optionName", "Title", "name", "Default Title")));
+        Variant first = product.variants().isEmpty() ? null : product.variants().get(0);
+        BigDecimal price = first == null ? null : pricingPolicy.retailPrice(first.supplierNet(), first.listPrice());
+        if (price != null) {
+            variant.put("price", price.toPlainString());
+        }
+        // Untracked, as a migrated variant arrives: the sync switches tracking on only where the
+        // supplier gives a quantity to track.
+        variant.put("inventoryItem", Map.of("sku", sku, "tracked", false));
+        input.put("variants", List.of(variant));
+
+        List<Map<String, Object>> metafields = metafields(product, extraMetafields);
+        // Provenance from the first write, not the last: if the sync after this stops part-way, the
+        // retry must still know the product is the app's (it decides source and SKU numbering).
+        metafields.add(syncMetafield(MF_SOURCE_NEW, SOURCE_APP));
+        try {
+            metafields.add(Map.of("namespace", METAFIELD_NAMESPACE, "key", MF_PRODUCT_IDS,
+                    "type", "list.single_line_text_field",
+                    "value", objectMapper.writeValueAsString(List.of(product.productId()))));
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Could not write ps_product_ids for " + product.productId(), e);
+        }
+        input.put("metafields", metafields);
+        return Map.of("input", input, "synchronous", true);
+    }
+
     Map<String, Object> buildInput(SupplierProduct product, String existingProductGid) {
         return buildInput(product, existingProductGid, List.of());
     }

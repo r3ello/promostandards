@@ -223,10 +223,19 @@ sync:
   # Creating products. The store's catalogue is the migration's: the sync UPDATES the products
   # Matrixify brought in (matched on custom.ps_product_id / ps_product_ids) and never adds one. A
   # PaceSetter id no store product lists is refused with a 409 — nothing is read, nothing written.
-  # true = the old behaviour: such an import creates ps-<supplier>-<id>.
+  # true = such an import creates the product, shaped like a migrated one and synced like one from
+  # then on: handle p-<number>-<name without measurements> (numbers continue from first-number),
+  # variant SKUs PS<part id>, created as a draft, with the store's vendor/type (not the supplier's)
+  # like every migrated product. Switch it on for a vetted batch, not by default.
   # ---------------------------------------------------------------------------
   create-products:
     enabled: ${SYNC_CREATE_PRODUCTS:false}
+    handle-prefix: p
+    first-number: 10500
+    status: DRAFT
+    sku-prefix: PS
+    vendor: TrophyPartner
+    product-type: Generic Product
 
   # ---------------------------------------------------------------------------
   # Postgres persistence master switch.

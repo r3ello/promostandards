@@ -56,6 +56,43 @@ final class ShopifyGraphQL {
             }
             """;
 
+    /**
+     * {@link #PRODUCT_BY_HANDLE}'s product, by id. A product this app has just created is not in the
+     * search index yet — a {@code handle:} query can miss it for seconds — and the sync that fills it
+     * in runs straight after, with the id {@code productSet} answered. Same selection, kept in step by
+     * hand: the validator reads each constant as one literal.
+     */
+    static final String PRODUCT_BY_ID = """
+            query ProductById($id: ID!, $locationId: ID!, $withLocation: Boolean!) {
+              product(id: $id) {
+                id
+                handle
+                title
+                media(first: 100) { nodes { id alt } }
+                legacySku: metafield(namespace: "migration", key: "legacy_sku") { value }
+                options { id name position optionValues { id name } }
+                variants(first: 100) {
+                  nodes {
+                    id
+                    sku
+                    title
+                    price
+                    selectedOptions { name value }
+                    psId: metafield(namespace: "custom", key: "promo_standard_id") { value }
+                    vendorSku: metafield(namespace: "trophy_sync", key: "vendor_sku") { value }
+                    inventoryItem {
+                      id
+                      tracked
+                      inventoryLevel(locationId: $locationId) @include(if: $withLocation) {
+                        quantities(names: ["available"]) { name quantity }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
     /** Upsert a product with options, variants, media, and metafields in one synchronous call. */
     static final String PRODUCT_SET = """
             mutation ProductSet($input: ProductSetInput!, $synchronous: Boolean!) {

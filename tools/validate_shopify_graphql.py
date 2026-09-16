@@ -53,6 +53,7 @@ VARIANT_METAFIELD = [{"namespace": "custom", "key": "promo_standard_id",
 CASES: dict[str, dict] = {
     "PRODUCT_BY_HANDLE": {"query": "handle:ps-pacesetter-does-not-exist",
                           "locationId": GHOST["location"], "withLocation": True},
+    "PRODUCT_BY_ID": {"id": GHOST["product"], "locationId": GHOST["location"], "withLocation": True},
     "PRODUCT_SET": {"input": {"handle": "ps-pacesetter-does-not-exist", "title": "probe",
                               "productOptions": [{"name": "Color", "position": 1,
                                                   "values": [{"name": "Clear"}]}],
