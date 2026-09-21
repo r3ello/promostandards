@@ -259,9 +259,9 @@ sync:
   supplier-metaobject:
     type: promo_standard_supplier
     handle: pace-setter
-  # Create the custom.ps_* metafield DEFINITIONS at startup (admin visibility only). Needs the
-  # write_metafield_definitions scope; leave false unless the app token has it — sync stamps the
-  # metafield values regardless.
+  # Create the custom.ps_* metafield DEFINITIONS at startup (admin visibility only). There is no
+  # separate scope for it: product-owned definitions need write_products. Sync stamps the metafield
+  # values regardless.
   ensure-metafield-definitions: false
   currency: USD
   country: US

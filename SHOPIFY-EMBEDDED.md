@@ -78,6 +78,42 @@ desprotegida: sigue teniendo su propio login, y ahora además la verificación d
 
 Comprueba también que nginx no añada `X-Frame-Options` — la app no lo manda y no debe mandarlo nadie.
 
+## Dos entornos (dev y prod): una app de Shopify por entorno
+
+Una app de Shopify tiene **una sola App URL**, la misma en todas las tiendas donde se instala. Por
+eso la app de prod instalada en la tienda de dev abre el servidor de prod — que además la rechaza
+(`the token is for https://<tienda-dev> but this server accepts …`), porque sólo acepta tokens
+de su tienda. No se arregla con código: hace falta **otra app**.
+
+- **prod** — la app de siempre → App URL `https://DOMINIO-PROD/` → tienda `trophy-partner` → `.env` de prod.
+- **dev** — una app nueva (p. ej. *Trophy Sync DEV*) → App URL `https://DOMINIO-DEV/` → tienda de dev
+  → `.env` de dev.
+
+Pasos (prod no se toca):
+
+1. En el mismo dashboard donde está la de prod, **crear la app DEV**: App URL y *Allowed redirection
+   URL* = `https://DOMINIO-DEV/`, *Embed app in Shopify admin* ON, los **mismos scopes** que la de prod.
+2. **Instalarla en la tienda de dev** y desinstalar de esa tienda la app de prod; si no, el admin de
+   dev muestra las dos y la de prod sigue abriendo prod.
+3. En el **`.env` del servidor de dev**:
+
+   ```sh
+   SHOPIFY_CLIENT_ID=...                  # de la app DEV (firma los tokens y da el Admin API)
+   SHOPIFY_CLIENT_SECRET=...              # de la app DEV
+   SHOPIFY_STORE_DOMAIN=<tienda-dev>.myshopify.com
+   SHOPIFY_EMBEDDED_SHOP_DOMAINS=<dominio generado de la tienda de dev>.myshopify.com
+   SHOPIFY_LOCATION_ID=gid://shopify/Location/...   # una location de la tienda de dev
+   DB_URL=... DB_USER=... DB_PASSWORD=...           # la base de datos de dev
+   ```
+
+   `SHOPIFY_EMBEDDED_SHOP_DOMAINS` **hay que ponerlo**: el perfil `prod` trae por defecto el de la
+   tienda de prod (`wy2ena-jf`). Si no sabes el dominio generado de la tienda de dev, abre la app
+   una vez: la tarjeta de error lo dice (*"the token is for https://X"*).
+   Los GID de location son de cada tienda: el de prod no vale en dev. Y el metaobjeto
+   `promo_standard_supplier/pace-setter` tiene que existir en la tienda de dev, o el import sigue sin
+   ese metafield (sólo un WARN).
+4. `docker compose up -d` en el directorio de dev, para que coja el `.env` nuevo.
+
 ## Comprobar que funciona
 
 ```sh
