@@ -192,6 +192,15 @@ public class ShopifyProductMapper {
     }
     private static final String COLOR = VariantOptions.COLOR;
     private static final String SIZE = VariantOptions.SIZE;
+    /**
+     * Shopify's own option for a product with no options. {@code productSet} demands option values on
+     * every variant, so a plain product still has to spell it out — leaving it off is refused whole
+     * ("variants.0.optionValues ... Expected value to not be null").
+     */
+    private static final Map<String, Object> DEFAULT_OPTION = Map.of("name", "Title", "position", 1,
+            "values", List.of(Map.of("name", "Default Title")));
+    private static final List<Map<String, String>> DEFAULT_OPTION_VALUES =
+            List.of(Map.of("optionName", "Title", "name", "Default Title"));
 
     private final SyncProperties props;
     private final PricingPolicy pricingPolicy;
@@ -259,10 +268,9 @@ public class ShopifyProductMapper {
         // The owner tag and nothing else, as on every migrated product: the supplier's categories
         // would be the one thing marking these out in the admin's tag filter.
         input.put("tags", List.of(OWNER_TAG));
-        input.put("productOptions", List.of(Map.of("name", "Title", "position", 1,
-                "values", List.of(Map.of("name", "Default Title")))));
+        input.put("productOptions", List.of(DEFAULT_OPTION));
         Map<String, Object> variant = new LinkedHashMap<>();
-        variant.put("optionValues", List.of(Map.of("optionName", "Title", "name", "Default Title")));
+        variant.put("optionValues", DEFAULT_OPTION_VALUES);
         Variant first = product.variants().isEmpty() ? null : product.variants().get(0);
         BigDecimal price = first == null ? null : pricingPolicy.retailPrice(first.supplierNet(), first.listPrice());
         if (price != null) {
@@ -311,13 +319,11 @@ public class ShopifyProductMapper {
         }
         input.put("status", "ACTIVE");
         input.put("tags", tags(product));
-        // A product the supplier sells in ONE variant stays a plain product: no options, so Shopify
-        // keeps its Title/Default Title variant and the admin shows price, SKU and stock as the
-        // product's own. Giving it Color/Size with a single value each only renders a selector with
-        // nothing to select. The colour and size are still published, as variant metafields.
-        if (!isSingleVariant(product)) {
-            input.put("productOptions", productOptions(product));
-        }
+        // A product the supplier sells in ONE variant stays a plain product: Title/Default Title, so
+        // the admin shows price, SKU and stock as the product's own. Giving it Color/Size with a
+        // single value each only renders a selector with nothing to select. The colour and size are
+        // still published, as variant metafields.
+        input.put("productOptions", isSingleVariant(product) ? List.of(DEFAULT_OPTION) : productOptions(product));
         input.put("variants", variants(product));
 
         List<Map<String, Object>> files = files(product);
@@ -460,9 +466,7 @@ public class ShopifyProductMapper {
             if (hasSize) {
                 optionValues.add(Map.of("optionName", SIZE, "name", defaultSize(v.size())));
             }
-            if (!single) {
-                variant.put("optionValues", optionValues);
-            }
+            variant.put("optionValues", single ? DEFAULT_OPTION_VALUES : optionValues);
             List<Map<String, Object>> variantMetafields = new ArrayList<>();
             variantMetafields.add(Map.of(
                     "namespace", METAFIELD_NAMESPACE,
