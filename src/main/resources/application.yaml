@@ -11,6 +11,32 @@ spring:
         size: 4
 
   # ---------------------------------------------------------------------------
+  # SMTP — the mailbox the PaceSetter purchase orders are sent from (orders.pacesetter.* below).
+  #
+  # Leave `host` empty and Spring creates no JavaMailSender: nothing can be sent, previews still
+  # render, and startup is unaffected. The password is sensitive — supply it via MAIL_PASSWORD (or an
+  # untracked application-local.yaml). Google Workspace and Microsoft 365 both want an app password
+  # here, not the account's own.
+  # ---------------------------------------------------------------------------
+  mail:
+    host: "${MAIL_HOST:}"
+    port: ${MAIL_PORT:587}
+    username: "${MAIL_USERNAME:}"
+    password: "${MAIL_PASSWORD:}"
+    properties:
+      mail:
+        smtp:
+          # Both off for a local sink (toolbox scripts/mail/smtp_sink.py: no auth, no TLS, nothing
+          # delivered) — which is how the message is read before a real mailbox exists.
+          auth: ${MAIL_SMTP_AUTH:true}
+          starttls:
+            enable: ${MAIL_SMTP_STARTTLS:true}
+          # Fail fast rather than hold a request open: a PO is sent while someone waits for the answer.
+          connectiontimeout: 10000
+          timeout: 15000
+          writetimeout: 15000
+
+  # ---------------------------------------------------------------------------
   # Postgres (opt-in, see sync.persistence.enabled below)
   #
   # With persistence disabled — the default — PersistenceAutoConfigurationExcluder drops the
@@ -162,6 +188,34 @@ discounts:
   key: "${DISCOUNTS_METAFIELD_KEY:discount_tiers}"
   # json unless the consuming app defined it otherwise (multi_line_text_field holds the same string).
   type: "${DISCOUNTS_METAFIELD_TYPE:json}"
+
+# ---------------------------------------------------------------------------
+# Orders to PaceSetter (PLAN-PEDIDOS-PACESETTER.md)
+#
+# PaceSetter takes no orders by API: the channel is email, so the whole PO is this one message. The
+# body is a FILE, not code — edit src/main/resources/email/pacesetter-po.html, or point `template` at
+# a copy on the server (file:./config/pacesetter-po.html) and edit it there; it is read on every
+# render, so the next preview shows the change. Placeholders are documented at the top of it.
+#
+# `enabled` is the master switch for SENDING and stays false: the preview
+# (GET /api/orders/{id}/pacesetter-po/email) renders either way, which is how the template and the
+# recipient are checked before anything can leave the server. Sending also needs an SMTP server under
+# spring.mail.* (below) — without spring.mail.host there is no sender and the app says so instead of
+# failing to start.
+# ---------------------------------------------------------------------------
+orders:
+  pacesetter:
+    enabled: ${PACESETTER_ORDERS_ENABLED:false}
+    to: "${PACESETTER_ORDER_EMAIL:}"          # PaceSetter's order mailbox
+    cc: "${PACESETTER_ORDER_CC:}"             # comma-separated; the shop's own mailbox belongs here
+    bcc: "${PACESETTER_ORDER_BCC:}"           # comma-separated; a copy PaceSetter does not see
+
+    from: "${PACESETTER_ORDER_FROM:}"         # the mailbox PaceSetter knows the distributor by
+    reply-to: "${PACESETTER_ORDER_REPLY_TO:}" # only when answers should not go back to `from`
+    subject: "Purchase Order {{poNumber}}"
+    template: "${PACESETTER_ORDER_TEMPLATE:classpath:email/pacesetter-po.html}"
+    account-number: "${PACESETTER_ACCOUNT_NUMBER:}"
+    signature: "TrophyPartner"
 
 # ---------------------------------------------------------------------------
 # Shopify Admin API (sync target)

@@ -154,6 +154,7 @@ function showApp() {
 	el('appMain').hidden = false;
 	el('topbarRight').hidden = false;
 	el('signOutBtn').hidden = !canSignOut;
+	routeView();
 }
 
 async function bootstrap() {
@@ -1623,3 +1624,356 @@ el('groupBody').addEventListener('change', (e) => {
 });
 groupModal.querySelectorAll('[data-group-close]').forEach((n) => n.addEventListener('click', closeGroupModal));
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !groupModal.hidden) closeGroupModal(); });
+
+// --- views + PaceSetter orders ------------------------------------------
+// Two views share the page: the catalog and the orders on their way to PaceSetter. The hash holds the
+// choice (#orders, #orders/<order id>) so a reload keeps it and a link can open one order directly —
+// which is what the admin link on a Shopify order will point at (plan §3, phase 2).
+// Read-only for now: the preview says what would go and what stops it; sending waits for PaceSetter's
+// order template.
+let ordersLoaded = false;
+let pendingOrders = [];
+const openOrders = new Set();
+const ordersBody = el('ordersBody');
+
+const numericId = (gid) => String(gid || '').split('/').pop();
+
+function viewFromHash() {
+	const m = /^#orders(?:\/(\d+))?$/.exec(location.hash);
+	return m ? { view: 'orders', orderId: m[1] || null } : { view: 'products', orderId: null };
+}
+
+function routeView() {
+	const { view, orderId } = viewFromHash();
+	el('viewTabs').querySelectorAll('.seg').forEach((s) => s.classList.toggle('is-active', s.dataset.view === view));
+	el('viewProducts').hidden = view !== 'products';
+	el('viewOrders').hidden = view !== 'orders';
+	if (view !== 'orders') return;
+	if (!ordersLoaded) loadOrders().then(() => focusOrder(orderId));
+	else focusOrder(orderId);
+}
+
+async function loadOrders() {
+	ordersLoaded = true;
+	el('ordersMeta').textContent = 'Loading open orders…';
+	ordersBody.innerHTML = `<tr class="row-state"><td colspan="7"><div class="state"><span class="spinner"></span> Reading open orders from Shopify…</div></td></tr>`;
+	try {
+		pendingOrders = await api('/api/orders/pacesetter-pending');
+	} catch (err) {
+		pendingOrders = [];
+		el('ordersMeta').textContent = 'Could not read the orders.';
+		ordersBody.innerHTML = `<tr class="row-state"><td colspan="7"><div class="state state--err">⚠ ${esc(err.message)}</div></td></tr>`;
+		return;
+	}
+	renderOrders();
+}
+
+function renderOrders() {
+	const blocked = pendingOrders.filter((o) => (o.blocking || []).length).length;
+	el('ordersMeta').textContent = pendingOrders.length
+		? `${pendingOrders.length} open order${pendingOrders.length === 1 ? '' : 's'} with PaceSetter items not sent yet`
+			+ (blocked ? ` · ${blocked} need${blocked === 1 ? 's' : ''} attention first` : '')
+		: 'Nothing to send: no open order has PaceSetter items waiting.';
+	ordersBody.innerHTML = pendingOrders.length
+		? pendingOrders.map(orderRowHtml).join('')
+		: `<tr class="row-state"><td colspan="7"><div class="empty"><strong>All caught up</strong><p>Orders appear here once they are placed with PaceSetter items, and leave once sent.</p></div></td></tr>`;
+	// Re-open what was open before a reload, with fresh previews.
+	for (const id of [...openOrders]) {
+		if (pendingOrders.some((o) => numericId(o.orderId) === id)) insertOrderPreview(id);
+		else openOrders.delete(id);
+	}
+}
+
+function orderRowHtml(o) {
+	const id = numericId(o.orderId);
+	const items = (o.lines || []).map((l) =>
+		`<span class="ord-item" title="${esc(l.title || '')}">${esc(l.partId || '?')} × ${l.quantity}</span>`).join('');
+	const others = o.otherLines ? `<span class="muted">+ ${o.otherLines} other line${o.otherLines === 1 ? '' : 's'}</span>` : '';
+	const blocking = o.blocking || [];
+	// "Ready" read as "done": every order here is still waiting to be sent, so the column says what
+	// can be done with it, not how it feels.
+	const state = blocking.length
+		? `<span class="badge badge--critical" title="${esc(blocking.join('\n'))}">Needs attention</span>`
+		: `<span class="badge badge--caution">Not sent · can be sent</span>`;
+	return `<tr class="prod-row${openOrders.has(id) ? ' is-open' : ''}" data-order="${esc(id)}">
+		<td class="col-expand"><span class="chev">▸</span></td>
+		<td><div class="prod-name">${esc(o.orderName)}</div>${o.test ? '<span class="badge badge--neutral">Test</span>' : ''}</td>
+		<td>${esc(orderDate(o.createdAt))}</td>
+		<td>${o.destination ? esc(o.destination) : '<span class="muted">—</span>'}</td>
+		<td><div class="ord-items">${items}${others}</div></td>
+		<td>${paymentBadge(o.financialStatus)}</td>
+		<td>${state}</td>
+	</tr>`;
+}
+
+function orderDate(iso) {
+	if (!iso) return '—';
+	const d = new Date(iso);
+	return isNaN(d) ? iso : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function paymentBadge(status) {
+	if (!status) return '<span class="muted">—</span>';
+	const label = status.charAt(0) + status.slice(1).toLowerCase().replace(/_/g, ' ');
+	const tone = status === 'PAID' ? 'success'
+		: (status === 'PENDING' || status === 'AUTHORIZED' || status === 'PARTIALLY_PAID') ? 'caution' : 'neutral';
+	return `<span class="badge badge--${tone}">${esc(label)}</span>`;
+}
+
+function toggleOrder(id) {
+	const tr = ordersBody.querySelector(`tr.prod-row[data-order="${cssAttr(id)}"]`);
+	if (!tr) return;
+	if (openOrders.has(id)) {
+		openOrders.delete(id); tr.classList.remove('is-open');
+		const d = ordersBody.querySelector(`tr.detail-row[data-order-detail="${cssAttr(id)}"]`);
+		if (d) d.remove();
+	} else {
+		openOrders.add(id);
+		insertOrderPreview(id);
+	}
+}
+
+function insertOrderPreview(id) {
+	const tr = ordersBody.querySelector(`tr.prod-row[data-order="${cssAttr(id)}"]`);
+	if (!tr) return;
+	tr.classList.add('is-open');
+	tr.insertAdjacentHTML('afterend', `<tr class="detail-row" data-order-detail="${esc(id)}"><td colspan="7"><div id="order-preview-${cssId(id)}"><div class="state"><span class="spinner"></span> Loading the preview…</div></div></td></tr>`);
+	fillOrderPreview(el(`order-preview-${cssId(id)}`), id);
+}
+
+/** Always read fresh: an order can change in Shopify (a line fulfilled, the order sent) between two looks. */
+async function fillOrderPreview(node, id) {
+	if (!node) return null;
+	try {
+		const p = await api(`/api/orders/${encodeURIComponent(id)}/pacesetter-po`);
+		node.innerHTML = orderPreviewHtml(p);
+		return p;
+	} catch (err) {
+		node.innerHTML = `<div class="state state--err">⚠ ${esc(err.message)}</div>`;
+		return null;
+	}
+}
+
+/** #orders/<id>: open that order — in the list when it is there, in its own card when it is not (already sent, say). */
+async function focusOrder(id) {
+	el('orderFocusCard').hidden = true;
+	if (!id) return;
+	const row = ordersBody.querySelector(`tr.prod-row[data-order="${cssAttr(id)}"]`);
+	if (row) {
+		if (!openOrders.has(id)) toggleOrder(id);
+		row.scrollIntoView({ block: 'center' });
+		return;
+	}
+	el('orderFocusTitle').textContent = 'Order';
+	el('orderFocusCard').hidden = false;
+	const p = await fillOrderPreview(el('orderFocusBody'), id);
+	if (p) el('orderFocusTitle').textContent = `Order ${p.orderName}`;
+}
+
+function orderPreviewHtml(p) {
+	const id = numericId(p.orderId);
+	const state = p.ready
+		? '<span class="badge badge--caution">Not sent yet · nothing missing</span>'
+		: '<span class="badge badge--critical">Not sent · cannot be sent yet</span>';
+	const blocking = (p.blocking || []).length
+		? `<div class="state--crit"><strong>What stops it</strong><ul>${p.blocking.map((b) => `<li>${esc(b)}</li>`).join('')}</ul></div>` : '';
+	const notices = (p.notices || []).length
+		? `<div class="state--warn"><ul>${p.notices.map((n) => `<li>${esc(n)}</li>`).join('')}</ul></div>` : '';
+
+	const lineRows = (p.lines || []).map((l) => {
+		const perso = Object.entries(l.personalization || {});
+		const persoHtml = perso.length
+			? `<dl class="ord-perso">${perso.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`
+			: '<span class="muted">—</span>';
+		const qty = l.quantity === l.orderedQuantity ? `${l.quantity}` : `${l.quantity} <span class="muted">of ${l.orderedQuantity}</span>`;
+		const price = l.unitPrice == null ? '—' : esc(currency(l.currency || 'USD')(l.unitPrice));
+		return `<tr>
+			<td class="sku">${l.partId ? esc(l.partId) : '<span class="badge badge--critical">unknown</span>'}</td>
+			<td>${esc(l.title || '')}${l.variantTitle ? ` <span class="muted">· ${esc(l.variantTitle)}</span>` : ''}<div class="muted">${esc(l.sku || '')}</div></td>
+			<td class="num">${qty}</td>
+			<td class="num">${price}</td>
+			<td>${persoHtml}</td>
+		</tr>`;
+	}).join('');
+	const lines = lineRows
+		? `<table class="variants"><thead><tr><th>Part</th><th>Product</th><th class="num">Qty</th><th class="num">Unit price</th><th>To engrave</th></tr></thead><tbody>${lineRows}</tbody></table>`
+		: '<p class="muted">No PaceSetter line left to send.</p>';
+	const excluded = (p.excluded || []).length
+		? `<div class="sub-title ord-sub">Not part of the PO</div><ul class="ord-excluded muted">${p.excluded.map((x) =>
+			`<li>${esc(x.title || '(no title)')} × ${x.quantity} — ${esc(x.reason)}</li>`).join('')}</ul>` : '';
+
+	const a = p.shipTo;
+	const address = a
+		? `<address class="ord-address">${[a.name, a.company, a.address1, a.address2,
+			[a.city, a.provinceCode || a.province, a.zip].filter(Boolean).join(' '), a.country, a.phone]
+			.filter(Boolean).map(esc).join('<br>')}</address>`
+		: '<p class="muted">No shipping address.</p>';
+	const method = p.shippingMethod ? `<div class="muted">${esc(p.shippingMethod)}</div>` : '';
+	const note = p.note ? `<div><div class="sub-title">Order note</div><div class="ord-note">${esc(p.note)}</div></div>` : '';
+	const sent = p.sent ? `<div><div class="sub-title">Sent</div><div class="ord-note">${esc(p.sent)}</div></div>` : '';
+
+	return `<div class="detail">
+		<div class="ord-head"><strong>PO ${esc(p.poNumber || '—')}</strong> ${state}
+			${p.test ? '<span class="badge badge--neutral">Test order</span>' : ''}
+			<span class="muted">${esc(p.orderName || '')} · placed ${esc(orderDate(p.createdAt))}</span></div>
+		${blocking}${notices}
+		<div class="ord-grid">
+			<div><div class="sub-title">PaceSetter lines</div>${lines}${excluded}</div>
+			<div class="ord-side">
+				<div><div class="sub-title">Ship to</div>${address}${method}</div>
+				${note}${sent}
+			</div>
+		</div>
+		<div class="ord-actions">
+			<button class="btn btn--sm" data-order-email="${esc(id)}">Preview email</button>
+			<button class="btn btn--primary btn--sm" data-order-send="${esc(id)}" disabled
+				title="Turned off on purpose while the PO format is agreed with PaceSetter. The email can be read, not sent.">Send to PaceSetter</button>
+			<span class="muted ord-foot">Sending is off for now: an emailed PO cannot be recalled.</span>
+		</div>
+		<div class="ord-email" data-email-box hidden></div>
+	</div>`;
+}
+
+el('viewTabs').addEventListener('click', (e) => {
+	const seg = e.target.closest('.seg'); if (!seg) return;
+	if (seg.dataset.view === 'orders') {
+		if (location.hash !== '#orders') location.hash = '#orders';
+	} else if (location.hash) {
+		// Dropping the hash with pushState, not `location.hash = ''`, which would leave a bare "#".
+		history.pushState(null, '', location.pathname + location.search);
+		routeView();
+	}
+});
+window.addEventListener('hashchange', routeView);
+ordersBody.addEventListener('click', (e) => {
+	if (e.target.closest('[data-order-email], [data-order-send]')) return;  // a button in the preview, not the row
+	const row = e.target.closest('tr.prod-row[data-order]');
+	if (row) toggleOrder(row.dataset.order);
+});
+// One handler for both places a preview is shown: inside a row, and in the card an #orders/<id> link opens.
+el('viewOrders').addEventListener('click', (e) => {
+	const mailBtn = e.target.closest('[data-order-email]');
+	if (mailBtn) { toggleOrderEmail(mailBtn.dataset.orderEmail, mailBtn); return; }
+	const sendBtn = e.target.closest('[data-order-send]');
+	if (sendBtn) sendOrder(sendBtn.dataset.orderSend, sendBtn);
+});
+el('viewOrders').addEventListener('input', (e) => {
+	if (e.target.matches('[data-recipient]')) checkRecipients(e.target.closest('[data-email-box]'));
+});
+
+/**
+ * The one irreversible action in this view: an email PaceSetter starts producing from. Whatever the
+ * recipient fields say goes with it — blank fields mean "the configured one", which the server fills.
+ */
+async function sendOrder(id, btn) {
+	const box = btn.closest('.detail').querySelector('[data-email-box]');
+	const recipients = {};
+	for (const input of box ? box.querySelectorAll('[data-recipient]') : []) {
+		recipients[input.dataset.recipient] = input.value.trim();
+	}
+	const where = recipients.to ? `\n\nIt goes to: ${recipients.to}` : '';
+	if (!confirm(`Send this purchase order to PaceSetter?${where}\n\nIt emails the PO from the shop mailbox and marks the order as sent. An email cannot be recalled.`)) return;
+	const label = btn.innerHTML;
+	btn.disabled = true;
+	btn.innerHTML = '<span class="spinner"></span> Sending…';
+	try {
+		const r = await api(`/api/orders/${encodeURIComponent(id)}/pacesetter-po`, 'POST', recipients);
+		toast(`PO ${r.poNumber} emailed to ${r.to}`);
+		if (r.markError) {
+			// The email is gone; only the mark failed. Say so plainly — the next reload will list the
+			// order as unsent, and sending it again would order everything twice.
+			toast(`${r.orderName} was sent but could not be marked in Shopify (${r.markError}). Tag it "pacesetter-enviado" by hand.`, true);
+		}
+		loadOrders();
+	} catch (err) {
+		toast(err.message, true);
+		btn.disabled = false;
+		btn.innerHTML = label;
+	}
+}
+
+/**
+ * The message as PaceSetter would receive it: recipients from the server's config, body from the
+ * template file.
+ *
+ * The box is found from the BUTTON, not by a document id: the same order's preview can be on screen
+ * twice (a row and the card an #orders/<id> link opens), and two elements with one id left
+ * getElementById updating the wrong one — which is why a preview sometimes sat on its spinner. The
+ * `loading` flag is the other half: a double click used to start two fetches whose answers raced.
+ */
+async function toggleOrderEmail(id, btn) {
+	const box = btn.closest('.detail').querySelector('[data-email-box]');
+	if (!box) return;
+	if (!box.hidden) {
+		box.hidden = true; btn.textContent = 'Preview email';
+		return;
+	}
+	box.hidden = false;
+	btn.textContent = 'Hide email';
+	if (box.dataset.loading === 'true') return;     // one is already on its way
+	box.dataset.loading = 'true';
+	box.innerHTML = `<div class="state"><span class="spinner"></span> Building the email…</div>`;
+	try {
+		const mail = await api(`/api/orders/${encodeURIComponent(id)}/pacesetter-po/email`);
+		box.__defaults = mail.defaults || {};
+		box.innerHTML = orderEmailHtml(mail);
+		checkRecipients(box);
+	} catch (err) {
+		box.innerHTML = `<div class="state state--err">⚠ ${esc(err.message)}</div>`;
+	} finally {
+		box.dataset.loading = 'false';
+	}
+}
+
+/**
+ * Recipients are editable — a PO sometimes has to go to a different mailbox — but the configured ones
+ * are what they start as, and anything else says so in a warning: nobody should discover after the
+ * fact that a PO went somewhere other than where this app is set up to send.
+ */
+function orderEmailHtml(m) {
+	const defaults = m.defaults || {};
+	const readonly = (label, value) => value
+		? `<div class="ord-email__field"><span>${esc(label)}</span><span>${esc(value)}</span></div>` : '';
+	const editable = (label, key, value) => `
+		<div class="ord-email__field">
+			<span>${esc(label)}</span>
+			<input class="input" type="text" data-recipient="${key}" value="${esc(value || '')}"
+				placeholder="${esc(defaults[key] || (key === 'to' ? 'nobody configured — orders.pacesetter.to' : 'none'))}"
+				spellcheck="false" autocomplete="off">
+		</div>`;
+	const missing = (m.missing || []).length
+		? `<div class="state--warn"><strong>Before this can go out</strong><ul>${m.missing.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>`
+		: '';
+	// srcdoc, so the message renders as PaceSetter sees it without its styles reaching this page.
+	return `${missing}
+		<div class="ord-email__head">
+			${editable('To', 'to', m.to)}${editable('Cc', 'cc', m.cc)}${editable('Bcc', 'bcc', m.bcc)}
+			${readonly('From', m.from)}${readonly('Reply-To', m.replyTo)}${readonly('Subject', m.subject)}
+		</div>
+		<div class="ord-email__changed" data-changed hidden></div>
+		<iframe class="ord-email__body" title="Email preview" sandbox srcdoc="${esc(m.body)}"></iframe>`;
+}
+
+/** Warns, per field, whenever what is typed is not what the app is configured to send to. */
+function checkRecipients(box) {
+	const note = box.querySelector('[data-changed]');
+	if (!note) return;
+	const defaults = box.__defaults || {};
+	const changed = [...box.querySelectorAll('[data-recipient]')]
+		.filter((i) => (i.value || '').trim() !== (defaults[i.dataset.recipient] || ''))
+		.map((i) => {
+			const was = defaults[i.dataset.recipient];
+			const label = i.dataset.recipient.toUpperCase();
+			return `<li><strong>${label}</strong>: ${i.value.trim()
+				? `sending to <strong>${esc(i.value.trim())}</strong>` : 'left empty'}
+				— the app's default is ${was ? `<strong>${esc(was)}</strong>` : 'nothing'}</li>`;
+		});
+	note.hidden = !changed.length;
+	note.innerHTML = changed.length
+		? `<div class="state--warn"><strong>Not the app's own recipients</strong>
+			<ul>${changed.join('')}</ul>
+			<p>This applies to this one send; the configured addresses are unchanged.</p></div>`
+		: '';
+}
+el('ordersReload').addEventListener('click', loadOrders);
+el('orderFocusClose').addEventListener('click', () => { location.hash = '#orders'; });

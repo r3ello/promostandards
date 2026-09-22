@@ -7,6 +7,7 @@ import com.trophy.promostandards.sync.CatalogSearchUnavailableException;
 import com.trophy.promostandards.sync.GroupConflictException;
 import com.trophy.promostandards.sync.ProductNotInStoreException;
 import com.trophy.promostandards.sync.ShopifySyncException;
+import com.trophy.promostandards.sync.SupplierOrderRefusedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -68,6 +69,17 @@ public class GlobalExceptionHandler {
 	@ExceptionHandler(GroupConflictException.class)
 	public ResponseEntity<ErrorResponse> handleGroupConflict(GroupConflictException ex) {
 		log.info("Grouping refused: {}", ex.getMessage());
+		return ResponseEntity.status(HttpStatus.CONFLICT)
+				.body(ErrorResponse.of(HttpStatus.CONFLICT.value(), ex.getMessage(), List.of()));
+	}
+
+	/**
+	 * An order the app will not email to the supplier: already sent, something about it blocks the
+	 * PO, or the mailbox is not configured. Nothing was sent and nothing was written.
+	 */
+	@ExceptionHandler(SupplierOrderRefusedException.class)
+	public ResponseEntity<ErrorResponse> handleOrderRefused(SupplierOrderRefusedException ex) {
+		log.info("Order not sent to the supplier: {}", ex.getMessage());
 		return ResponseEntity.status(HttpStatus.CONFLICT)
 				.body(ErrorResponse.of(HttpStatus.CONFLICT.value(), ex.getMessage(), List.of()));
 	}

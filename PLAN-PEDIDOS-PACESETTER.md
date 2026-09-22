@@ -1,7 +1,16 @@
 # Pedidos a PaceSetter desde Shopify
 
-Estado: **plan** (2026-09-18; actualizado 2026-09-22: las dos entradas y la seguridad del botón, §3).
-Nada implementado todavía.
+Estado: **fase 1 empezada** (plan 2026-09-18; actualizado 2026-09-22: las dos entradas y la seguridad
+del botón, §3). Hecho el 2026-09-22 y **sólo de lectura**: la lista de pendientes, la vista previa y
+la pestaña Orders de la consola (`SupplierOrderService`, `GET /api/orders/pacesetter-pending` y
+`GET /api/orders/{orderId}/pacesetter-po`), más el **email ya redactado** —
+`GET /api/orders/{orderId}/pacesetter-po/email`, plantilla en `email/pacesetter-po.html` y
+destinatarios en `orders.pacesetter.*` (`SupplierOrderEmail`). **El envío también está hecho**
+(`POST /api/orders/{orderId}/pacesetter-po`, `SupplierOrderMailer` sobre `spring-boot-starter-mail`,
+la primera dependencia nueva del proyecto): manda el email y marca la orden. Sigue **apagado**
+(`orders.pacesetter.enabled=false` y sin `spring.mail.host`), y falta el buzón real del cliente y el
+formato definitivo, que depende de un pedido real de PaceSetter (§2.4) y de la plantilla de
+personalización, que todavía no se adjunta.
 
 Objetivo: preparar el pedido a PaceSetter con los datos de la orden de Shopify — sin que nadie los
 copie a mano —, desde la propia orden o desde la lista de lo que falta por enviar, y dejar la orden
@@ -38,8 +47,13 @@ Al cliente:
 1. **¿Quién graba?** ¿PaceSetter entrega la pieza grabada o tu cliente la graba en su taller? Decide
    si el pedido lleva personalización o es pieza en blanco.
 2. **¿A dónde se envía?** ¿PaceSetter envía al comprador (drop ship) o al taller de tu cliente?
-3. **¿Dónde guarda la tienda el texto a grabar?** Hace falta una orden real con grabado; lo más
-   probable es que esté en las propiedades de la línea (`lineItem.customAttributes`).
+3. **¿Dónde guarda la tienda el texto a grabar?** *Respondida en parte (2026-09-22, órdenes de la
+   tienda dev):* en las propiedades de la línea (`lineItem.customAttributes`), que escribe la app
+   **Easify** (la marca con `_tpo_add_by=easify`). Las claves dependen del producto: `Engraving`,
+   `Engraving Style` y `Line 1…6` en unos, `text-box-1` en otros. Por eso la vista previa las muestra
+   tal cual (sin las que empiezan por `_`) en vez de esperar nombres fijos. En las órdenes migradas las
+   instrucciones van en la **nota de la orden** ("Use 16pt Avenir Book for lines 1, 4, 5"), que la
+   vista previa también muestra. Falta ver una orden real de un producto de PaceSetter con grabado.
 4. **La plantilla Excel de PaceSetter**, la dirección a la que se mandan hoy los pedidos, el número de
    cuenta de distribuidor y un email de pedido real ya enviado (para copiar lo que PaceSetter espera
    ver).
@@ -150,6 +164,12 @@ Sin esto, el pedido sale pero el estado y el tracking no vuelven bien. Visto ley
 - **PO**: número, fecha, cuenta de distribuidor, y por línea artículo (part id), descripción,
   cantidad, precio; dirección y método de envío; fecha requerida si la orden la tiene. Sale de la
   orden de Shopify + el catálogo que ya leemos, nunca tecleado.
+  *Hecho (2026-09-22)*: el cuerpo es el **email**, y vive en un fichero HTML con marcas `{{...}}`
+  (`email/pacesetter-po.html`, o el que diga `orders.pacesetter.template`), que se lee en cada
+  render: se edita sin recompilar. El destinatario, la copia, el remitente, el asunto, la cuenta y la
+  firma son configuración (`orders.pacesetter.*`, secretos por env). Todo lo que se sustituye va
+  escapado, porque el texto a grabar lo escribe el comprador. Falta el formato definitivo, que
+  depende de un pedido real de PaceSetter (§2.4).
 - **Personalización / drop ship**: en el formato exacto de la plantilla de PaceSetter (columnas por
   confirmar con la plantilla, §2.4). Si aceptan CSV, CSV; si no, `.xlsx`.
 - Sin dependencias nuevas en fases 1–2: el CSV es texto y un `.xlsx` sencillo es un zip de XML
@@ -165,9 +185,17 @@ Sin esto, el pedido sale pero el estado y el tracking no vuelven bien. Visto ley
    sin `vendor_sku` (bloquea), orden mixta, y que una orden marcada deje de salir en pendientes.
 2. **Botón en la orden** — extensión *admin link* (Shopify CLI) hacia la pantalla de la fase 1. La
    *admin action* sólo si hace falta no salir de la orden, con el CORS y el `OPTIONS` de §3.1.
-3. **Envío por email desde la app** — `spring-boot-starter-mail` (primera dependencia nueva del
-   proyecto) + el SMTP del buzón del cliente por env, para que PaceSetter reconozca al remitente y
-   las respuestas le lleguen a él. Copia al cliente, siempre.
+3. **Envío por email desde la app** — *hecho el 2026-09-22*: `spring-boot-starter-mail` (primera
+   dependencia nueva del proyecto), `spring.mail.*` para el servidor y `orders.pacesetter.*` para el
+   mensaje; copia al cliente, siempre. Primero el email y después las marcas (metafield con lo que se
+   envió, y etiqueta con `tagsAdd`, que no pisa las demás): una marca que falla se reporta en
+   `markError` y nunca se lanza, porque reintentar enviaría la PO otra vez. Un segundo envío exige
+   `?resend=true`. El destinatario, la copia y la copia oculta se pueden cambiar **para un envío
+   concreto** (cuerpo del POST); la consola los precarga con los de configuración y avisa en cuanto
+   uno no es el de la app, y el registro guarda a dónde se envió de verdad. **Falta**: el buzón real y
+   sus credenciales, encender `enabled`, y el scope `write_orders` en la app de producción para poder
+   marcar. El botón de la consola está **desactivado a propósito** hasta cerrar el formato con
+   PaceSetter.
 4. **`sendPO` por SOAP**, sólo si PaceSetter lo ofrece (§2.6): mismo patrón que los otros 6 servicios
    (WSDL vendorizado, perfil de codegen, stub + cliente SOAP). La especificación 1.0.0 cubre lo que
    hace falta: `orderType` `Configured`, `ShipmentArray`/`ShipTo`, `LineItemArray`, y el texto a

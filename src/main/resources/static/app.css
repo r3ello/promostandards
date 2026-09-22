@@ -452,3 +452,34 @@ body {
 .card--sched .card__sub { display: flex; align-items: center; gap: var(--p-space-200); flex-wrap: wrap; }
 .card--sched .index-table td { vertical-align: top; }
 .sched-running { display: inline-flex; align-items: center; gap: var(--p-space-200); color: var(--p-color-text); }
+
+/* ---------- views + PaceSetter orders ---------- */
+.view-tabs { margin-bottom: var(--p-space-400); }
+.ord-items { display: flex; flex-wrap: wrap; gap: var(--p-space-100); align-items: center; }
+.ord-item { font-family: var(--p-font-family-mono); font-size: var(--p-font-size-300); background: var(--p-color-bg-surface-secondary); border: 1px solid var(--p-color-border-secondary); border-radius: var(--p-border-radius-100); padding: 0 var(--p-space-150); }
+.ord-head { display: flex; align-items: center; gap: var(--p-space-200); flex-wrap: wrap; font-size: var(--p-font-size-350); }
+.ord-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: var(--p-space-500); align-items: start; }
+@media (max-width: 800px) { .ord-grid { grid-template-columns: 1fr; } }
+.ord-side { display: grid; gap: var(--p-space-400); }
+.ord-address { font-style: normal; font-size: var(--p-font-size-325); line-height: 1.5; }
+.ord-note { white-space: pre-wrap; font-size: var(--p-font-size-325); background: var(--p-color-bg-surface); border: 1px solid var(--p-color-border); border-radius: var(--p-border-radius-200); padding: var(--p-space-300); }
+.ord-perso { display: grid; grid-template-columns: max-content 1fr; gap: 0 var(--p-space-200); margin: 0; font-size: var(--p-font-size-300); }
+.ord-perso dt { color: var(--p-color-text-secondary); }
+.ord-perso dd { margin: 0; }
+.ord-excluded { list-style: none; margin: var(--p-space-200) 0 0; padding: 0; font-size: var(--p-font-size-325); display: grid; gap: var(--p-space-100); }
+.ord-foot { font-size: var(--p-font-size-325); }
+.detail .state--crit, .detail .state--warn { margin: 0; }
+.ord-sub { margin-top: var(--p-space-400); }
+.ord-actions { display: flex; align-items: center; gap: var(--p-space-200); flex-wrap: wrap; }
+.ord-email { display: grid; gap: var(--p-space-300); }
+.ord-email__head { display: grid; gap: var(--p-space-100); font-size: var(--p-font-size-325); background: var(--p-color-bg-surface); border: 1px solid var(--p-color-border); border-radius: var(--p-border-radius-200); padding: var(--p-space-300); }
+.ord-email__field { display: grid; grid-template-columns: 90px 1fr; gap: var(--p-space-200); }
+.ord-email__field > span:first-child { color: var(--p-color-text-secondary); }
+.ord-email__body { width: 100%; height: 460px; border: 1px solid var(--p-color-border); border-radius: var(--p-border-radius-200); background: #fff; }
+.ord-email__field input.input {
+	font: inherit; font-size: var(--p-font-size-325); color: var(--p-color-text);
+	background: var(--p-color-bg-surface); border: 1px solid var(--p-color-border);
+	border-radius: var(--p-border-radius-100); padding: var(--p-space-100) var(--p-space-200); width: 100%;
+}
+.ord-email__field input.input:focus { outline: 2px solid var(--p-color-border-focus, #005bd3); outline-offset: -1px; }
+.ord-email__changed p { margin: var(--p-space-150) 0 0; }

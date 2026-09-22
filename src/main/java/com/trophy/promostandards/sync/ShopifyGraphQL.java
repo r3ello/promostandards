@@ -241,6 +241,73 @@ final class ShopifyGraphQL {
             }
             """;
 
+    /**
+     * Open orders with something left to fulfil that were never sent to the supplier — the console's
+     * "to send" list. The search does the coarse cut (the tag is the searchable half of the sent mark;
+     * the metafield is not searchable) and {@code SupplierOrderService} keeps the orders that actually
+     * carry a supplier line. The search is inlined, as in {@link #IMPORTED_PRODUCTS}. Costs ~290
+     * points per 25 orders (measured 2026-09-22), so a page of 50 stays well under the 1,000 limit.
+     * The selection must stay the same as {@link #SUPPLIER_ORDER_BY_ID}: one mapping reads both.
+     */
+    static final String SUPPLIER_PENDING_ORDERS = """
+            query SupplierPendingOrders($cursor: String) {
+              orders(first: 50, after: $cursor, sortKey: CREATED_AT, reverse: true,
+                     query: "status:open tag_not:pacesetter-enviado (fulfillment_status:unshipped OR fulfillment_status:partial)") {
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  id name createdAt test cancelledAt displayFinancialStatus displayFulfillmentStatus tags note
+                  sent: metafield(namespace: "trophy_sync", key: "pacesetter_po") { value }
+                  shippingAddress { name company address1 address2 city province provinceCode zip country countryCodeV2 phone }
+                  shippingLine { title }
+                  lineItems(first: 50) {
+                    nodes {
+                      name title variantTitle sku quantity unfulfilledQuantity
+                      customAttributes { key value }
+                      originalUnitPriceSet { shopMoney { amount currencyCode } }
+                      variant { vendorSku: metafield(namespace: "trophy_sync", key: "vendor_sku") { value } }
+                      product { psId: metafield(namespace: "custom", key: "ps_product_id") { value } }
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
+    /** One order, read the same way as {@link #SUPPLIER_PENDING_ORDERS}: the preview of what would be sent. */
+    static final String SUPPLIER_ORDER_BY_ID = """
+            query SupplierOrderById($id: ID!) {
+              order(id: $id) {
+                id name createdAt test cancelledAt displayFinancialStatus displayFulfillmentStatus tags note
+                sent: metafield(namespace: "trophy_sync", key: "pacesetter_po") { value }
+                shippingAddress { name company address1 address2 city province provinceCode zip country countryCodeV2 phone }
+                shippingLine { title }
+                lineItems(first: 50) {
+                  nodes {
+                    name title variantTitle sku quantity unfulfilledQuantity
+                    customAttributes { key value }
+                    originalUnitPriceSet { shopMoney { amount currencyCode } }
+                    variant { vendorSku: metafield(namespace: "trophy_sync", key: "vendor_sku") { value } }
+                    product { psId: metafield(namespace: "custom", key: "ps_product_id") { value } }
+                  }
+                }
+              }
+            }
+            """;
+
+    /**
+     * Add tags without touching the ones already there ({@code orderUpdate(tags:)} replaces the list).
+     * How an order is marked as sent to the supplier: the tag is the half the order search can filter
+     * on, next to the {@code trophy_sync.pacesetter_po} metafield that records what went.
+     */
+    static final String TAGS_ADD = """
+            mutation TagsAdd($id: ID!, $tags: [String!]!) {
+              tagsAdd(id: $id, tags: $tags) {
+                node { id }
+                userErrors { field message }
+              }
+            }
+            """;
+
     /** Create a fulfillment with carrier tracking against a set of fulfillment orders. */
     static final String FULFILLMENT_CREATE = """
             mutation FulfillmentCreate($fulfillment: FulfillmentInput!) {

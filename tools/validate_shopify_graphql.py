@@ -105,6 +105,9 @@ CASES: dict[str, dict] = {
                                                    "ownerType": "PRODUCT"}},
     "ORDER_BY_ID": {"id": GHOST["order"]},
     "ORDER_BY_PO": {"query": "name:does-not-exist"},
+    "SUPPLIER_PENDING_ORDERS": {},
+    "SUPPLIER_ORDER_BY_ID": {"id": GHOST["order"]},
+    "TAGS_ADD": {"id": GHOST["order"], "tags": ["probe-does-not-stick"]},
     "FULFILLMENT_CREATE": {"fulfillment": {"lineItemsByFulfillmentOrder": [
         {"fulfillmentOrderId": "gid://shopify/FulfillmentOrder/999999999999"}]}},
     "METAFIELDS_SET": {"metafields": [{"ownerId": GHOST["product"], "namespace": "custom",
