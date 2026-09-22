@@ -1,10 +1,11 @@
 # Pedidos a PaceSetter desde Shopify
 
-Estado: **plan** (2026-09-18). Nada implementado todavía.
+Estado: **plan** (2026-09-18; actualizado 2026-09-22: las dos entradas y la seguridad del botón, §3).
+Nada implementado todavía.
 
-Objetivo: en una orden de Shopify, un botón que prepare el pedido a PaceSetter con los datos de la
-orden — sin que nadie los copie a mano — y deje la orden unida al PO, para que el estado y el tracking
-que ya leemos de PaceSetter vuelvan solos a esa orden.
+Objetivo: preparar el pedido a PaceSetter con los datos de la orden de Shopify — sin que nadie los
+copie a mano —, desde la propia orden o desde la lista de lo que falta por enviar, y dejar la orden
+unida al PO, para que el estado y el tracking que ya leemos de PaceSetter vuelvan solos a esa orden.
 
 ## 1. Cómo se le pide hoy a PaceSetter (investigado 2026-09-18)
 
@@ -51,13 +52,23 @@ A PaceSetter (un email de su comercial):
 7. ¿Qué es *Provisional Orders* en su web? ¿Sirve para meter pedidos?
 8. ¿Qué precio quieren en la PO: el de catálogo o el neto de distribuidor?
 
-## 3. El botón
+## 3. Una función, dos entradas
 
-Flujo, en dos clics como la agrupación de productos:
+Enviar una orden a PaceSetter es **una sola función** de la app, con dos entradas que llaman a los
+mismos endpoints. No son alternativas: se hacen las dos, en este orden (decidido 2026-09-22).
 
-1. En la orden, **Más acciones → Enviar a PaceSetter** (extensión *admin link*: abre la app embebida
-   con el id de la orden). Mientras no exista la extensión, lo mismo desde una pestaña **Pedidos** de
-   la consola, que lista las órdenes recientes con líneas de PaceSetter.
+1. **Pestaña Pedidos de la consola** — primero, y se queda. Es la única que responde a "¿qué falta
+   por enviar?": lista las órdenes con líneas de PaceSetter que no llevan la etiqueta
+   `pacesetter-enviado`. La búsqueda de órdenes de Shopify filtra por etiqueta
+   (`-tag:pacesetter-enviado`), no por metafield; las líneas se filtran después por `vendor_sku`.
+   Con sólo un botón en Shopify, una orden en la que nadie pulsa se queda olvidada. Además se prueba
+   sin desplegar nada en Shopify.
+2. **Botón en la orden de Shopify** — después. Llama a lo mismo; su seguridad, en §3.1.
+
+Flujo, en dos clics como la agrupación de productos, se entre por donde se entre:
+
+1. Elegir la orden: en la lista de pendientes de la pestaña, o con **Más acciones → Enviar a
+   PaceSetter** en la propia orden.
 2. **Vista previa** (no escribe nada):
    - sólo las líneas de PaceSetter, reconocidas por `trophy_sync.vendor_sku` de la variante (el part
      id, que es el número de artículo de PaceSetter), con cantidad y texto a grabar;
@@ -70,11 +81,13 @@ Flujo, en dos clics como la agrupación de productos:
    y los envía (fase 3) o los deja para descargar y adjuntar a mano (fase 1).
 4. **Marca la orden**: metafield `trophy_sync.pacesetter_po` (JSON: PO, fecha, líneas enviadas, quién)
    y etiqueta `pacesetter-enviado`. Con el metafield, un segundo clic responde 409 y muestra lo que
-   se envió (reenviar exige `?resend=true` explícito). También guarda el enlace PO → orden en
+   se envió (reenviar exige `?resend=true` explícito), entre por la puerta que entre: la marca está
+   en la orden, no en la pantalla desde la que se pulsó. También guarda el enlace PO → orden en
    `order_link` (`OrderStore.saveOrder`), así `OrderSyncService` la encuentra por id y no por búsqueda.
 
 Endpoints (`/api/orders`):
 
+- `GET  /pacesetter-pending` — la lista de la pestaña: órdenes con líneas de PaceSetter sin enviar.
 - `GET  /{orderId}/pacesetter-po` — la vista previa.
 - `POST /{orderId}/pacesetter-po` — confirmar (marca + genera/envía).
 - `GET  /{orderId}/pacesetter-po/files` — la PO y el fichero de personalización ya generados.
@@ -82,6 +95,31 @@ Endpoints (`/api/orders`):
 Configuración nueva (`orders.pacesetter.*` en `application.yaml`, secretos por env): email de
 destino, CC, número de cuenta, dirección del taller, método de envío por defecto, y `enabled`
 (false por defecto, como la creación de productos).
+
+### 3.1 Seguridad del botón: "sólo desde mi tienda"
+
+No hace falta un mecanismo nuevo. El botón es una extensión **de esta misma app**, y Shopify firma
+cada llamada suya con un session token: un JWT HS256 firmado con el secreto de la app, con `aud` = el
+client id y `dest` = la tienda. `ShopifySessionToken` ya lo verifica para la consola embebida. Hay dos
+formas de montar el botón:
+
+- **Admin link** (la elegida): "Más acciones → Enviar a PaceSetter" abre la app embebida en la orden,
+  con la vista previa. Es la consola de siempre con su autenticación de siempre: cero trabajo de
+  seguridad.
+- **Admin action** (un modal dentro de la página de la orden, sólo si se quiere no salir de ella):
+  llama a los endpoints con `fetch()`, y Shopify añade solo `Authorization: Bearer <token>` cuando la
+  llamada va al dominio de la app (comprobado en su documentación, 2026-09-22). Pide dos cosas que hoy
+  no existen: CORS para el origen `https://extensions.shopifycdn.com`, y dejar pasar sin sesión la
+  petición `OPTIONS` previa. El navegador la manda sin token, y hoy `SessionAuthFilter` protege todo
+  `/api/**` sin mirar el método, así que la rechazaría con 401.
+
+Descartado:
+
+- **Un endpoint público con una clave compartida** (por ejemplo, una petición HTTP desde Shopify
+  Flow): la clave queda guardada en la configuración de Flow, y quien la lea puede enviar pedidos.
+- **Un webhook `orders/create` que envíe solo**: la firma HMAC es segura, pero nadie revisa el texto
+  a grabar antes de que salga, y Shopify reintenta los webhooks, lo que puede duplicar un envío. Un
+  webhook sólo serviría para avisar de que hay una orden pendiente, nunca para enviarla.
 
 ## 4. Qué hay que arreglar del sync de órdenes que ya existe
 
@@ -91,8 +129,10 @@ Sin esto, el pedido sale pero el estado y el tracking no vuelven bien. Visto ley
 1. **Scopes.** La app tiene `write_assigned_fulfillment_orders`, que sólo cubre las fulfillment orders
    de un servicio de fulfillment propio de la app. Las de una location normal de la tienda son
    *merchant managed* y piden `write_merchant_managed_fulfillment_orders`. Escribir un metafield o
-   una etiqueta en una orden pide `write_orders`. **Hoy no está ninguno de los dos**, así que el sync
-   actual casi seguro sería rechazado en la tienda real. Hay que pedirlos y reautorizar.
+   una etiqueta en una orden pide `write_orders`. **La app de producción no tiene ninguno de los
+   dos** (comprobado 2026-09-21), así que el sync actual casi seguro sería rechazado en la tienda
+   real: hay que pedirlos y reautorizar. La app dev nueva, en la tienda `trophy-partner-dev`, ya los
+   tiene, así que ahí se puede probar todo antes.
 2. **Cumple la orden entera.** `fulfillmentCreate` va sin `fulfillmentOrderLineItems`, así que marca
    enviadas también las líneas que no son de PaceSetter, con el tracking de PaceSetter. Debe cumplir
    sólo las líneas de PaceSetter (las mismas que la PO).
@@ -118,13 +158,16 @@ Sin esto, el pedido sale pero el estado y el tracking no vuelven bien. Visto ley
 ## 6. Fases
 
 0. **Preguntas** (§2). Sin respuesta a 1–4 no se puede fijar el formato.
-1. **Vista previa + ficheros** — endpoints, pestaña Pedidos, marca en la orden. El envío sigue
-   siendo del buzón del cliente, adjuntando lo generado. Cero dependencias nuevas.
+1. **Pestaña Pedidos + vista previa + ficheros** — la lista de pendientes, los endpoints y la marca
+   en la orden. El envío sigue siendo del buzón del cliente, adjuntando lo generado. Cero
+   dependencias nuevas. Se prueba entero en la tienda dev, que ya tiene los scopes.
    Tests con el `ShopifyHttp` falso: filtro de líneas, texto a grabar, orden ya enviada (409), línea
-   sin `vendor_sku` (bloquea), orden mixta.
-2. **Botón en la orden** — extensión *admin link* (Shopify CLI) hacia la pantalla de la fase 1.
-3. **Envío por email desde la app** — `spring-boot-starter-mail` (primera dependencia nueva, a
-   decidir) + SMTP del buzón por env. Copia al cliente, siempre.
+   sin `vendor_sku` (bloquea), orden mixta, y que una orden marcada deje de salir en pendientes.
+2. **Botón en la orden** — extensión *admin link* (Shopify CLI) hacia la pantalla de la fase 1. La
+   *admin action* sólo si hace falta no salir de la orden, con el CORS y el `OPTIONS` de §3.1.
+3. **Envío por email desde la app** — `spring-boot-starter-mail` (primera dependencia nueva del
+   proyecto) + el SMTP del buzón del cliente por env, para que PaceSetter reconozca al remitente y
+   las respuestas le lleguen a él. Copia al cliente, siempre.
 4. **`sendPO` por SOAP**, sólo si PaceSetter lo ofrece (§2.6): mismo patrón que los otros 6 servicios
    (WSDL vendorizado, perfil de codegen, stub + cliente SOAP). La especificación 1.0.0 cubre lo que
    hace falta: `orderType` `Configured`, `ShipmentArray`/`ShipTo`, `LineItemArray`, y el texto a
@@ -135,7 +178,10 @@ En paralelo a la fase 1: los arreglos del §4 (scopes primero).
 
 ## 7. Riesgos
 
-- **Enviar dos veces**: metafield + confirmación en dos pasos; reenviar es explícito.
+- **Enviar dos veces**: metafield + confirmación en dos pasos; reenviar es explícito. El 409 vale
+  para las dos entradas.
+- **Una orden que nadie envía**: la lista de pendientes de la pestaña, que no depende de que alguien
+  pulse el botón.
 - **Pedir el artículo equivocado**: una línea sin `vendor_sku` bloquea, no se omite en silencio.
 - **Cambios después de enviar**: PaceSetter exige una PO revisada por email. La app no los gestiona;
   muestra lo que se envió y cuándo.
@@ -149,3 +195,5 @@ En paralelo a la fase 1: los arreglos del §4 (scopes primero).
 - Purchase Order 1.0.0 (estructura de `sendPO`): https://docs.psrestful.com/standards/purchase-order-1.0.0
 - Scopes de `fulfillmentCreate`: https://shopify.dev/docs/api/admin-graphql/latest/mutations/fulfillmentCreate
 - Admin links: https://shopify.dev/docs/apps/build/admin/admin-links
+- Admin actions → backend de la app (token automático, CORS): https://shopify.dev/docs/apps/build/admin/actions-blocks/connect-app-backend
+- Extensiones de admin, red: https://shopify.dev/docs/api/admin-extensions/latest/network-features
