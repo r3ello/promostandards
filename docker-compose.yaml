@@ -30,3 +30,10 @@ services:
       # container throws them away and the next console load rebuilds them with one getProduct per
       # product — ~1,278 calls to the supplier per deploy.
       - ./data:/app/data
+      # The PaceSetter order email. Its template ships INSIDE the image
+      # (classpath:email/pacesetter-po.html), so editing it there means a rebuild. Put a copy in
+      # ./config on the server, uncomment this, and set PACESETTER_ORDER_TEMPLATE to
+      # file:/app/config/pacesetter-po.html: it is re-read on every render, so an edit shows on the
+      # next preview with no restart. It is deliberately NOT under static/ — that directory is served
+      # to anyone who can reach the app, login screen included.
+      # - ./config:/app/config:ro

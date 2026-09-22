@@ -212,10 +212,12 @@ orders:
 
     from: "${PACESETTER_ORDER_FROM:}"         # the mailbox PaceSetter knows the distributor by
     reply-to: "${PACESETTER_ORDER_REPLY_TO:}" # only when answers should not go back to `from`
-    subject: "Purchase Order {{poNumber}}"
+    # Blank means the built-in "Purchase Order {{poNumber}}" (SupplierOrderProperties): a default with
+    # {{ }} in it inside a ${...} placeholder is asking Spring to guess where the placeholder ends.
+    subject: "${PACESETTER_ORDER_SUBJECT:}"
     template: "${PACESETTER_ORDER_TEMPLATE:classpath:email/pacesetter-po.html}"
     account-number: "${PACESETTER_ACCOUNT_NUMBER:}"
-    signature: "TrophyPartner"
+    signature: "${PACESETTER_ORDER_SIGNATURE:TrophyPartner}"
 
 # ---------------------------------------------------------------------------
 # Shopify Admin API (sync target)

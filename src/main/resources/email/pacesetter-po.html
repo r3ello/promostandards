@@ -1,0 +1,52 @@
+<!--
+  The purchase order PaceSetter receives. Edit this file — or point orders.pacesetter.template at
+  your own copy (file:./config/pacesetter-po.html) — and the next preview shows the change; nothing
+  here is compiled in.
+
+  Placeholders, all filled from the Shopify order (unknown ones are left empty):
+    {{poNumber}} {{orderName}} {{orderDate}}   the PO number is the order's name without its #
+    {{accountNumber}} {{accountLine}}          accountLine disappears when no account is configured
+    {{lines}}                                  the table rows: part, description, qty, unit price,
+                                               and the text to engrave under each line
+    {{shipTo}} {{shippingMethod}}              the order's own delivery address and method
+    {{noteBlock}}                              the order note, or nothing when there is none
+    {{signature}}
+-->
+<!DOCTYPE html>
+<html lang="en">
+<body style="margin:0;padding:24px;background:#f6f6f7;font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;font-size:14px;line-height:1.5;">
+<div style="max-width:720px;margin:0 auto;background:#ffffff;border:1px solid #e3e3e3;border-radius:8px;padding:24px;">
+
+	<h1 style="margin:0 0 4px;font-size:18px;">Purchase Order {{poNumber}}</h1>
+	<p style="margin:0 0 20px;color:#616161;font-size:13px;">Placed {{orderDate}}{{accountLine}}</p>
+
+	<p style="margin:0 0 16px;">Hello PaceSetter team,</p>
+	<p style="margin:0 0 20px;">Please enter the order below. Reply to this message with the order
+		confirmation and the expected ship date, and reference PO <strong>{{poNumber}}</strong> on the
+		packing slip and the invoice.</p>
+
+	<table role="presentation" style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+		<thead>
+			<tr style="background:#f6f6f7;">
+				<th style="text-align:left;padding:8px;border-bottom:1px solid #e3e3e3;">Item</th>
+				<th style="text-align:left;padding:8px;border-bottom:1px solid #e3e3e3;">Description</th>
+				<th style="text-align:right;padding:8px;border-bottom:1px solid #e3e3e3;">Qty</th>
+				<th style="text-align:right;padding:8px;border-bottom:1px solid #e3e3e3;">Unit price</th>
+			</tr>
+		</thead>
+		<tbody>
+			{{lines}}
+		</tbody>
+	</table>
+
+	<h2 style="margin:0 0 6px;font-size:14px;">Ship to</h2>
+	{{shipTo}}
+	<p style="margin:6px 0 20px;color:#616161;font-size:13px;">Shipping method: {{shippingMethod}}</p>
+
+	{{noteBlock}}
+
+	<p style="margin:0;">Thank you,<br>{{signature}}</p>
+
+</div>
+</body>
+</html>
