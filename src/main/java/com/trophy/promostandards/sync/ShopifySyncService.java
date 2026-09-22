@@ -24,17 +24,17 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Orchestrates supplier → Shopify sync: imports/updates products ({@code productSet}), pushes
  * inventory ({@code inventorySetQuantities}), and pushes prices ({@code productVariantsBulkUpdate}).
  *
- * <p>Identity is resolved in two steps. Products this app created carry the deterministic handle
- * from {@link ShopifyProductMapper#handle} — found means update, missing means create. Products the
- * one-shot trophypartner migration created have their own handles but share the metafield contract
- * ({@code custom.ps_product_ids} lists every supplier id they cover, canonical first), so a handle
- * miss falls back to a cached index over those lists before ever creating — re-sync is idempotent
- * and never duplicates a migrated product.
+ * <p>Identity is resolved in two steps: the old deterministic handle from
+ * {@link ShopifyProductMapper#handle}, then a cached index over {@code custom.ps_product_ids} (every
+ * supplier id a store product covers, canonical first), repaged before ever creating — re-sync is
+ * idempotent and never duplicates a product. Products the migration created and products this app
+ * creates now ({@code p-<number>-<name>}, see {@link #importProduct}) both resolve through the index.
  *
  * <p><b>Migrated products are never {@code productSet}:</b> that mutation is declarative — variants
  * not listed would be <em>deleted</em> (fatal for N:1 grouped products whose other supplier ids own
@@ -51,6 +51,13 @@ public class ShopifySyncService {
 
     /** How long the supplier-id → store-product index is trusted before repaging Shopify. */
     private static final Duration INDEX_TTL = Duration.ofMinutes(5);
+
+    /**
+     * How long a product this app created is answered for from memory. The index is a search, and
+     * Shopify takes seconds — sometimes longer — to list a new product in it; well past that, the
+     * listing is the truth again.
+     */
+    private static final Duration RECENTLY_CREATED_TTL = Duration.ofMinutes(15);
 
 
     private final ShopifyGraphQLClient gql;
@@ -89,6 +96,31 @@ public class ShopifySyncService {
 
     private final ProductCreationProperties creation;
 
+    /**
+     * Serialises creating products: two imports must not both read the highest handle number and
+     * take the next one.
+     */
+    private final Object creationLock = new Object();
+
+    /**
+     * The last handle number this process gave a product. The store index is a search, and a product
+     * created seconds ago is not in it yet — without this the next creation would reuse its number.
+     */
+    private int lastHandleNumber;
+
+    /**
+     * Products this process created, by every supplier id they cover, until the index lists them.
+     *
+     * <p>Without it, whatever comes straight after a creation asks the index and is told the product
+     * does not exist: the discount publish that follows every import failed on 80 of the 132 products
+     * created on 2026-09-16 ("has not been imported yet"), and importing a family member the creation
+     * had just taken in would have created that family a second time.
+     */
+    private final Map<String, RecentlyCreated> recentlyCreated = new ConcurrentHashMap<>();
+
+    private record RecentlyCreated(ImportedProduct product, Instant createdAt) {
+    }
+
     public ShopifySyncService(ShopifyGraphQLClient gql, CatalogService catalog, ShopifyProductMapper mapper,
                               PricingPolicy pricingPolicy, ShopifyProperties shopify, SyncProperties props,
                               ObjectMapper objectMapper, ObjectProvider<SyncStateStore> syncStates,
@@ -105,7 +137,7 @@ public class ShopifySyncService {
         this.objectMapper = objectMapper;
         this.syncStates = syncStates;
         this.foreignSync = new ForeignProductSync(gql, catalog, pricingPolicy, shopify, props,
-                objectMapper, images);
+                objectMapper, images, creation.skuPrefixOrDefault());
     }
 
     /**
@@ -187,9 +219,12 @@ public class ShopifySyncService {
         }
         SupplierProduct product = catalog.aggregate(productId);
         if (foreign != null) {
-            return updateForeignInPlace(productId, product, foreign);
+            return updateForeignInPlace(productId, product, foreign, indexLookup(productId, false));
         }
-        String existingGid = existing == null ? null : existing.path("id").asText(null);
+        if (existing == null) {
+            return createProduct(productId, product, extraMetafields);
+        }
+        String existingGid = existing.path("id").asText(null);
 
         JsonNode data = gql.execute(ShopifyGraphQL.PRODUCT_SET,
                 mapper.productSetVariables(product, existingGid, withSupplierMetafield(extraMetafields)));
@@ -220,18 +255,148 @@ public class ShopifySyncService {
      * supplier variants it is missing, and pushes price + stock. {@code ps_source} is never written
      * here (it is the immutable provenance flag), only {@code ps_last_sync_at}.
      */
-    private SyncResult updateForeignInPlace(String productId, SupplierProduct product, JsonNode node) {
+    private SyncResult updateForeignInPlace(String productId, SupplierProduct product, JsonNode node,
+                                            ImportedProduct imported) {
         String gid = node.path("id").asText();
         String handle = node.path("handle").asText();
-        ForeignProductSync.Result result =
-                foreignSync.sync(productId, product, node, indexLookup(productId, false));
-        stampSyncMetafields(gid, false);
+        ForeignProductSync.Result result = foreignSync.sync(productId, product, node, imported);
+        stampSyncMetafields(gid, imported != null && isAppSource(imported.source()));
         if (!result.supplierIdsAdded().isEmpty()) {
             // The product now covers ids the cached index has never seen: let the badge catch up.
             indexBuiltAt = null;
+            if (imported != null && recentlyCreated.containsKey(key(productId))) {
+                // A family member taken in by a product created moments ago must find that product
+                // too, or importing it next would create the family a second time.
+                List<String> ids = new ArrayList<>(imported.supplierIds());
+                ids.addAll(result.supplierIdsAdded());
+                rememberCreated(new ImportedProduct(gid, handle, imported.canonicalId(), List.copyOf(ids),
+                        imported.source(), null));
+            }
         }
         return new SyncResult(productId, gid, handle, true, result.variants(), result.inventoryUpdated(),
                 product.warnings());
+    }
+
+    /**
+     * Creates the store product for a supplier id no store product carries, shaped like a migrated
+     * one — {@code p-<number>-<name>}, a draft, one {@code Title} variant, {@code ps_product_id(s)} —
+     * and then syncs it through {@link ForeignProductSync} like any migrated product: the variant is
+     * adopted, the rest created, stock, prices and images pushed. From then on nothing tells the two
+     * apart but {@code trophy_sync.source=app} and the {@code PS<part id>} SKUs, so a created product
+     * never needs a code path of its own.
+     *
+     * <p>Stopping between the two steps leaves a draft with one variant that the store index already
+     * finds by its id; importing it again finishes it rather than creating a second one.
+     */
+    private SyncResult createProduct(String productId, SupplierProduct product,
+                                     List<SyncProperties.Metafield> extraMetafields) {
+        String gid;
+        String handle;
+        synchronized (creationLock) {
+            int number = nextHandleNumber();
+            handle = StoreHandle.of(creation.handlePrefixOrDefault(), number, product.title());
+            // A family id (CM248C*) is not a part: its wildcard has no place in a SKU.
+            String sku = creation.skuPrefixOrDefault()
+                    + productId.replace("*", "").trim().toUpperCase(Locale.ROOT);
+            JsonNode data = gql.execute(ShopifyGraphQL.PRODUCT_SET, mapper.newProductVariables(product,
+                    handle, creation.statusOrDefault(), sku, creation.vendorOr(product.vendor()),
+                    creation.productTypeOr(product.productType()), withSupplierMetafield(extraMetafields)));
+            JsonNode result = require(data).path("productSet");
+            checkUserErrors(result, "productSet");
+            gid = result.path("product").path("id").asText(null);
+            if (gid == null || gid.isBlank()) {
+                throw new ShopifySyncException("productSet created no product for " + productId);
+            }
+            lastHandleNumber = number;
+            String created = result.path("product").path("handle").asText(handle);
+            if (!handle.equals(created)) {
+                // Shopify renames a handle that is taken rather than failing. The product is still
+                // found by its ps_product_id, but its number is no longer the one we counted.
+                log.warn("Created {} as {} instead of {}: the handle was taken", productId, created, handle);
+                handle = created;
+            }
+        }
+        indexBuiltAt = null;
+        log.info("Created product {} -> {} ({}, {})", productId, gid, handle, creation.statusOrDefault());
+
+        JsonNode node = findById(gid);
+        if (node == null) {
+            throw new ShopifySyncException("Created " + gid + " for " + productId
+                    + " but could not read it back");
+        }
+        ImportedProduct imported = new ImportedProduct(gid, handle, productId, List.of(productId),
+                ShopifyProductMapper.SOURCE_APP, null);
+        // Remembered before the sync that fills it in: if that stops part-way, a retry must find this
+        // product rather than create another.
+        rememberCreated(imported);
+        SyncResult synced = updateForeignInPlace(productId, product, node, imported);
+        return new SyncResult(productId, gid, handle, false, synced.variantCount(),
+                synced.inventoryUpdated(), synced.warnings());
+    }
+
+    /**
+     * @return the number the next created product's handle takes: one past the highest the store
+     * already uses at or above {@code first-number} — read off the handles themselves, so the count
+     * lives where anyone can see it — or past the last this process gave, whichever is higher.
+     */
+    private int nextHandleNumber() {
+        int highest = creation.firstNumberOrDefault() - 1;
+        String prefix = creation.handlePrefixOrDefault();
+        for (ImportedProduct p : ensureIndex(false).values()) {
+            int n = StoreHandle.number(prefix, p.handle());
+            if (n > highest) {
+                highest = n;
+            }
+        }
+        return Math.max(highest, lastHandleNumber) + 1;
+    }
+
+    private void rememberCreated(ImportedProduct product) {
+        RecentlyCreated entry = new RecentlyCreated(product, Instant.now());
+        for (String id : product.supplierIds()) {
+            recentlyCreated.put(key(id), entry);
+        }
+    }
+
+    private static String key(String productId) {
+        return productId.trim().toUpperCase(Locale.ROOT);
+    }
+
+    /**
+     * @return the store product covering {@code productId}: the index's answer, else a product this
+     * process created too recently for the index to list it
+     */
+    private ImportedProduct lookup(Map<String, ImportedProduct> index, String productId) {
+        ImportedProduct match = index == null ? null : index.get(key(productId));
+        if (match != null) {
+            return match;
+        }
+        RecentlyCreated recent = recentlyCreated.get(key(productId));
+        if (recent == null) {
+            return null;
+        }
+        if (recent.createdAt().plus(RECENTLY_CREATED_TTL).isBefore(Instant.now())) {
+            recentlyCreated.remove(key(productId), recent);
+            return null;
+        }
+        return recent.product();
+    }
+
+    private static boolean isAppSource(String source) {
+        return ShopifyProductMapper.SOURCE_APP.equalsIgnoreCase(source);
+    }
+
+    /**
+     * @return whether this app created the store product: under its own {@code ps-} handle, or by
+     * the source the store index read. Every sync stamps {@code trophy_sync.source}, so this is what
+     * keeps a created product from being stamped "migration" by the first scheduled pass.
+     */
+    private boolean isAppOwned(String productId, JsonNode node) {
+        if (mapper.handle(productId).equals(node.path("handle").asText(null))) {
+            return true;
+        }
+        ImportedProduct match = lookup(cachedIndexOrNull(), productId);
+        return match != null && isAppSource(match.source());
     }
 
     /**
@@ -425,7 +590,7 @@ public class ShopifySyncService {
         int updated = kind == Kind.PRICE
                 ? pushPrices(product, gid, bySku)
                 : pushInventory(product, bySku);
-        stampSyncMetafields(gid, false);
+        stampSyncMetafields(gid, isAppOwned(productId, existing));
         // Both pushes skip a supplier variant the store has nothing to write to. Counting them here
         // is what tells the caller the product's structure is behind the supplier's.
         int missing = 0;
@@ -487,7 +652,7 @@ public class ShopifySyncService {
      */
     public Boolean isImported(String productId) {
         Map<String, ImportedProduct> index = cachedIndexOrNull();
-        return index == null ? null : index.containsKey(productId.toUpperCase(Locale.ROOT));
+        return index == null ? null : lookup(index, productId) != null;
     }
 
     /**
@@ -500,7 +665,7 @@ public class ShopifySyncService {
         if (index == null) {
             return false;
         }
-        ImportedProduct match = index.get(productId.toUpperCase(Locale.ROOT));
+        ImportedProduct match = lookup(index, productId);
         String json = match == null ? null : match.discountsJson();
         return json != null && !json.isBlank();
     }
@@ -614,6 +779,8 @@ public class ShopifySyncService {
         }
         supplierIdIndex = index;
         indexBuiltAt = Instant.now();
+        // Listed now: the store's answer takes over from what was remembered at creation.
+        recentlyCreated.keySet().removeIf(index::containsKey);
         return products;
     }
 
@@ -674,6 +841,10 @@ public class ShopifySyncService {
             return null;
         }
         JsonNode node = findByHandle(match.handle());
+        if (node == null && match.gid() != null) {
+            // The handle search lags a creation just like the listing does; the id always answers.
+            node = findById(match.gid());
+        }
         if (node == null) {
             match = indexLookup(productId, true);
             node = match == null ? null : findByHandle(match.handle());
@@ -683,7 +854,7 @@ public class ShopifySyncService {
 
 
     private ImportedProduct indexLookup(String productId, boolean forceRebuild) {
-        return ensureIndex(forceRebuild).get(productId.toUpperCase(Locale.ROOT));
+        return lookup(ensureIndex(forceRebuild), productId);
     }
 
     /**
@@ -723,6 +894,16 @@ public class ShopifySyncService {
         } catch (RuntimeException e) {
             log.warn("Could not stamp sync metafields on {}: {}", productGid, e.getMessage());
         }
+    }
+
+    /** @return the product node by id, or {@code null} when there is none. */
+    private JsonNode findById(String gid) {
+        String locationId = shopify.locationId();
+        boolean configured = locationId != null && !locationId.isBlank();
+        JsonNode product = require(gql.execute(ShopifyGraphQL.PRODUCT_BY_ID, Map.of("id", gid,
+                "locationId", configured ? locationId : "gid://shopify/Location/0",
+                "withLocation", configured))).path("product");
+        return product.isMissingNode() || product.isNull() ? null : product;
     }
 
     /** @return the existing product node by handle (exact match), or {@code null} if not found. */
@@ -769,8 +950,7 @@ public class ShopifySyncService {
      * store claims it. Answered from the cached index, so it costs no request.
      */
     public List<String> supplierIdsFor(String productId) {
-        Map<String, ImportedProduct> index = cachedIndexOrNull();
-        ImportedProduct match = index == null ? null : index.get(productId.toUpperCase(Locale.ROOT));
+        ImportedProduct match = lookup(cachedIndexOrNull(), productId);
         return match == null || match.supplierIds().isEmpty() ? List.of(productId) : match.supplierIds();
     }
 

@@ -23,7 +23,7 @@
 #   GET  /api/sync/schedule                          what it is doing, or what the last pass did
 sync:
   schedule:
-    enabled: true
-    dry-run: true
+    enabled: false
+    dry-run: false
     inventory-cron: "0 0/5 * * * *"
     price-cron: "0 0 3 28 2 *"

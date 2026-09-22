@@ -53,6 +53,7 @@ VARIANT_METAFIELD = [{"namespace": "custom", "key": "promo_standard_id",
 CASES: dict[str, dict] = {
     "PRODUCT_BY_HANDLE": {"query": "handle:ps-pacesetter-does-not-exist",
                           "locationId": GHOST["location"], "withLocation": True},
+    "PRODUCT_BY_ID": {"id": GHOST["product"], "locationId": GHOST["location"], "withLocation": True},
     "PRODUCT_SET": {"input": {"handle": "ps-pacesetter-does-not-exist", "title": "probe",
                               "productOptions": [{"name": "Color", "position": 1,
                                                   "values": [{"name": "Clear"}]}],
@@ -104,6 +105,9 @@ CASES: dict[str, dict] = {
                                                    "ownerType": "PRODUCT"}},
     "ORDER_BY_ID": {"id": GHOST["order"]},
     "ORDER_BY_PO": {"query": "name:does-not-exist"},
+    "SUPPLIER_PENDING_ORDERS": {},
+    "SUPPLIER_ORDER_BY_ID": {"id": GHOST["order"]},
+    "TAGS_ADD": {"id": GHOST["order"], "tags": ["probe-does-not-stick"]},
     "FULFILLMENT_CREATE": {"fulfillment": {"lineItemsByFulfillmentOrder": [
         {"fulfillmentOrderId": "gid://shopify/FulfillmentOrder/999999999999"}]}},
     "METAFIELDS_SET": {"metafields": [{"ownerId": GHOST["product"], "namespace": "custom",

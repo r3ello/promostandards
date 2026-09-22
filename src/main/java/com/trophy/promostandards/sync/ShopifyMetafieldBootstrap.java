@@ -17,9 +17,9 @@ import java.util.Map;
  * exist, so the identity metafields stamped on imported products are visible and filterable in the
  * Shopify admin.
  *
- * <p><b>Opt-in:</b> creating metafield <em>definitions</em> needs the {@code write_metafield_definitions}
- * scope, which most tokens don't have (and the sync works without it — metafield <em>values</em> are
- * still stamped during {@code productSet}). So this only runs when
+ * <p><b>Opt-in:</b> there is no metafield-definition scope — {@code metafieldDefinitionCreate} needs
+ * access to the namespace and owner type, i.e. {@code write_products} for these. The sync works
+ * without the definitions (metafield <em>values</em> are still stamped). So this only runs when
  * {@code sync.ensure-metafield-definitions=true} <em>and</em> a store is configured. Failures are
  * logged, never fatal.
  */

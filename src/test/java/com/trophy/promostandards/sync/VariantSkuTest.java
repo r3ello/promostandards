@@ -95,6 +95,23 @@ class VariantSkuTest {
                 skus.get(VariantSku.key("SAMPLE-RED", "M")));
     }
 
+    /**
+     * A product this app created has no legacy number: its variants are PS + the part id (client
+     * requirement, 2026-09-16), with the size only where one part is sold in several.
+     */
+    @Test
+    void numbersACreatedProductFromThePartIds() {
+        Map<String, String> skus = VariantSku.byVariant(null,
+                List.of(variant("CD950ABS", "8 X 10"), variant("cd950agr", "8 X 10"),
+                        variant("SAMPLE-RED", "S"), variant("SAMPLE-RED", "M")), "PS");
+
+        assertThat(skus.values()).containsExactly("PSCD950ABS", "PSCD950AGR", "PSSAMPLE-RED-S",
+                "PSSAMPLE-RED-M");
+        // The legacy number still wins wherever there is one.
+        assertThat(VariantSku.byVariant("PS1298", List.of(variant("GI307", "One Size")), "PS").values())
+                .containsExactly("PS1298");
+    }
+
     /** A product the migration never numbered keeps the supplier-derived SKUs (empty map = fallback). */
     @Test
     void staysOutOfTheWayWithoutALegacySku() {

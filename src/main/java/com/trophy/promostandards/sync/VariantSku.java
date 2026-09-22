@@ -44,6 +44,11 @@ import java.util.Set;
  * supplier reads — but it is thin for a human scanning a picking list. Raised with the client
  * 2026-09-06 and left as is; the alternative, should it ever be wanted, is a minimum tail length
  * (pad from the prefix leftwards until the tail is N characters), not a return to the whole part id.
+ *
+ * <p><b>A product this app created has no legacy number</b>, and its variants are numbered from the
+ * supplier instead: {@code PS} plus the part id, {@code PSCD950ABS} (client requirement, 2026-09-16).
+ * The prefix is what tells a PaceSetter product on a shelf or a picking list without opening its
+ * metafields; the part id is already the shortest unambiguous name the supplier gives it.
  */
 final class VariantSku {
 
@@ -63,8 +68,21 @@ final class VariantSku {
      * @return SKU per {@link #key(String, String)}, or an empty map when there is no legacy number
      */
     static Map<String, String> byVariant(String legacySku, List<Variant> variants) {
-        if (legacySku == null || legacySku.isBlank() || variants == null || variants.isEmpty()) {
+        return byVariant(legacySku, variants, null);
+    }
+
+    /**
+     * @param skuPrefix what a product with no legacy number puts in front of each part id ({@code PS});
+     *               null or blank keeps the supplier-derived SKUs for such a product
+     * @return SKU per {@link #key(String, String)}, or an empty map when neither a legacy number nor a
+     * prefix gives one
+     */
+    static Map<String, String> byVariant(String legacySku, List<Variant> variants, String skuPrefix) {
+        if (variants == null || variants.isEmpty()) {
             return Map.of();
+        }
+        if (legacySku == null || legacySku.isBlank()) {
+            return skuPrefix == null || skuPrefix.isBlank() ? Map.of() : prefixed(skuPrefix.trim(), variants);
         }
         String base = legacySku.trim();
         List<Variant> vs = variants.stream()
@@ -107,6 +125,24 @@ final class VariantSku {
         for (int i = 0; i < vs.size(); i++) {
             skus.putIfAbsent(key(vs.get(i).supplierPartId(), vs.get(i).size()),
                     base + "-" + tails.get(i).toUpperCase(Locale.ROOT));
+        }
+        return skus;
+    }
+
+    /**
+     * {@code PS} + part id, and the size only when one part is sold in several (or their variants
+     * would share a SKU) — the same rule the legacy tail follows.
+     */
+    private static Map<String, String> prefixed(String prefix, List<Variant> variants) {
+        List<Variant> vs = variants.stream()
+                .filter(v -> v.supplierPartId() != null && !v.supplierPartId().isBlank()).toList();
+        List<String> ids = vs.stream().map(Variant::supplierPartId).toList();
+        Map<String, String> skus = new LinkedHashMap<>();
+        for (Variant v : vs) {
+            String id = v.supplierPartId().trim().toUpperCase(Locale.ROOT);
+            String sku = count(ids, v.supplierPartId()) > 1 && v.size() != null && !v.size().isBlank()
+                    ? prefix + id + "-" + v.size().trim() : prefix + id;
+            skus.putIfAbsent(key(v.supplierPartId(), v.size()), sku);
         }
         return skus;
     }

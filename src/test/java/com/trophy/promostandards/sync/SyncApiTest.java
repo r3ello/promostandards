@@ -43,6 +43,9 @@ class SyncApiTest {
     @MockitoBean
     private MetafieldCatalogService metafieldCatalog;
 
+    @MockitoBean
+    private SupplierOrderService supplierOrders;
+
     /** The console (and the server, which has no terminal) reads the automation's state here. */
     @Test
     void reportsTheScheduleState() throws Exception {
@@ -141,6 +144,69 @@ class SyncApiTest {
         mockMvc.perform(get("/api/sync/settings"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.createProducts").value(false));
+    }
+
+    /** The console's "to send" list, and the preview it opens: {@code ready} is what enables sending. */
+    @Test
+    void servesThePendingOrdersAndAPreview() throws Exception {
+        when(supplierOrders.pending()).thenReturn(List.of(new SupplierOrderService.PendingOrder(
+                "gid://shopify/Order/7291179761758", "#1046", "2026-09-22T16:48:24Z", true, "PAID",
+                "Wake Forest, NC", List.of(new SupplierOrderService.LineSummary("CB35", "Optional Base", 1)),
+                0, List.of())));
+        when(supplierOrders.preview("7291179761758")).thenReturn(java.util.Optional.of(new SupplierOrderService.Preview(
+                "gid://shopify/Order/7291179761758", "#1046", "1046", "2026-09-22T16:48:24Z", true, "PAID",
+                "UNFULFILLED", null, null, "Standard", List.of(), List.of(), List.of("No PaceSetter line left to send."),
+                List.of(), null)));
+
+        mockMvc.perform(get("/api/orders/pacesetter-pending"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].orderName").value("#1046"))
+                .andExpect(jsonPath("$[0].lines[0].partId").value("CB35"));
+        mockMvc.perform(get("/api/orders/7291179761758/pacesetter-po"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.poNumber").value("1046"))
+                .andExpect(jsonPath("$.ready").value(false));
+    }
+
+    /** The email endpoint renders through the real template; no mailbox is configured in tests. */
+    @Test
+    void servesTheEmailThatWouldGoToPaceSetter() throws Exception {
+        when(supplierOrders.preview("7291179761758")).thenReturn(java.util.Optional.of(new SupplierOrderService.Preview(
+                "gid://shopify/Order/7291179761758", "#1046", "1046", "2026-09-22T16:48:24Z", true, "PAID",
+                "UNFULFILLED", null, null, "Standard",
+                List.of(new SupplierOrderService.Line("CB35", "Optional Base", null, "PS9250", 1, 1,
+                        new java.math.BigDecimal("36.99"), "USD", java.util.Map.of())),
+                List.of(), List.of(), List.of(), null)));
+
+        mockMvc.perform(get("/api/orders/7291179761758/pacesetter-po/email"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.subject").value("Purchase Order 1046"))
+                .andExpect(jsonPath("$.canSend").value(false))
+                .andExpect(jsonPath("$.body").value(containsString("CB35")))
+                .andExpect(jsonPath("$.missing[0]").value(containsString("No recipient")));
+    }
+
+    /** An order the app will not email is a conflict, not a failure: nothing was sent, nothing written. */
+    @Test
+    void refusingToSendAnOrderIsAConflict() throws Exception {
+        when(supplierOrders.preview("7291179761758")).thenReturn(java.util.Optional.of(new SupplierOrderService.Preview(
+                "gid://shopify/Order/7291179761758", "#1046", "1046", "2026-09-22T16:48:24Z", true, "PAID",
+                "UNFULFILLED", null, null, "Standard", List.of(), List.of(),
+                List.of("Already sent to PaceSetter."), List.of(), "{}")));
+        when(supplierOrders.send(any(), eq(false), any()))
+                .thenThrow(new SupplierOrderRefusedException("This order cannot be sent to PaceSetter: Already sent to PaceSetter."));
+
+        mockMvc.perform(post("/api/orders/7291179761758/pacesetter-po"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(containsString("Already sent")));
+    }
+
+    @Test
+    void anUnknownOrderIsNotFound() throws Exception {
+        when(supplierOrders.preview("999")).thenReturn(java.util.Optional.empty());
+
+        mockMvc.perform(get("/api/orders/999/pacesetter-po"))
+                .andExpect(status().isNotFound());
     }
 
     @Test

@@ -172,13 +172,16 @@ class ShopifyProductMapperTest {
         Map<String, Object> vars = mapper().productSetVariables(singleNullColorVariant(), null);
         Map<String, Object> input = (Map<String, Object>) vars.get("input");
 
-        // One supplier variant needs no options: Shopify keeps Title/Default Title and the admin
-        // shows price, SKU and stock as the product's own. A Color option holding one value would
-        // only render a selector with nothing to select.
-        assertThat(input).doesNotContainKey("productOptions");
+        // One supplier variant needs no options: Title/Default Title, so the admin shows price, SKU
+        // and stock as the product's own. A Color option holding one value would only render a
+        // selector with nothing to select. Leaving the option off instead is not allowed: productSet
+        // refuses a variant without optionValues (every single-variant sync failed that way).
+        assertThat(input.get("productOptions")).isEqualTo(List.of(Map.of("name", "Title", "position", 1,
+                "values", List.of(Map.of("name", "Default Title")))));
         List<Map<String, Object>> variants = (List<Map<String, Object>>) input.get("variants");
         assertThat(variants).hasSize(1);
-        assertThat(variants.get(0)).doesNotContainKey("optionValues");
+        assertThat(variants.get(0).get("optionValues"))
+                .isEqualTo(List.of(Map.of("optionName", "Title", "name", "Default Title")));
         assertThat(variants.get(0).get("sku")).isNotNull();
     }
 

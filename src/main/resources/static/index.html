@@ -76,6 +76,14 @@
 	</header>
 
 	<main class="page" id="appMain" hidden>
+		<!-- Views: the catalog, and the orders on their way to PaceSetter. The hash keeps the choice
+		     (#orders, #orders/<order id>), so a link can open one order directly. -->
+		<nav class="segmented view-tabs" id="viewTabs" role="tablist" aria-label="View">
+			<button class="seg is-active" data-view="products" role="tab">Products</button>
+			<button class="seg" data-view="orders" role="tab">Orders</button>
+		</nav>
+
+		<div id="viewProducts">
 		<!-- Scheduled sync: what runs unattended, what it is doing, and a way to try one pass.
 		     Hidden until GET /api/sync/schedule answers, so an older backend simply shows nothing. -->
 		<section class="card card--sched" id="scheduleCard" hidden>
@@ -182,6 +190,53 @@
 				</label>
 			</div>
 		</section>
+		</div>
+
+		<!-- Orders still to send to PaceSetter (PLAN-PEDIDOS-PACESETTER.md §3). Read-only for now:
+		     sending waits for PaceSetter's order template. -->
+		<div id="viewOrders" hidden>
+			<!-- An order opened by link (#orders/<id>) that the list does not show — already sent, say. -->
+			<section class="card" id="orderFocusCard" hidden>
+				<div class="card__head">
+					<div>
+						<h2 class="card__title" id="orderFocusTitle">Order</h2>
+						<p class="card__sub">Opened by link.</p>
+					</div>
+					<div class="card__actions">
+						<button class="btn btn--sm" id="orderFocusClose">Close</button>
+					</div>
+				</div>
+				<div id="orderFocusBody"></div>
+			</section>
+
+			<section class="card">
+				<div class="card__head">
+					<div>
+						<h1 class="card__title">PaceSetter orders</h1>
+						<p class="card__sub" id="ordersMeta">Open orders with PaceSetter items not sent to PaceSetter yet.</p>
+					</div>
+					<div class="card__actions">
+						<button class="btn" id="ordersReload">↻ Reload</button>
+					</div>
+				</div>
+				<div class="table-wrap">
+					<table class="index-table" id="ordersTable">
+						<thead>
+							<tr>
+								<th class="col-expand" aria-label="Expand"></th>
+								<th>Order</th>
+								<th>Placed</th>
+								<th>Ship to</th>
+								<th>PaceSetter items</th>
+								<th>Payment</th>
+								<th>To PaceSetter</th>
+							</tr>
+						</thead>
+						<tbody id="ordersBody"></tbody>
+					</table>
+				</div>
+			</section>
+		</div>
 	</main>
 
 	<!-- Metafield picker modal (shown when adding a product to Shopify) -->

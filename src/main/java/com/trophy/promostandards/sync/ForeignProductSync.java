@@ -67,11 +67,14 @@ class ForeignProductSync {
     private final SyncProperties props;
     private final ObjectMapper objectMapper;
     private final ImageProperties images;
+    /** What a product with no legacy number puts in front of its part ids to make a SKU. */
+    private final String skuPrefix;
 
     ForeignProductSync(ShopifyGraphQLClient gql, CatalogService catalog, PricingPolicy pricingPolicy,
                        ShopifyProperties shopify, SyncProperties props, ObjectMapper objectMapper,
-                       ImageProperties images) {
+                       ImageProperties images, String skuPrefix) {
         this.images = images;
+        this.skuPrefix = skuPrefix;
         this.gql = gql;
         this.catalog = catalog;
         this.pricingPolicy = pricingPolicy;
@@ -111,9 +114,10 @@ class ForeignProductSync {
                 v -> unioned.supplierIdByKey().get(variantKey(v)));
 
         // The store keeps its own numbering: the legacy catalogue's SKU plus what tells the
-        // supplier's parts apart. The join back to PaceSetter is the vendor_sku metafield, not this.
+        // supplier's parts apart, or PS + the part id on a product this app created. The join back
+        // to PaceSetter is the vendor_sku metafield, not this.
         Map<String, String> skuByPart = VariantSku.byVariant(
-                storeProduct.path("legacySku").path("value").asText(null), union.variants());
+                storeProduct.path("legacySku").path("value").asText(null), union.variants(), skuPrefix);
 
         // One supplier variant means a plain product: Shopify keeps Title/Default Title and the
         // admin shows price, SKU and stock as the product's own. Options with a single value each

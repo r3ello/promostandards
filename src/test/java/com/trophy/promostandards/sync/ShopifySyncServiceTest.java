@@ -47,10 +47,11 @@ class ShopifySyncServiceTest {
     private static final ImageProperties IMAGES = new ImageProperties(null, null);
 
     /** Most tests below exercise the create path, which the store keeps switched off. */
-    private static final ProductCreationProperties CREATE = new ProductCreationProperties(true);
+    private static final ProductCreationProperties CREATE = new ProductCreationProperties(true, null, null, null, null,
+            "TrophyPartner", "Generic Product");
 
     /** The default, and how the store runs: only products already in Shopify are synced. */
-    private static final ProductCreationProperties NO_CREATE = new ProductCreationProperties(null);
+    private static final ProductCreationProperties NO_CREATE = new ProductCreationProperties(null, null, null, null, null, null, null);
 
     private CatalogService catalog;
 
@@ -169,42 +170,217 @@ class ShopifySyncServiceTest {
                 List.of(), List.of(), List.of());
     }
 
+    /**
+     * A store with nothing for the id yet, as the 2026-09-16 batch of new PaceSetter products found it.
+     * {@code indexNodes} is what the tagged-product listing answers; every product this app creates
+     * comes back from {@code ProductById} exactly as {@code productSet} was asked to make it — one
+     * {@code Title} variant — which is the shape the migrated-product sync then works from. The
+     * listing never catches up with a creation, as a search index does not within seconds.
+     */
+    private ShopifyHttp emptyStoreHttp(String indexNodes) {
+        ShopifyHttp migrated = migratedStoreHttp();
+        List<Map<?, ?>> created = new ArrayList<>();
+        return (path, body, headers) -> {
+            String query = String.valueOf(((Map<?, ?>) body).get("query"));
+            Map<?, ?> variables = (Map<?, ?>) ((Map<?, ?>) body).get("variables");
+            String operation;
+            String response;
+            if (query.contains("ProductByHandle")) {
+                operation = "ProductByHandle";
+                response = "{\"data\":{\"products\":{\"nodes\":[]}}}";
+            } else if (query.contains("ImportedProducts")) {
+                operation = "ImportedProducts";
+                response = "{\"data\":{\"products\":{\"pageInfo\":{\"hasNextPage\":false},\"nodes\":["
+                        + indexNodes + "]}}}";
+            } else if (query.contains("MetaobjectByHandle")) {
+                operation = "MetaobjectByHandle";
+                response = "{\"data\":{\"metaobjectByHandle\":{\"id\":\"gid://shopify/Metaobject/77\"}}}";
+            } else if (query.contains("ProductSet")) {
+                operation = "ProductSet";
+                Map<?, ?> input = (Map<?, ?>) variables.get("input");
+                created.add(input);
+                response = "{\"data\":{\"productSet\":{\"product\":{\"id\":\"gid://shopify/Product/"
+                        + (900 + created.size()) + "\",\"handle\":\"" + input.get("handle")
+                        + "\",\"variants\":{\"nodes\":[]}},\"userErrors\":[]}}}";
+            } else if (query.contains("ProductById")) {
+                operation = "ProductById";
+                String id = String.valueOf(variables.get("id"));
+                Map<?, ?> input = created.get(Integer.parseInt(id.substring(id.lastIndexOf('/') + 1)) - 901);
+                Map<?, ?> variant = (Map<?, ?>) ((List<?>) input.get("variants")).get(0);
+                Object sku = ((Map<?, ?>) variant.get("inventoryItem")).get("sku");
+                response = """
+                        {"data":{"product":{
+                          "id":"%s","handle":"%s","title":"%s","media":{"nodes":[]},
+                          "options":[{"id":"gid://shopify/ProductOption/2","name":"Title","position":1,
+                            "optionValues":[{"id":"gid://shopify/ProductOptionValue/2","name":"Default Title"}]}],
+                          "variants":{"nodes":[
+                            {"id":"gid://shopify/ProductVariant/95","sku":"%s",
+                             "selectedOptions":[{"name":"Title","value":"Default Title"}],
+                             "inventoryItem":{"id":"gid://shopify/InventoryItem/195","tracked":false}}
+                          ]}
+                        }}}""".formatted(id, input.get("handle"), input.get("title"), sku);
+            } else {
+                return migrated.postJson(path, body, headers);
+            }
+            operations.add(operation);
+            variablesByOperation.put(operation, variables);
+            try {
+                return MAPPER.readTree(response);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        };
+    }
+
+    /** A product this app created earlier in the 10500 series, and a migrated one far below it. */
+    private static final String STORE_WITH_A_CREATED_PRODUCT = """
+            {"id":"gid://shopify/Product/800","handle":"p-10502-crystal-star",
+             "psId":{"value":"OTHER-1"},"syncSource":{"value":"app"}},
+            {"id":"gid://shopify/Product/700","handle":"p-8123-sample-polo",
+             "psId":{"value":"OTHER-2"},"psSource":{"value":"migration"}}""";
+
+    /**
+     * A PaceSetter product new to the store is created the way the migration left every product
+     * there — the store's own handle numbering, a draft, one {@code Title} variant, the identity
+     * metafields — and then goes through the migrated-product sync, which adopts that variant and
+     * creates the rest. SKUs are PS + the part id (client requirement, 2026-09-16).
+     */
     @Test
-    void importCreatesProductThenPushesInventory() {
-        ShopifySyncService service = service(routingHttp());
+    void createsADraftShapedLikeAMigratedProductAndSyncsItLikeOne() {
+        ShopifySyncService service = service(emptyStoreHttp(STORE_WITH_A_CREATED_PRODUCT));
 
         SyncResult result = service.importProduct("SAMPLE-001");
 
-        assertThat(result.shopifyProductId()).isEqualTo("gid://shopify/Product/100");
-        assertThat(result.handle()).isEqualTo("ps-pacesetter-sample-001");
+        // Numbered past the highest the store holds from 10500 up; the name is the title's words.
+        assertThat(result.handle()).isEqualTo("p-10503-sample-polo");
+        assertThat(result.shopifyProductId()).isEqualTo("gid://shopify/Product/901");
         assertThat(result.updated()).isFalse();
         assertThat(result.variantCount()).isEqualTo(2);
-        assertThat(result.inventoryUpdated()).isEqualTo(2); // both variants carry on-hand
 
-        // Inventory is set within productSet now, so no separate InventorySet call on import. The
-        // handle miss triggers one migrated-product index lookup (ImportedProducts) before creating,
-        // and the app stamps ps_source/ps_last_sync_at (MetafieldsSet) after.
-        assertThat(operations).containsExactly("ProductByHandle", "ImportedProducts",
-                "MetaobjectByHandle", "ProductSet", "MetafieldsSet");
-
-        // The supplier metaobject reference is stamped as a product metafield (resolved GID)...
-        Map<?, ?> input = (Map<?, ?>) productSetVariables.get("input");
-        List<?> metafields = (List<?>) input.get("metafields");
-        assertThat(metafields).anySatisfy(m -> {
-            Map<?, ?> mf = (Map<?, ?>) m;
-            assertThat(mf.get("key")).isEqualTo("promo_standard_supplier");
-            assertThat(mf.get("type")).isEqualTo("metaobject_reference");
-            assertThat(mf.get("value")).isEqualTo("gid://shopify/Metaobject/77");
+        Map<?, ?> input = (Map<?, ?>) varsOf("ProductSet").get("input");
+        assertThat(input.get("status")).isEqualTo("DRAFT");
+        assertThat(input.get("title")).isEqualTo("Sample Polo");
+        // The store's vendor, type and tag, as on every migrated product — not the supplier's.
+        assertThat(input.get("vendor")).isEqualTo("TrophyPartner");
+        assertThat(input.get("productType")).isEqualTo("Generic Product");
+        assertThat(objects(input.get("tags"))).containsExactly("promostandards");
+        assertThat(objects(input.get("variants"))).singleElement().satisfies(v -> {
+            Map<?, ?> variant = (Map<?, ?>) v;
+            assertThat(objects(variant.get("optionValues"))).singleElement()
+                    .satisfies(o -> assertThat(((Map<?, ?>) o).get("name")).isEqualTo("Default Title"));
+            assertThat(((Map<?, ?>) variant.get("inventoryItem")).get("sku")).isEqualTo("PSSAMPLE-001");
         });
-        // ...and every variant carries the supplier product id.
-        List<?> variants = (List<?>) input.get("variants");
-        assertThat(variants).isNotEmpty().allSatisfy(v -> {
-            List<?> variantMetafields = (List<?>) ((Map<?, ?>) v).get("metafields");
-            assertThat(variantMetafields).anySatisfy(m -> {
-                Map<?, ?> mf = (Map<?, ?>) m;
-                assertThat(mf.get("key")).isEqualTo("promo_standard_id");
-                assertThat(mf.get("value")).isEqualTo("SAMPLE-001");
-            });
+        assertThat(objects(input.get("metafields"))).extracting(m -> {
+            Map<?, ?> field = (Map<?, ?>) m;
+            return field.get("namespace") + "." + field.get("key") + "=" + field.get("value");
+        }).contains("custom.ps_product_id=SAMPLE-001", "custom.ps_product_ids=[\"SAMPLE-001\"]",
+                "trophy_sync.source=app", "custom.promo_standard_supplier=gid://shopify/Metaobject/77");
+        assertThat(input.containsKey("files")).isFalse();
+
+        // Read back by id, never by a handle search the new product is not in yet; then the
+        // migrated-product sync: Title becomes Color, the lone variant is adopted, the other created.
+        assertThat(operations).containsSubsequence("ProductByHandle", "ImportedProducts", "ProductSet",
+                "ProductById", "ProductOptionUpdate", "VariantsUpdate", "VariantsCreate");
+        Map<?, ?> adopted = (Map<?, ?>) objects(varsOf("VariantsUpdate").get("variants")).get(0);
+        assertThat(adopted.get("id")).isEqualTo("gid://shopify/ProductVariant/95");
+        assertThat(((Map<?, ?>) adopted.get("inventoryItem")).get("sku")).isEqualTo("PSSAMPLE-001-RED-S");
+        assertThat(objects(varsOf("VariantsCreate").get("variants"))).singleElement().satisfies(v ->
+                assertThat(((Map<?, ?>) ((Map<?, ?>) v).get("inventoryItem")).get("sku"))
+                        .isEqualTo("PSSAMPLE-001-RED-M"));
+
+        // And it stays the app's: the closing stamp says so.
+        assertThat(objects(metafieldsSetVariables.get("metafields"))).anySatisfy(m -> {
+            Map<?, ?> field = (Map<?, ?>) m;
+            assertThat(field.get("key")).isEqualTo("source");
+            assertThat(field.get("value")).isEqualTo("app");
+        });
+    }
+
+    /**
+     * The first created product takes 10500; the next one takes 10501 even though the store listing
+     * — a search — has not caught up with the first.
+     */
+    @Test
+    void numbersFromTheFirstNumberAndNeverReusesOneTheIndexHasNotSeenYet() {
+        ShopifySyncService service = service(emptyStoreHttp("""
+                {"id":"gid://shopify/Product/700","handle":"p-10294-acrylic-awareness-ribbon-awards",
+                 "psId":{"value":"OTHER-2"},"psSource":{"value":"migration"}}"""));
+
+        assertThat(service.importProduct("SAMPLE-001").handle()).isEqualTo("p-10500-sample-polo");
+        assertThat(service.importProduct("CM778").handle()).isEqualTo("p-10501-sample-cap");
+    }
+
+    /**
+     * What follows a creation — the discount publish, the next import — asks the store index, and a
+     * product created seconds ago is not in it yet. It answered "has not been imported yet" for 80 of
+     * the 132 products created on 2026-09-16; the product is now found by the id the creation returned.
+     */
+    @Test
+    void findsAProductItJustCreatedBeforeTheStoreListsIt() {
+        ShopifySyncService service = service(emptyStoreHttp(STORE_WITH_A_CREATED_PRODUCT));
+        service.importProduct("SAMPLE-001");
+        operations.clear();
+
+        assertThat(service.storeProduct("SAMPLE-001").path("id").asText()).isEqualTo("gid://shopify/Product/901");
+        assertThat(service.supplierIdsFor("sample-001")).containsExactly("SAMPLE-001");
+        assertThat(service.isImported("SAMPLE-001")).isTrue();
+        assertThat(operations).contains("ProductById");
+    }
+
+    /**
+     * A created product's union takes in its family (CM777 brings CM778, a product of its own).
+     * Importing CM778 straight after must sync that product, not create the family a second time —
+     * and the discounts must see every id it covers, or one ladder would be written product-wide.
+     */
+    @Test
+    void importingAFamilyMemberJustTakenInSyncsTheSameProduct() {
+        ShopifySyncService service = service(emptyStoreHttp(STORE_WITH_A_CREATED_PRODUCT));
+        SyncResult family = service.importProduct("CM777");
+
+        assertThat(service.supplierIdsFor("CM778")).containsExactly("CM777", "CM778");
+        operations.clear();
+        SyncResult member = service.importProduct("CM778");
+
+        assertThat(operations).doesNotContain("ProductSet");
+        assertThat(member.shopifyProductId()).isEqualTo(family.shopifyProductId());
+        assertThat(member.updated()).isTrue();
+    }
+
+    /**
+     * Every scheduled push stamps {@code trophy_sync.source}; on a product this app created it must
+     * go on saying "app", or the first price pass would rewrite its provenance as the migration's.
+     */
+    @Test
+    void aScheduledPushKeepsACreatedProductTheApps() {
+        ShopifyHttp http = new ShopifyHttp() {
+            private final ShopifyHttp real = migratedStoreHttp();
+
+            @Override
+            public JsonNode postJson(String path, Object body, Map<String, String> headers) {
+                String query = String.valueOf(((Map<?, ?>) body).get("query"));
+                if (query.contains("ImportedProducts")) {
+                    operations.add("ImportedProducts");
+                    try {
+                        return MAPPER.readTree("""
+                                {"data":{"products":{"pageInfo":{"hasNextPage":false},"nodes":[{
+                                  "id":"gid://shopify/Product/900","handle":"p-8123-sample-polo",
+                                  "psId":{"value":"SAMPLE-001"},"syncSource":{"value":"app"}
+                                }]}}}""");
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                }
+                return real.postJson(path, body, headers);
+            }
+        };
+        ShopifySyncService service = service(http, NO_CREATE);
+
+        service.syncPricing("SAMPLE-001");
+
+        assertThat(objects(metafieldsSetVariables.get("metafields"))).anySatisfy(m -> {
+            Map<?, ?> field = (Map<?, ?>) m;
+            assertThat(field.get("key")).isEqualTo("source");
+            assertThat(field.get("value")).isEqualTo("app");
         });
     }
 

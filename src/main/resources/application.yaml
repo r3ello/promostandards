@@ -11,6 +11,32 @@ spring:
         size: 4
 
   # ---------------------------------------------------------------------------
+  # SMTP — the mailbox the PaceSetter purchase orders are sent from (orders.pacesetter.* below).
+  #
+  # Leave `host` empty and Spring creates no JavaMailSender: nothing can be sent, previews still
+  # render, and startup is unaffected. The password is sensitive — supply it via MAIL_PASSWORD (or an
+  # untracked application-local.yaml). Google Workspace and Microsoft 365 both want an app password
+  # here, not the account's own.
+  # ---------------------------------------------------------------------------
+  mail:
+    host: "${MAIL_HOST:}"
+    port: ${MAIL_PORT:587}
+    username: "${MAIL_USERNAME:}"
+    password: "${MAIL_PASSWORD:}"
+    properties:
+      mail:
+        smtp:
+          # Both off for a local sink (toolbox scripts/mail/smtp_sink.py: no auth, no TLS, nothing
+          # delivered) — which is how the message is read before a real mailbox exists.
+          auth: ${MAIL_SMTP_AUTH:true}
+          starttls:
+            enable: ${MAIL_SMTP_STARTTLS:true}
+          # Fail fast rather than hold a request open: a PO is sent while someone waits for the answer.
+          connectiontimeout: 10000
+          timeout: 15000
+          writetimeout: 15000
+
+  # ---------------------------------------------------------------------------
   # Postgres (opt-in, see sync.persistence.enabled below)
   #
   # With persistence disabled — the default — PersistenceAutoConfigurationExcluder drops the
@@ -164,6 +190,36 @@ discounts:
   type: "${DISCOUNTS_METAFIELD_TYPE:json}"
 
 # ---------------------------------------------------------------------------
+# Orders to PaceSetter (PLAN-PEDIDOS-PACESETTER.md)
+#
+# PaceSetter takes no orders by API: the channel is email, so the whole PO is this one message. The
+# body is a FILE, not code — edit src/main/resources/email/pacesetter-po.html, or point `template` at
+# a copy on the server (file:./config/pacesetter-po.html) and edit it there; it is read on every
+# render, so the next preview shows the change. Placeholders are documented at the top of it.
+#
+# `enabled` is the master switch for SENDING and stays false: the preview
+# (GET /api/orders/{id}/pacesetter-po/email) renders either way, which is how the template and the
+# recipient are checked before anything can leave the server. Sending also needs an SMTP server under
+# spring.mail.* (below) — without spring.mail.host there is no sender and the app says so instead of
+# failing to start.
+# ---------------------------------------------------------------------------
+orders:
+  pacesetter:
+    enabled: ${PACESETTER_ORDERS_ENABLED:false}
+    to: "${PACESETTER_ORDER_EMAIL:}"          # PaceSetter's order mailbox
+    cc: "${PACESETTER_ORDER_CC:}"             # comma-separated; the shop's own mailbox belongs here
+    bcc: "${PACESETTER_ORDER_BCC:}"           # comma-separated; a copy PaceSetter does not see
+
+    from: "${PACESETTER_ORDER_FROM:}"         # the mailbox PaceSetter knows the distributor by
+    reply-to: "${PACESETTER_ORDER_REPLY_TO:}" # only when answers should not go back to `from`
+    # Blank means the built-in "Purchase Order {{poNumber}}" (SupplierOrderProperties): a default with
+    # {{ }} in it inside a ${...} placeholder is asking Spring to guess where the placeholder ends.
+    subject: "${PACESETTER_ORDER_SUBJECT:}"
+    template: "${PACESETTER_ORDER_TEMPLATE:classpath:email/pacesetter-po.html}"
+    account-number: "${PACESETTER_ACCOUNT_NUMBER:}"
+    signature: "${PACESETTER_ORDER_SIGNATURE:TrophyPartner}"
+
+# ---------------------------------------------------------------------------
 # Shopify Admin API (sync target)
 #
 # Secrets are sensitive: provide them via environment variables (or an untracked
@@ -223,10 +279,19 @@ sync:
   # Creating products. The store's catalogue is the migration's: the sync UPDATES the products
   # Matrixify brought in (matched on custom.ps_product_id / ps_product_ids) and never adds one. A
   # PaceSetter id no store product lists is refused with a 409 — nothing is read, nothing written.
-  # true = the old behaviour: such an import creates ps-<supplier>-<id>.
+  # true = such an import creates the product, shaped like a migrated one and synced like one from
+  # then on: handle p-<number>-<name without measurements> (numbers continue from first-number),
+  # variant SKUs PS<part id>, created as a draft, with the store's vendor/type (not the supplier's)
+  # like every migrated product. Switch it on for a vetted batch, not by default.
   # ---------------------------------------------------------------------------
   create-products:
     enabled: ${SYNC_CREATE_PRODUCTS:false}
+    handle-prefix: p
+    first-number: 10500
+    status: DRAFT
+    sku-prefix: PS
+    vendor: TrophyPartner
+    product-type: Generic Product
 
   # ---------------------------------------------------------------------------
   # Postgres persistence master switch.
@@ -250,9 +315,9 @@ sync:
   supplier-metaobject:
     type: promo_standard_supplier
     handle: pace-setter
-  # Create the custom.ps_* metafield DEFINITIONS at startup (admin visibility only). Needs the
-  # write_metafield_definitions scope; leave false unless the app token has it — sync stamps the
-  # metafield values regardless.
+  # Create the custom.ps_* metafield DEFINITIONS at startup (admin visibility only). There is no
+  # separate scope for it: product-owned definitions need write_products. Sync stamps the metafield
+  # values regardless.
   ensure-metafield-definitions: false
   currency: USD
   country: US
