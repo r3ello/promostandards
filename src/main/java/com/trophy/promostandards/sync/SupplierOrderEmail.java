@@ -69,9 +69,15 @@ public class SupplierOrderEmail {
      *                 Rendering still happens: seeing the email is how the template is checked.
      * @param canSend  whether the app is allowed to send at all ({@code orders.pacesetter.enabled})
      */
+    /**
+     * @param text the same message as plain text, derived from {@code body}. Two callers need it: the
+     *             email itself carries it as its text/plain alternative, and the Shopify admin action
+     *             shows it — an admin UI extension can render components, not HTML, so without this
+     *             the only place the actual message could be read was this app's own console.
+     */
     public record EmailPreview(String to, String cc, String bcc, String from, String replyTo,
-                               String subject, String body, boolean canSend, Recipients defaults,
-                               List<String> missing) {
+                               String subject, String body, String text, boolean canSend,
+                               Recipients defaults, List<String> missing) {
     }
 
     public EmailPreview render(Preview order) {
@@ -100,8 +106,9 @@ public class SupplierOrderEmail {
         if (!order.isReady()) {
             missing.addAll(order.blocking());
         }
+        String body = fill(template(), values);
         return new EmailPreview(to, cc, bcc, props.from(), props.replyTo(),
-                fill(props.subject(), values), fill(template(), values), props.isEnabled(),
+                fill(props.subject(), values), body, asText(body), props.isEnabled(),
                 new Recipients(props.to(), props.cc(), props.bcc()), missing);
     }
 
@@ -202,6 +209,41 @@ public class SupplierOrderEmail {
             i = close + 2;
         }
         return out.toString();
+    }
+
+    /**
+     * The message as plain text. Derived from the rendered HTML rather than kept as a second template:
+     * two templates drift, and the one that drifts is always the one nobody reads.
+     *
+     * <p>Comments go (the template's own instructions are not part of the email), a table row becomes
+     * a line with its cells separated, every other block tag becomes a line break, entities come back
+     * to characters, and runs of blank lines collapse.
+     */
+    static String asText(String html) {
+        String text = html.replaceAll("(?s)<!--.*?-->", "")
+                .replaceAll("(?s)<(script|style)\\b.*?</\\1>", "")
+                .replaceAll("(?i)</t[dh]>\\s*<t[dh][^>]*>", "  ·  ")
+                .replaceAll("(?i)<br\\s*/?>", "\n")
+                .replaceAll("(?i)</(p|div|tr|h1|h2|h3|li|address|table|thead|tbody)>", "\n")
+                .replaceAll("<[^>]+>", "")
+                .replace("&nbsp;", " ").replace("&rsquo;", "'").replace("&mdash;", "—")
+                .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"");
+        StringBuilder out = new StringBuilder();
+        int blank = 0;
+        for (String line : text.split("\n")) {
+            String trimmed = line.strip();
+            if (trimmed.isEmpty()) {
+                blank++;
+                continue;
+            }
+            // One blank line between blocks, however many the HTML had.
+            if (blank > 0 && !out.isEmpty()) {
+                out.append("\n");
+            }
+            blank = 0;
+            out.append(trimmed).append("\n");
+        }
+        return out.toString().strip();
     }
 
     private static String esc(String s) {
