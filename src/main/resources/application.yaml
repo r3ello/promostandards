@@ -13,10 +13,11 @@ spring:
   # ---------------------------------------------------------------------------
   # SMTP — the mailbox the PaceSetter purchase orders are sent from (orders.pacesetter.* below).
   #
-  # Leave `host` empty and Spring creates no JavaMailSender: nothing can be sent, previews still
-  # render, and startup is unaffected. The password is sensitive — supply it via MAIL_PASSWORD (or an
-  # untracked application-local.yaml). Google Workspace and Microsoft 365 both want an app password
-  # here, not the account's own.
+  # Leave `host` empty and nothing can be sent: the app starts, lists orders and renders previews,
+  # and a send says what to configure (SupplierOrderMailer.problem() — a blank host still gets a
+  # sender bean, because Spring's condition is that the property exists). The password is sensitive:
+  # supply it via MAIL_PASSWORD (or an untracked application-local.yaml). Google Workspace and
+  # Microsoft 365 both want an app password here, not the account's own.
   # ---------------------------------------------------------------------------
   mail:
     host: "${MAIL_HOST:}"
@@ -218,6 +219,11 @@ orders:
     template: "${PACESETTER_ORDER_TEMPLATE:classpath:email/pacesetter-po.html}"
     account-number: "${PACESETTER_ACCOUNT_NUMBER:}"
     signature: "${PACESETTER_ORDER_SIGNATURE:TrophyPartner}"
+    # Who at PaceSetter the message greets ("Hi Dana,"); blank greets the team instead of nobody.
+    contact: "${PACESETTER_ORDER_CONTACT:}"
+    # The shop's OWN carrier account PaceSetter ships on, e.g. "UPS #4E4W93". Blank leaves the
+    # sentence about it out of the email — an invented account bills the freight to a stranger.
+    ship-account: "${PACESETTER_SHIP_ACCOUNT:}"
 
 # ---------------------------------------------------------------------------
 # Shopify Admin API (sync target)

@@ -38,8 +38,7 @@
 
 		<!-- The only way PaceSetter takes an order is an email (PLAN-PEDIDOS-PACESETTER.md §1), so the
 		     PO is sent by SMTP from the shop's own mailbox. Configured under spring.mail.*; with no
-		     host set Spring creates no JavaMailSender and the app refuses to send instead of failing
-		     to start. -->
+		     host set the app refuses to send (with what to configure) instead of failing to start. -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-mail</artifactId>

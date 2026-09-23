@@ -256,6 +256,7 @@ final class ShopifyGraphQL {
                 pageInfo { hasNextPage endCursor }
                 nodes {
                   id name createdAt test cancelledAt displayFinancialStatus displayFulfillmentStatus tags note
+                  customAttributes { key value }
                   sent: metafield(namespace: "trophy_sync", key: "pacesetter_po") { value }
                   shippingAddress { name company address1 address2 city province provinceCode zip country countryCodeV2 phone }
                   shippingLine { title }
@@ -278,6 +279,7 @@ final class ShopifyGraphQL {
             query SupplierOrderById($id: ID!) {
               order(id: $id) {
                 id name createdAt test cancelledAt displayFinancialStatus displayFulfillmentStatus tags note
+                customAttributes { key value }
                 sent: metafield(namespace: "trophy_sync", key: "pacesetter_po") { value }
                 shippingAddress { name company address1 address2 city province provinceCode zip country countryCodeV2 phone }
                 shippingLine { title }

@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Component;
 
@@ -15,9 +16,11 @@ import java.util.Arrays;
 /**
  * Sends the purchase order by SMTP, which is the only channel PaceSetter offers.
  *
- * <p>The sender is optional on purpose: with no {@code spring.mail.host} Spring creates no
- * {@link JavaMailSender}, and an app that is not set up to send must still start, list orders and
- * render previews. Asking it to send then fails with what to configure, rather than at boot.
+ * <p>Being unconfigured is not a startup failure: an app nobody has given a mailbox must still start,
+ * list orders and render previews. {@link #problem()} is where that is noticed, and it is asked
+ * before a message is built — the mail server's own answer to a half-configured mailbox
+ * ({@code AuthenticationFailedException: failed to connect, no password specified?}) names neither
+ * the setting nor this app.
  */
 @Component
 public class SupplierOrderMailer {
@@ -30,18 +33,43 @@ public class SupplierOrderMailer {
         this.senders = senders;
     }
 
-    /** @return whether an SMTP server is configured at all */
-    public boolean canSend() {
-        return senders.getIfAvailable() != null;
+    /**
+     * @return why a send cannot work, before one is attempted, or null when it can be tried. Said
+     * here rather than by the mail server: its own answer to a half-configured mailbox is
+     * {@code AuthenticationFailedException: failed to connect, no password specified?}, which names
+     * neither the setting nor the app.
+     */
+    public String problem() {
+        JavaMailSender sender = senders.getIfAvailable();
+        // A blank host still gets a sender bean: application.yaml always defines spring.mail.host
+        // (empty by default) and Spring's condition is that the property EXISTS, not that it says
+        // anything. So "not configured" has to be recognised here, not inferred from a missing bean.
+        if (sender == null || (sender instanceof JavaMailSenderImpl impl0 && isBlank(impl0.getHost()))) {
+            return "No SMTP server configured: set spring.mail.host (MAIL_HOST) and the mailbox "
+                    + "credentials before sending orders to PaceSetter.";
+        }
+        if (sender instanceof JavaMailSenderImpl impl
+                && Boolean.parseBoolean(impl.getJavaMailProperties().getProperty("mail.smtp.auth"))
+                && (isBlank(impl.getUsername()) || isBlank(impl.getPassword()))) {
+            return "The SMTP server at " + impl.getHost() + " is set to authenticate, but the mailbox "
+                    + "credentials are empty: set MAIL_USERNAME and MAIL_PASSWORD (an app password for "
+                    + "Google Workspace or Microsoft 365), or MAIL_SMTP_AUTH=false for a server that "
+                    + "takes none.";
+        }
+        return null;
+    }
+
+    private static boolean isBlank(String s) {
+        return s == null || s.isBlank();
     }
 
     /** Sends the rendered message. Throws when SMTP is not configured or the server refuses it. */
     public void send(EmailPreview mail) {
-        JavaMailSender sender = senders.getIfAvailable();
-        if (sender == null) {
-            throw new IllegalStateException("No SMTP server configured: set spring.mail.host "
-                    + "(and the mailbox credentials) before sending orders to PaceSetter.");
+        String problem = problem();
+        if (problem != null) {
+            throw new IllegalStateException(problem);
         }
+        JavaMailSender sender = senders.getIfAvailable();
         try {
             MimeMessage message = sender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, false, StandardCharsets.UTF_8.name());
