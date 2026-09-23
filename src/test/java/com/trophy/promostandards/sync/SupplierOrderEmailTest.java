@@ -139,6 +139,34 @@ class SupplierOrderEmailTest {
                 "Already sent to PaceSetter.");
     }
 
+    /**
+     * The same message as plain text, which the email carries as its text/plain part and the Shopify
+     * order action shows — an admin UI extension renders components, not HTML.
+     */
+    @Test
+    void alsoRendersTheMessageAsText(@TempDir Path dir) throws Exception {
+        Path template = dir.resolve("po.html");
+        Files.writeString(template, "<!-- notes for whoever edits this -->"
+                + "<p>Hi {{contact}},</p><p>I&rsquo;d like to place an order:</p>"
+                + "<table><tr><td>CB35</td><td>Base</td><td>2</td></tr></table>"
+                + "<p>Ship by {{shippingMethod}}<br>to arrive by {{dateNeeded}}</p>");
+
+        EmailPreview mail = email(props("file:" + template))
+                .render(order(List.of(line("CB35", "Base", Map.of())), null, List.of()));
+
+        // The blank line is the table ending: blocks keep one between them, however many the HTML had.
+        assertThat(mail.text())
+                .isEqualTo("""
+                        Hi Dana,
+                        I'd like to place an order:
+                        CB35  ·  Base  ·  2
+
+                        Ship by Standard
+                        to arrive by 5/11/2026""");
+        // The template's own instructions are not part of the email.
+        assertThat(mail.text()).doesNotContain("notes for whoever edits this").doesNotContain("<");
+    }
+
     /** The shipped template is the default, and it has to render without a configured file. */
     @Test
     void rendersTheTemplateTheAppShipsWith() {

@@ -72,7 +72,10 @@ public class SupplierOrderMailer {
         JavaMailSender sender = senders.getIfAvailable();
         try {
             MimeMessage message = sender.createMimeMessage();
-            MimeMessageHelper helper = new MimeMessageHelper(message, false, StandardCharsets.UTF_8.name());
+            // Multipart: the same PO as text and as HTML. A mail client picks the HTML; everything that
+            // reads mail without rendering it — spam scoring, a phone's preview, an archive — reads the
+            // text, and a message with no text part at all is scored worse for it.
+            MimeMessageHelper helper = new MimeMessageHelper(message, true, StandardCharsets.UTF_8.name());
             helper.setFrom(mail.from());
             helper.setTo(addresses(mail.to()));
             if (mail.cc() != null && !mail.cc().isBlank()) {
@@ -85,7 +88,7 @@ public class SupplierOrderMailer {
                 helper.setReplyTo(mail.replyTo());
             }
             helper.setSubject(mail.subject());
-            helper.setText(mail.body(), true);
+            helper.setText(mail.text(), mail.body());
             sender.send(message);
             log.info("Sent purchase order email to {} (subject: {})", mail.to(), mail.subject());
         } catch (Exception e) {
