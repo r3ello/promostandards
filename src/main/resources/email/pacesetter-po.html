@@ -1,29 +1,36 @@
 <!--
-  The purchase order PaceSetter receives. Edit this file — or point orders.pacesetter.template at
-  your own copy (file:./config/pacesetter-po.html) — and the next preview shows the change; nothing
-  here is compiled in.
+  The purchase order PaceSetter receives, in the wording the shop has always used. Edit this file —
+  or point orders.pacesetter.template at your own copy (file:./config/pacesetter-po.html) — and the
+  next preview shows the change; nothing here is compiled in.
 
-  Placeholders, all filled from the Shopify order (unknown ones are left empty):
-    {{poNumber}} {{orderName}} {{orderDate}}   the PO number is the order's name without its #
-    {{accountNumber}} {{accountLine}}          accountLine disappears when no account is configured
-    {{lines}}                                  the table rows: part, description, qty, unit price,
-                                               and the text to engrave under each line
-    {{shipTo}} {{shippingMethod}}              the order's own delivery address and method
-    {{noteBlock}}                              the order note, or nothing when there is none
-    {{signature}}
+  All the wording is yours to change. The values below are filled in from the Shopify order and from
+  orders.pacesetter.*; write a name in DOUBLE BRACES to place one (they are listed here without the
+  braces on purpose — this comment would be filled in too). An unknown name renders empty, and every
+  value is HTML-escaped.
+
+    poNumber        the order's name without its # — the P.O. number PaceSetter answers by
+    orderName       #1046
+    orderDate       when the customer placed it
+    contact         who at PaceSetter this is addressed to ("Hi Dana,"); "there" when unset
+    accountNumber   the distributor account; accountLine is the same prefixed with " · Account ",
+                    and empty when none is configured
+    lines           one row per line: item, description, quantity, and the text to engrave
+    shippingMethod  what the customer paid for, from the order ("Standard", "Flat Rate Service")
+    shipAccountLine " on our UPS #4E4W93" when orders.pacesetter.ship-account is set, else empty
+    dateNeeded      the date on the order (a "DATE NEEDED" note, or a date property); "as soon as
+                    possible" when nobody said
+    shipTo          the order's delivery address
+    noteBlock       the order note, heading included, or nothing when there is none
+    signature       who it signs off as; fromEmail is orders.pacesetter.from
 -->
 <!DOCTYPE html>
 <html lang="en">
 <body style="margin:0;padding:24px;background:#f6f6f7;font-family:Arial,Helvetica,sans-serif;color:#1a1a1a;font-size:14px;line-height:1.5;">
 <div style="max-width:720px;margin:0 auto;background:#ffffff;border:1px solid #e3e3e3;border-radius:8px;padding:24px;">
 
-	<h1 style="margin:0 0 4px;font-size:18px;">Purchase Order {{poNumber}}</h1>
-	<p style="margin:0 0 20px;color:#616161;font-size:13px;">Placed {{orderDate}}{{accountLine}}</p>
+	<p style="margin:0 0 16px;">Hi {{contact}},</p>
 
-	<p style="margin:0 0 16px;">Hello PaceSetter team,</p>
-	<p style="margin:0 0 20px;">Please enter the order below. Reply to this message with the order
-		confirmation and the expected ship date, and reference PO <strong>{{poNumber}}</strong> on the
-		packing slip and the invoice.</p>
+	<p style="margin:0 0 16px;">I&rsquo;d like to place an order for the following items:</p>
 
 	<table role="presentation" style="width:100%;border-collapse:collapse;margin-bottom:20px;">
 		<thead>
@@ -31,7 +38,7 @@
 				<th style="text-align:left;padding:8px;border-bottom:1px solid #e3e3e3;">Item</th>
 				<th style="text-align:left;padding:8px;border-bottom:1px solid #e3e3e3;">Description</th>
 				<th style="text-align:right;padding:8px;border-bottom:1px solid #e3e3e3;">Qty</th>
-				<th style="text-align:right;padding:8px;border-bottom:1px solid #e3e3e3;">Unit price</th>
+				<th style="text-align:left;padding:8px;border-bottom:1px solid #e3e3e3;">Text / artwork</th>
 			</tr>
 		</thead>
 		<tbody>
@@ -39,13 +46,29 @@
 		</tbody>
 	</table>
 
-	<h2 style="margin:0 0 6px;font-size:14px;">Ship to</h2>
+	<p style="margin:0 0 16px;">Please email a production proof for approval. Once approved please ship
+		by {{shippingMethod}}{{shipAccountLine}} to arrive by {{dateNeeded}} to:</p>
+
 	{{shipTo}}
-	<p style="margin:6px 0 20px;color:#616161;font-size:13px;">Shipping method: {{shippingMethod}}</p>
 
 	{{noteBlock}}
 
-	<p style="margin:0;">Thank you,<br>{{signature}}</p>
+	<p style="margin:20px 0 16px;">Our P.O. number is <strong>{{poNumber}}</strong> ({{orderName}},
+		placed {{orderDate}}{{accountLine}}) &mdash; please reference it on the packing slip and the
+		invoice.</p>
+
+	<p style="margin:0 0 20px;color:#616161;font-size:13px;">Artwork (logo or custom design) and any
+		fonts the customer specified follow separately where they apply.</p>
+
+	<p style="margin:0;">Sincerely,<br>
+		<strong>{{signature}}</strong><br>
+		TrophyPartner.com<br>
+		<a href="mailto:{{fromEmail}}" style="color:#005bd3;">{{fromEmail}}</a><br>
+		512-894-2428</p>
+
+	<p style="margin:16px 0 0;font-size:13px;color:#616161;">
+		Trophies &amp; Awards: <a href="https://www.TrophyPartner.com" style="color:#005bd3;">www.TrophyPartner.com</a><br>
+		Promotional Products: <a href="https://www.TrophyPartner-PromotionalProducts.com" style="color:#005bd3;">www.TrophyPartner-PromotionalProducts.com</a></p>
 
 </div>
 </body>

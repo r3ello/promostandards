@@ -38,10 +38,13 @@ public class SupplierOrderEmail {
 
     private final SupplierOrderProperties props;
     private final ResourceLoader resources;
+    private final SupplierOrderMailer mailer;
 
-    public SupplierOrderEmail(SupplierOrderProperties props, ResourceLoader resources) {
+    public SupplierOrderEmail(SupplierOrderProperties props, ResourceLoader resources,
+                              SupplierOrderMailer mailer) {
         this.props = props;
         this.resources = resources;
+        this.mailer = mailer;
     }
 
     /**
@@ -88,6 +91,12 @@ public class SupplierOrderEmail {
         if (props.from() == null || props.from().isBlank()) {
             missing.add("No sender: set orders.pacesetter.from to the mailbox PaceSetter knows.");
         }
+        // What the mail server would answer, asked before anything is sent: its own version arrives
+        // as a stack trace after the click, and names neither the setting nor this app.
+        String smtp = mailer.problem();
+        if (smtp != null) {
+            missing.add(smtp);
+        }
         if (!order.isReady()) {
             missing.addAll(order.blocking());
         }
@@ -116,7 +125,14 @@ public class SupplierOrderEmail {
                 ? "" : " · Account " + esc(props.accountNumber()));
         v.put("lines", lines(order.lines()));
         v.put("shipTo", shipTo(order.shipTo()));
-        v.put("shippingMethod", order.shippingMethod() == null ? "As quoted" : esc(order.shippingMethod()));
+        v.put("shippingMethod", order.shippingMethod() == null ? "your usual method" : esc(order.shippingMethod()));
+        v.put("contact", props.contact() == null || props.contact().isBlank() ? "there" : esc(props.contact()));
+        // Never invented: an account number that is not the shop's would have the freight billed to a
+        // stranger, so with none configured the sentence simply does not mention one.
+        v.put("shipAccountLine", props.shipAccount() == null || props.shipAccount().isBlank()
+                ? "" : " on our " + esc(props.shipAccount()));
+        v.put("dateNeeded", order.dateNeeded() == null ? "as soon as possible" : esc(order.dateNeeded()));
+        v.put("fromEmail", esc(props.from()));
         v.put("noteBlock", order.note() == null ? "" : """
                 <h2 style="margin:0 0 6px;font-size:14px;">Notes from the order</h2>
                 <p style="margin:0 0 20px;white-space:pre-wrap;">%s</p>""".formatted(esc(order.note())));
@@ -124,7 +140,11 @@ public class SupplierOrderEmail {
         return v;
     }
 
-    /** One row per line, with the text to engrave underneath it: what the engraver reads off the PO. */
+    /**
+     * One row per line: item, description, quantity, and the text to engrave — what the shop's own POs
+     * have always listed. No prices: PaceSetter prices the order from their own table and invoices it,
+     * and a figure of ours in the PO is only something to argue about.
+     */
     private String lines(List<Line> lines) {
         StringBuilder rows = new StringBuilder();
         for (Line line : lines) {
@@ -134,15 +154,13 @@ public class SupplierOrderEmail {
             rows.append("""
                     <tr>
                       <td style="padding:8px;border-bottom:1px solid #e3e3e3;vertical-align:top;"><strong>%s</strong></td>
-                      <td style="padding:8px;border-bottom:1px solid #e3e3e3;vertical-align:top;">%s%s</td>
+                      <td style="padding:8px;border-bottom:1px solid #e3e3e3;vertical-align:top;">%s</td>
                       <td style="padding:8px;border-bottom:1px solid #e3e3e3;text-align:right;vertical-align:top;">%d</td>
-                      <td style="padding:8px;border-bottom:1px solid #e3e3e3;text-align:right;vertical-align:top;">%s</td>
+                      <td style="padding:8px;border-bottom:1px solid #e3e3e3;vertical-align:top;font-size:13px;">%s</td>
                     </tr>
                     """.formatted(esc(line.partId() == null ? "?" : line.partId()), esc(line.title()),
-                    engraving.isEmpty() ? "" : "<div style=\"margin-top:4px;font-size:13px;\">" + engraving + "</div>",
                     line.quantity(),
-                    line.unitPrice() == null ? "—" : esc(line.currency() == null ? "" : line.currency() + " ")
-                            + line.unitPrice().toPlainString()));
+                    engraving.isEmpty() ? "<span style=\"color:#616161;\">none</span>" : engraving));
         }
         return rows.toString();
     }

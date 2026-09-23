@@ -146,6 +146,19 @@ class SyncApiTest {
                 .andExpect(jsonPath("$.createProducts").value(false));
     }
 
+    /**
+     * The console asks this before offering to send. The defaults say sending is off and no mailbox
+     * is configured, which is exactly what greys the button out.
+     */
+    @Test
+    void reportsWhetherOrdersCanBeSent() throws Exception {
+        mockMvc.perform(get("/api/orders/settings"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sendEnabled").value(false))
+                .andExpect(jsonPath("$.switchedOn").value(false))
+                .andExpect(jsonPath("$.smtpProblem").value(containsString("MAIL_HOST")));
+    }
+
     /** The console's "to send" list, and the preview it opens: {@code ready} is what enables sending. */
     @Test
     void servesThePendingOrdersAndAPreview() throws Exception {
@@ -155,8 +168,8 @@ class SyncApiTest {
                 0, List.of())));
         when(supplierOrders.preview("7291179761758")).thenReturn(java.util.Optional.of(new SupplierOrderService.Preview(
                 "gid://shopify/Order/7291179761758", "#1046", "1046", "2026-09-22T16:48:24Z", true, "PAID",
-                "UNFULFILLED", null, null, "Standard", List.of(), List.of(), List.of("No PaceSetter line left to send."),
-                List.of(), null)));
+                "UNFULFILLED", null, null, null, "Standard", List.of(), List.of(),
+                List.of("No PaceSetter line left to send."), List.of(), null)));
 
         mockMvc.perform(get("/api/orders/pacesetter-pending"))
                 .andExpect(status().isOk())
@@ -173,14 +186,14 @@ class SyncApiTest {
     void servesTheEmailThatWouldGoToPaceSetter() throws Exception {
         when(supplierOrders.preview("7291179761758")).thenReturn(java.util.Optional.of(new SupplierOrderService.Preview(
                 "gid://shopify/Order/7291179761758", "#1046", "1046", "2026-09-22T16:48:24Z", true, "PAID",
-                "UNFULFILLED", null, null, "Standard",
+                "UNFULFILLED", null, "5/11/2026", null, "Standard",
                 List.of(new SupplierOrderService.Line("CB35", "Optional Base", null, "PS9250", 1, 1,
                         new java.math.BigDecimal("36.99"), "USD", java.util.Map.of())),
                 List.of(), List.of(), List.of(), null)));
 
         mockMvc.perform(get("/api/orders/7291179761758/pacesetter-po/email"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.subject").value("Purchase Order 1046"))
+                .andExpect(jsonPath("$.subject").value("TrophyPartner.com Order P.O. # 1046"))
                 .andExpect(jsonPath("$.canSend").value(false))
                 .andExpect(jsonPath("$.body").value(containsString("CB35")))
                 .andExpect(jsonPath("$.missing[0]").value(containsString("No recipient")));
@@ -191,7 +204,7 @@ class SyncApiTest {
     void refusingToSendAnOrderIsAConflict() throws Exception {
         when(supplierOrders.preview("7291179761758")).thenReturn(java.util.Optional.of(new SupplierOrderService.Preview(
                 "gid://shopify/Order/7291179761758", "#1046", "1046", "2026-09-22T16:48:24Z", true, "PAID",
-                "UNFULFILLED", null, null, "Standard", List.of(), List.of(),
+                "UNFULFILLED", null, null, null, "Standard", List.of(), List.of(),
                 List.of("Already sent to PaceSetter."), List.of(), "{}")));
         when(supplierOrders.send(any(), eq(false), any()))
                 .thenThrow(new SupplierOrderRefusedException("This order cannot be sent to PaceSetter: Already sent to PaceSetter."));

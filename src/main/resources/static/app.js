@@ -1633,6 +1633,9 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !groupMo
 // order template.
 let ordersLoaded = false;
 let pendingOrders = [];
+// Whether the server will send at all (orders.pacesetter.enabled + a usable mailbox). The switch is
+// configuration, not a page state: a console that let someone click it would only earn a 409.
+let orderSending = { sendEnabled: false, switchedOn: false, smtpProblem: null };
 const openOrders = new Set();
 const ordersBody = el('ordersBody');
 
@@ -1653,8 +1656,19 @@ function routeView() {
 	else focusOrder(orderId);
 }
 
+/** Never throws: an older backend simply leaves sending off. */
+async function loadOrderSettings() {
+	try {
+		const s = await api('/api/orders/settings');
+		if (s) orderSending = s;
+	} catch (_) {
+		orderSending = { sendEnabled: false, switchedOn: false, smtpProblem: null };
+	}
+}
+
 async function loadOrders() {
 	ordersLoaded = true;
+	await loadOrderSettings();
 	el('ordersMeta').textContent = 'Loading open orders…';
 	ordersBody.innerHTML = `<tr class="row-state"><td colspan="7"><div class="state"><span class="spinner"></span> Reading open orders from Shopify…</div></td></tr>`;
 	try {
@@ -1775,6 +1789,17 @@ function orderPreviewHtml(p) {
 	const state = p.ready
 		? '<span class="badge badge--caution">Not sent yet · nothing missing</span>'
 		: '<span class="badge badge--critical">Not sent · cannot be sent yet</span>';
+	// Three separate reasons the button may be dead, and the page says which one applies.
+	const sendable = p.ready && orderSending.sendEnabled;
+	const sendTitle = !orderSending.switchedOn
+		? 'Sending is off in the app configuration: set orders.pacesetter.enabled (PACESETTER_ORDERS_ENABLED) on the server.'
+		: orderSending.smtpProblem ? orderSending.smtpProblem
+			: !p.ready ? 'This order cannot be sent yet — see what stops it, above.'
+				: 'Emails the purchase order to PaceSetter and marks this order as sent';
+	const sendNote = sendable
+		? 'An emailed PO cannot be recalled: read the email first.'
+		: !orderSending.switchedOn ? 'Sending is switched off in the app configuration.'
+			: orderSending.smtpProblem ? 'The mailbox is not usable yet.' : 'This order is not ready to send.';
 	const blocking = (p.blocking || []).length
 		? `<div class="state--crit"><strong>What stops it</strong><ul>${p.blocking.map((b) => `<li>${esc(b)}</li>`).join('')}</ul></div>` : '';
 	const notices = (p.notices || []).length
@@ -1809,6 +1834,10 @@ function orderPreviewHtml(p) {
 			.filter(Boolean).map(esc).join('<br>')}</address>`
 		: '<p class="muted">No shipping address.</p>';
 	const method = p.shippingMethod ? `<div class="muted">${esc(p.shippingMethod)}</div>` : '';
+	// Shopify has no such field: it comes from the order note or a line property, and the PO asks
+	// PaceSetter to arrive by it.
+	const needed = `<div><div class="sub-title">Needed by</div><div>${p.dateNeeded
+		? esc(p.dateNeeded) : '<span class="muted">not stated on the order</span>'}</div></div>`;
 	const note = p.note ? `<div><div class="sub-title">Order note</div><div class="ord-note">${esc(p.note)}</div></div>` : '';
 	const sent = p.sent ? `<div><div class="sub-title">Sent</div><div class="ord-note">${esc(p.sent)}</div></div>` : '';
 
@@ -1821,14 +1850,14 @@ function orderPreviewHtml(p) {
 			<div><div class="sub-title">PaceSetter lines</div>${lines}${excluded}</div>
 			<div class="ord-side">
 				<div><div class="sub-title">Ship to</div>${address}${method}</div>
-				${note}${sent}
+				${needed}${note}${sent}
 			</div>
 		</div>
 		<div class="ord-actions">
 			<button class="btn btn--sm" data-order-email="${esc(id)}">Preview email</button>
-			<button class="btn btn--primary btn--sm" data-order-send="${esc(id)}" disabled
-				title="Turned off on purpose while the PO format is agreed with PaceSetter. The email can be read, not sent.">Send to PaceSetter</button>
-			<span class="muted ord-foot">Sending is off for now: an emailed PO cannot be recalled.</span>
+			<button class="btn btn--primary btn--sm" data-order-send="${esc(id)}"${sendable ? '' : ' disabled'}
+				title="${esc(sendTitle)}">Send to PaceSetter</button>
+			<span class="muted ord-foot">${esc(sendNote)}</span>
 		</div>
 		<div class="ord-email" data-email-box hidden></div>
 	</div>`;

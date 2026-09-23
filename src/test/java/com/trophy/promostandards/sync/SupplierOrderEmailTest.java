@@ -24,9 +24,13 @@ class SupplierOrderEmailTest {
             "Wake Forest", "North Carolina", "NC", "27587", "United States", "US", null);
 
     private static Preview order(List<Line> lines, String note, List<String> blocking) {
+        return order(lines, note, blocking, "5/11/2026");
+    }
+
+    private static Preview order(List<Line> lines, String note, List<String> blocking, String dateNeeded) {
         return new Preview("gid://shopify/Order/7291179761758", "#1046", "1046", "2026-09-22T16:48:24Z",
-                true, "PAID", "UNFULFILLED", note, ADDRESS, "Standard", lines, List.of(), blocking,
-                List.of(), null);
+                true, "PAID", "UNFULFILLED", note, dateNeeded, ADDRESS, "Standard", lines, List.of(),
+                blocking, List.of(), null);
     }
 
     private static Line line(String partId, String title, Map<String, String> personalization) {
@@ -36,18 +40,35 @@ class SupplierOrderEmailTest {
     private static SupplierOrderProperties props(String template) {
         return new SupplierOrderProperties(false, "orders@pacesetterawards.com", "shop@trophypartner.com",
                 null, "orders@trophypartner.com", null, "Purchase Order {{poNumber}}", template, "TP-4412",
-                "TrophyPartner");
+                "Matt Gunn", "Dana", "UPS #4E4W93");
     }
 
+    /** An SMTP setup with nothing wrong with it: the mail server is not what these tests are about. */
     private static SupplierOrderEmail email(SupplierOrderProperties props) {
-        return new SupplierOrderEmail(props, new DefaultResourceLoader());
+        SupplierOrderMailer mailer = org.mockito.Mockito.mock(SupplierOrderMailer.class);
+        org.mockito.Mockito.when(mailer.problem()).thenReturn(null);
+        return new SupplierOrderEmail(props, new DefaultResourceLoader(), mailer);
+    }
+
+    /** A half-configured mailbox is said here, not left to the mail server's own stack trace. */
+    @org.junit.jupiter.api.Test
+    void repeatsWhatTheMailServerWouldRefuse() {
+        SupplierOrderMailer mailer = org.mockito.Mockito.mock(SupplierOrderMailer.class);
+        org.mockito.Mockito.when(mailer.problem()).thenReturn("set MAIL_USERNAME and MAIL_PASSWORD");
+
+        EmailPreview mail = new SupplierOrderEmail(props(null), new DefaultResourceLoader(), mailer)
+                .render(order(List.of(line("CB35", "Base", Map.of())), null, List.of()));
+
+        assertThat(mail.missing()).containsExactly("set MAIL_USERNAME and MAIL_PASSWORD");
+        assertThat(mail.body()).contains("CB35");   // still rendered: it can be read, not sent
     }
 
     @Test
     void fillsTheTemplateWithTheOrderAndItsEngraving(@TempDir Path dir) throws Exception {
         Path template = dir.resolve("po.html");
-        Files.writeString(template, "<p>PO {{poNumber}} of {{orderDate}}{{accountLine}}</p>"
-                + "<table>{{lines}}</table>{{shipTo}}<i>{{shippingMethod}}</i>{{noteBlock}}<b>{{signature}}</b>");
+        Files.writeString(template, "<p>Hi {{contact}}, PO {{poNumber}} of {{orderDate}}{{accountLine}}</p>"
+                + "<table>{{lines}}</table>{{shipTo}}<i>{{shippingMethod}}{{shipAccountLine}}</i>"
+                + "<em>{{dateNeeded}}</em>{{noteBlock}}<b>{{signature}}</b> {{fromEmail}}");
         Map<String, String> engraving = new LinkedHashMap<>();
         engraving.put("Line 1", "Coach of the Year");
         engraving.put("Line 2", "2026");
@@ -59,16 +80,17 @@ class SupplierOrderEmailTest {
         assertThat(mail.to()).isEqualTo("orders@pacesetterawards.com");
         assertThat(mail.cc()).isEqualTo("shop@trophypartner.com");
         assertThat(mail.body())
-                .contains("PO 1046 of 22 Sep 2026 · Account TP-4412")
+                .contains("Hi Dana, PO 1046 of 22 Sep 2026 · Account TP-4412")
                 .contains("<strong>CB35</strong>")
                 .contains("Optional Base")
                 .contains("Line 1:</span> Coach of the Year")
                 .contains("Line 2:</span> 2026")
-                .contains("USD 36.99")
+                .contains("<i>Standard on our UPS #4E4W93</i>")
+                .contains("<em>5/11/2026</em>")
+                .doesNotContain("36.99")          // the shop's PO lists what to make, not what it costs
                 .contains("Jane Buyer<br>1 Main St<br>Wake Forest NC 27587<br>United States")
-                .contains("<i>Standard</i>")
                 .contains("Use 16pt Avenir Book")
-                .contains("<b>TrophyPartner</b>");
+                .contains("<b>Matt Gunn</b> orders@trophypartner.com");
         assertThat(mail.missing()).isEmpty();
         assertThat(mail.canSend()).isFalse();
     }
@@ -103,13 +125,14 @@ class SupplierOrderEmailTest {
         Path template = dir.resolve("po.html");
         Files.writeString(template, "{{poNumber}}");
         SupplierOrderProperties noRecipient = new SupplierOrderProperties(false, null, null, null, null, null,
-                null, "file:" + template, null, null);
+                null, "file:" + template, null, null, null, null);
 
         EmailPreview mail = email(noRecipient).render(order(List.of(line("CB35", "Base", Map.of())), null,
                 List.of("Already sent to PaceSetter.")));
 
         assertThat(mail.body()).isEqualTo("1046");
-        assertThat(mail.subject()).isEqualTo("Purchase Order 1046");  // the default subject
+        // The default subject is the shop's own wording, which PaceSetter's inbox rules expect.
+        assertThat(mail.subject()).isEqualTo("TrophyPartner.com Order P.O. # 1046");
         assertThat(mail.missing()).containsExactly(
                 "No recipient: set orders.pacesetter.to (PaceSetter's order mailbox).",
                 "No sender: set orders.pacesetter.from to the mailbox PaceSetter knows.",
@@ -122,7 +145,15 @@ class SupplierOrderEmailTest {
         EmailPreview mail = email(props(null)).render(
                 order(List.of(line("CB35", "Optional Base", Map.of())), null, List.of()));
 
-        assertThat(mail.body()).contains("Purchase Order 1046").contains("CB35")
+        assertThat(mail.body())
+                .contains("Hi Dana,")
+                .contains("I&rsquo;d like to place an order")
+                // The placeholders the comment documents are listed unbraced, so they stay readable
+                // in the file that gets edited instead of being filled in like the rest.
+                .contains("shipAccountLine \" on our UPS")
+                .contains("CB35")
+                .contains("P.O. number is <strong>1046</strong>")
+                .contains("to arrive by 5/11/2026")
                 .doesNotContain("{{").doesNotContain("}}");
     }
 }

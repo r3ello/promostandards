@@ -107,7 +107,7 @@ class SupplierOrderServiceTest {
     private static SupplierOrderProperties sendable() {
         return new SupplierOrderProperties(true, "orders@pacesetterawards.com", "shop@trophypartner.com",
                 null, "orders@trophypartner.com", null, "Purchase Order {{poNumber}}", null, "TP-4412",
-                "TrophyPartner");
+                "Matt Gunn", "Dana", "UPS #4E4W93");
     }
 
     private SupplierOrderService service(ShopifyHttp http) {
@@ -121,7 +121,7 @@ class SupplierOrderServiceTest {
         when(tokens.getToken()).thenReturn("token");
         ShopifyGraphQLClient gql = new ShopifyGraphQLClient(http, tokens, shopify, TEST_RETRY);
         return new SupplierOrderService(gql,
-                new SupplierOrderEmail(props, new org.springframework.core.io.DefaultResourceLoader()),
+                new SupplierOrderEmail(props, new org.springframework.core.io.DefaultResourceLoader(), mailer),
                 mailer, props);
     }
 
@@ -151,7 +151,9 @@ class SupplierOrderServiceTest {
         assertThat(p.note()).isEqualTo("Use 16pt Avenir Book for line 1");
         assertThat(p.blocking()).isEmpty();
         assertThat(p.isReady()).isTrue();
-        assertThat(p.notices()).containsExactly("Test order.");
+        // This fixture's note carries no date, which is worth saying and does not block anything.
+        assertThat(p.notices()).containsExactly("Test order.",
+                "No date the customer needs it by: the PO will not ask for one.");
     }
 
     /** Ordering the wrong item, or none, is worse than stopping: the line blocks, it is not dropped. */
@@ -301,6 +303,21 @@ class SupplierOrderServiceTest {
                 .contains("someone@else.test").contains("hidden@trophypartner.com");
     }
 
+    /** A mailbox that cannot send refuses the order here, before the mail server is dialled. */
+    @Test
+    void refusesWhenTheMailboxItselfCannotSend() {
+        when(mailer.problem()).thenReturn("The SMTP server at smtp.example.com is set to authenticate, "
+                + "but the mailbox credentials are empty");
+        SupplierOrderService service = sendService(order("1046", "#1046", "", CB35_ENGRAVED), MARK_OK);
+        Preview ready = service.preview("1046").orElseThrow();
+
+        assertThatThrownBy(() -> service.send(ready, false, CONFIGURED))
+                .isInstanceOf(SupplierOrderRefusedException.class)
+                .hasMessageContaining("smtp.example.com")
+                .hasMessageContaining("credentials are empty");
+        org.mockito.Mockito.verify(mailer, org.mockito.Mockito.never()).send(org.mockito.ArgumentMatchers.any());
+    }
+
     /** Nothing is emailed while anything about the order is wrong: a wrong PO cannot be recalled. */
     @Test
     void refusesToSendWhatItCannotBuild() {
@@ -330,7 +347,7 @@ class SupplierOrderServiceTest {
     @Test
     void refusesWhileSendingIsOff() {
         SupplierOrderProperties off = new SupplierOrderProperties(false, "orders@pacesetterawards.com",
-                null, null, "orders@trophypartner.com", null, null, null, null, null);
+                null, null, "orders@trophypartner.com", null, null, null, null, null, null, null);
         SupplierOrderService service = service(http(Map.of("SupplierOrderById",
                 "{\"data\":{\"order\":" + order("1", "#1049", "", CB35_ENGRAVED) + "}}")), off);
         Preview ready = service.preview("1").orElseThrow();
@@ -354,6 +371,22 @@ class SupplierOrderServiceTest {
         verify(mailer).send(org.mockito.ArgumentMatchers.any());
         assertThat(result.marked()).isFalse();
         assertThat(result.markError()).contains("metafieldsSet").contains("Access denied");
+    }
+
+    /**
+     * Shopify has no "needed by" field, so the shop writes it in the note — as every migrated order
+     * does. Nobody saying is a notice, not a blocker: PaceSetter quotes its own lead time then.
+     */
+    @Test
+    void readsTheDateTheCustomerNeedsItBy() {
+        Preview fromNote = preview(order("1", "#1051", "", CB35_ENGRAVED)
+                .replace("Use 16pt Avenir Book for line 1",
+                        "***** DATE NEEDED: 5/11/2026 *****\\nUse 16pt Avenir Book for lines 1, 4, 5"));
+        assertThat(fromNote.dateNeeded()).isEqualTo("5/11/2026");
+
+        Preview silent = preview(order("1", "#1052", "", CB35_ENGRAVED));
+        assertThat(silent.dateNeeded()).isNull();
+        assertThat(silent.notices()).anyMatch(n -> n.contains("No date the customer needs it by"));
     }
 
     /** The search excludes sent orders by this tag; the code recognises them by it. One name, both places. */

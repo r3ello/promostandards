@@ -24,15 +24,22 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param subject       subject line, same placeholders as the body
  * @param template      resource location of the body template
  * @param accountNumber the distributor account PaceSetter files the order under
- * @param signature     how the message signs off (shop name, phone)
+ * @param signature     who the message signs off as
+ * @param contact       the person at PaceSetter it is addressed to ("Hi Dana,"); blank greets the
+ *                      team rather than nobody
+ * @param shipAccount   the shop's own carrier account PaceSetter ships on ({@code UPS #4E4W93}).
+ *                      Blank leaves the sentence about it out: an invented account number would have
+ *                      the shipment billed to a stranger.
  */
 @ConfigurationProperties(prefix = "orders.pacesetter")
 public record SupplierOrderProperties(Boolean enabled, String to, String cc, String bcc, String from,
                                       String replyTo, String subject, String template,
-                                      String accountNumber, String signature) {
+                                      String accountNumber, String signature, String contact,
+                                      String shipAccount) {
 
     private static final String DEFAULT_TEMPLATE = "classpath:email/pacesetter-po.html";
-    private static final String DEFAULT_SUBJECT = "Purchase Order {{poNumber}}";
+    /** The subject line the shop has always used, so PaceSetter's inbox rules keep working. */
+    private static final String DEFAULT_SUBJECT = "TrophyPartner.com Order P.O. # {{poNumber}}";
 
     /** Not {@code enabled()}: a record accessor cannot narrow {@code Boolean} to {@code boolean}. */
     public boolean isEnabled() {

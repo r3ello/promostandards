@@ -164,6 +164,15 @@ Sin esto, el pedido sale pero el estado y el tracking no vuelven bien. Visto ley
 - **PO**: número, fecha, cuenta de distribuidor, y por línea artículo (part id), descripción,
   cantidad, precio; dirección y método de envío; fecha requerida si la orden la tiene. Sale de la
   orden de Shopify + el catálogo que ya leemos, nunca tecleado.
+  *Hecho (2026-09-23)*: la plantilla es **el correo que el cliente ya enviaba** (lo pasó él mismo):
+  saludo, "I'd like to place an order for the following items", tabla de artículos, prueba de
+  producción para aprobar, transporte y fecha de llegada, dirección, número de PO y firma. El asunto
+  es el suyo: `TrophyPartner.com Order P.O. # <nº>`. La tabla lleva artículo, descripción, cantidad y
+  texto a grabar, **sin precios**: PaceSetter factura con su propia tarifa. Dos datos nuevos de
+  configuración que pedía ese texto: `contact` (a quién saluda) y `ship-account` (la cuenta de UPS
+  propia; vacía, la frase desaparece). La **fecha requerida** sale de una propiedad de la orden o de
+  la línea que mencione una fecha, o del `DATE NEEDED:` de la nota, que es donde está en todas las
+  órdenes migradas; si nadie la dijo, el correo pide "as soon as possible".
   *Hecho (2026-09-22)*: el cuerpo es el **email**, y vive en un fichero HTML con marcas `{{...}}`
   (`email/pacesetter-po.html`, o el que diga `orders.pacesetter.template`), que se lee en cada
   render: se edita sin recompilar. El destinatario, la copia, el remitente, el asunto, la cuenta y la

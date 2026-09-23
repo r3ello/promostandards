@@ -3,6 +3,8 @@ package com.trophy.promostandards.sync.web;
 import com.trophy.promostandards.sync.SupplierOrderEmail;
 import com.trophy.promostandards.sync.SupplierOrderEmail.EmailPreview;
 import com.trophy.promostandards.sync.SupplierOrderEmail.Recipients;
+import com.trophy.promostandards.sync.SupplierOrderMailer;
+import com.trophy.promostandards.sync.SupplierOrderProperties;
 import com.trophy.promostandards.sync.SupplierOrderService;
 import com.trophy.promostandards.sync.SupplierOrderService.PendingOrder;
 import com.trophy.promostandards.sync.SupplierOrderService.Preview;
@@ -17,7 +19,9 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Orders on their way to PaceSetter (PLAN-PEDIDOS-PACESETTER.md §3). Read-only for now: the list of
@@ -30,10 +34,37 @@ public class SupplierOrderController {
 
     private final SupplierOrderService orders;
     private final SupplierOrderEmail email;
+    private final SupplierOrderMailer mailer;
+    private final SupplierOrderProperties props;
 
-    public SupplierOrderController(SupplierOrderService orders, SupplierOrderEmail email) {
+    public SupplierOrderController(SupplierOrderService orders, SupplierOrderEmail email,
+                                   SupplierOrderMailer mailer, SupplierOrderProperties props) {
         this.orders = orders;
         this.email = email;
+        this.mailer = mailer;
+        this.props = props;
+    }
+
+    /**
+     * What the console needs before it offers to send: whether sending is switched on at all
+     * ({@code orders.pacesetter.enabled}) and which mailbox is configured. Costs no Shopify call, so
+     * the Orders view can ask it on load. {@code sendEnabled} false is what greys out the button —
+     * the switch lives in configuration, not in the page.
+     */
+    @GetMapping("/settings")
+    public Map<String, Object> settings() {
+        String smtpProblem = mailer.problem();
+        Map<String, Object> settings = new LinkedHashMap<>();
+        // Both halves have to hold: the switch is on AND a mailbox that could actually accept the
+        // message. Either way the console says which of the two is missing.
+        settings.put("sendEnabled", props.isEnabled() && smtpProblem == null);
+        settings.put("switchedOn", props.isEnabled());
+        settings.put("smtpProblem", smtpProblem);
+        settings.put("to", props.to());
+        settings.put("cc", props.cc());
+        settings.put("bcc", props.bcc());
+        settings.put("from", props.from());
+        return settings;
     }
 
     /** Open orders with PaceSetter lines left to fulfil that were never sent, newest first. */

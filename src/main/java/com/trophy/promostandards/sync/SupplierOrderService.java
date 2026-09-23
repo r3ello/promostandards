@@ -14,8 +14,11 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * What a Shopify order would send to PaceSetter, and which orders are still waiting to be sent.
@@ -34,6 +37,10 @@ import java.util.Optional;
  */
 @Service
 public class SupplierOrderService {
+
+    /** {@code DATE NEEDED: 5/11/2022}, however it is punctuated, up to the end of the line or a {@code *}. */
+    private static final Pattern DATE_NEEDED =
+            Pattern.compile("(?i)date\\s*needed\\s*[:-]?\\s*([^\\n*]{1,40})");
 
     /** The searchable half of the "sent" mark. Must match the search in {@link ShopifyGraphQL#SUPPLIER_PENDING_ORDERS}. */
     static final String SENT_TAG = "pacesetter-enviado";
@@ -67,8 +74,8 @@ public class SupplierOrderService {
      * @param sent     the recorded send (the metafield's JSON), null when never sent
      */
     public record Preview(String orderId, String orderName, String poNumber, String createdAt, boolean test,
-                          String financialStatus, String fulfillmentStatus, String note, ShipTo shipTo,
-                          String shippingMethod, List<Line> lines, List<ExcludedLine> excluded,
+                          String financialStatus, String fulfillmentStatus, String note, String dateNeeded,
+                          ShipTo shipTo, String shippingMethod, List<Line> lines, List<ExcludedLine> excluded,
                           List<String> blocking, List<String> notices, String sent) {
 
         /** Serialized as {@code ready}. */
@@ -311,10 +318,54 @@ public class SupplierOrderService {
         }
 
         String name = text(order.path("name"));
+        String note = text(order.path("note"));
+        String dateNeeded = dateNeeded(order, note);
+        if (dateNeeded == null) {
+            notices.add("No date the customer needs it by: the PO will not ask for one.");
+        }
         return new Preview(text(order.path("id")), name, poNumber(name), text(order.path("createdAt")),
                 order.path("test").asBoolean(false), financial, text(order.path("displayFulfillmentStatus")),
-                text(order.path("note")), shipTo, text(order.path("shippingLine").path("title")),
+                note, dateNeeded, shipTo, text(order.path("shippingLine").path("title")),
                 lines, excluded, blocking, notices, sent);
+    }
+
+    /**
+     * When the customer needs it. Shopify models no such field, so it arrives wherever the shop puts
+     * it: an order or line property whose name mentions a date, or — as every migrated order has it —
+     * inside the note ({@code ***** DATE NEEDED: 5/11/2022 *****}). Null when nobody said, which is a
+     * notice rather than a blocker: PaceSetter quotes 9 working days when no date is given.
+     */
+    static String dateNeeded(JsonNode order, String note) {
+        String fromAttributes = dateAttribute(order.path("customAttributes"));
+        if (fromAttributes != null) {
+            return fromAttributes;
+        }
+        for (JsonNode item : order.path("lineItems").path("nodes")) {
+            String perLine = dateAttribute(item.path("customAttributes"));
+            if (perLine != null) {
+                return perLine;
+            }
+        }
+        if (note != null) {
+            Matcher m = DATE_NEEDED.matcher(note);
+            if (m.find()) {
+                String value = m.group(1).trim();
+                return value.isEmpty() ? null : value;
+            }
+        }
+        return null;
+    }
+
+    private static String dateAttribute(JsonNode attributes) {
+        for (JsonNode a : attributes) {
+            String key = text(a.path("key"));
+            String value = text(a.path("value"));
+            if (key != null && value != null && !key.startsWith("_")
+                    && key.toLowerCase(Locale.ROOT).contains("date")) {
+                return value;
+            }
+        }
+        return null;
     }
 
     /** The PO number is the order's name without its {@code #}, which is what joins PaceSetter's answers back to it. */
