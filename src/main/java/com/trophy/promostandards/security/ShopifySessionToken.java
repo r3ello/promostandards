@@ -2,6 +2,7 @@ package com.trophy.promostandards.security;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.trophy.promostandards.security.ShopifyEmbedProperties.ClientApp;
 import com.trophy.promostandards.shopify.ShopifyProperties;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -36,7 +37,11 @@ import java.util.Set;
  *   <li><b>alg = HS256</b>, taken from a whitelist rather than from the token — a verifier that
  *       trusts the token's own {@code alg} can be told {@code none}.</li>
  *   <li><b>signature</b> over {@code header.payload} with the client secret.</li>
- *   <li><b>{@code aud} = our client id</b> — a valid token minted for a different app is not ours.</li>
+ *   <li><b>{@code aud} = an app this server accepts</b>: this one, or another app of the same store
+ *       whose {@code clientId:secret} is configured in {@code shopify.embedded.extra-clients} — the
+ *       "Send to PaceSetter" action lives in a second app and its tokens carry that app's id. The
+ *       audience only chooses which secret to verify with; the signature is what proves the token,
+ *       so an app we hold no secret for is refused outright.</li>
  *   <li><b>{@code dest} = our store</b>, and {@code iss} under it — this is a single-store custom
  *       app, so a session from any other shop is refused rather than let in as "some Shopify user".</li>
  *   <li><b>{@code exp} / {@code nbf}</b>, with a few seconds of leeway for clock drift. Session
@@ -159,12 +164,24 @@ public class ShopifySessionToken {
 			if (!"HS256".equals(alg)) {
 				return "unsupported signing algorithm '" + alg + "'";
 			}
-			byte[] expected = sign((parts[0] + "." + parts[1]).getBytes(StandardCharsets.US_ASCII));
-			if (!MessageDigest.isEqual(expected, Base64.getUrlDecoder().decode(parts[2]))) {
-				return "bad signature — the shopify.client-secret on this server is not the secret of "
-						+ "the Shopify app the admin loaded";
+			JsonNode claims = json.readTree(decode(parts[1]));
+			// Which app minted it decides which secret verifies it, so the audience is read from the
+			// claims BEFORE they are trusted — and then the signature is what makes them true. A token
+			// naming an app we do not know is refused here, before any comparison that could leak.
+			String audience = claims.path("aud").asText();
+			ClientApp app = appFor(audience);
+			if (app == null) {
+				return "the token was minted for app " + audience + ", which this server does not accept"
+						+ " — that is shopify.client-id, or a clientId:secret pair in "
+						+ "shopify.embedded.extra-clients (SHOPIFY_EMBEDDED_EXTRA_CLIENTS) for another app "
+						+ "of this store, such as the one holding the order action";
 			}
-			return refuseClaims(json.readTree(decode(parts[1])));
+			byte[] expected = sign((parts[0] + "." + parts[1]).getBytes(StandardCharsets.US_ASCII), app.secret());
+			if (!MessageDigest.isEqual(expected, Base64.getUrlDecoder().decode(parts[2]))) {
+				return "bad signature — the secret this server holds for app " + audience + " is not the "
+						+ "secret that app signs with";
+			}
+			return refuseClaims(claims);
 		} catch (IllegalArgumentException | java.io.IOException malformed) {
 			return "malformed token: " + malformed.getMessage();
 		}
@@ -183,11 +200,6 @@ public class ShopifySessionToken {
 		}
 		if (!claims.path("iss").asText().toLowerCase(Locale.ROOT).startsWith(dest)) {
 			return "the token's issuer does not belong to " + dest;
-		}
-		String audience = claims.path("aud").asText();
-		if (!shopify.clientId().equals(audience)) {
-			return "the token was minted for app " + audience + ", not for the client id this server "
-					+ "uses (shopify.client-id)";
 		}
 		long now = Instant.now().getEpochSecond();
 		long expiry = claims.path("exp").asLong();
@@ -235,10 +247,25 @@ public class ShopifySessionToken {
 		return new String(Base64.getUrlDecoder().decode(segment), StandardCharsets.UTF_8);
 	}
 
-	private byte[] sign(byte[] data) {
+	/**
+	 * Every app of this store whose tokens are accepted: this one, and the extras configured for the
+	 * other apps that call these endpoints (the order action's).
+	 */
+	private List<ClientApp> apps() {
+		List<ClientApp> apps = new java.util.ArrayList<>();
+		apps.add(new ClientApp(shopify.clientId(), shopify.clientSecret()));
+		apps.addAll(embed.extraApps());
+		return apps;
+	}
+
+	private ClientApp appFor(String audience) {
+		return apps().stream().filter(a -> a.clientId().equals(audience)).findFirst().orElse(null);
+	}
+
+	private byte[] sign(byte[] data, String secret) {
 		try {
 			Mac mac = Mac.getInstance(HMAC_ALG);
-			mac.init(new SecretKeySpec(shopify.clientSecret().getBytes(StandardCharsets.UTF_8), HMAC_ALG));
+			mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), HMAC_ALG));
 			return mac.doFinal(data);
 		} catch (GeneralSecurityException e) {
 			throw new IllegalStateException("HMAC-SHA256 unavailable", e);

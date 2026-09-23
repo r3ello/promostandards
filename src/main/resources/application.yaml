@@ -252,6 +252,11 @@ shopify:
     # weeks through a domain its own tokens never mention. List the other name here instead of
     # changing store-domain, which every sync call uses.
     shop-domains: ${SHOPIFY_EMBEDDED_SHOP_DOMAINS:}
+    # OTHER Shopify apps of this store whose session tokens are accepted, as clientId:secret pairs
+    # separated by commas. There is one because the "Send to PaceSetter" button on a Shopify order is
+    # an admin UI extension of the print app: its tokens carry that app's client id, and verifying
+    # them needs that app's secret. Its calls also need the CORS answer in ExtensionCorsFilter.
+    extra-clients: "${SHOPIFY_EMBEDDED_EXTRA_CLIENTS:}"
   # Shopify rate-limits by query COST and reports exhaustion as HTTP 200 + errors[].extensions.code
   # = THROTTLED. Those calls are retried (waiting the bucket's own restore time when the response
   # reports it, else exponential backoff) instead of failing the operation.

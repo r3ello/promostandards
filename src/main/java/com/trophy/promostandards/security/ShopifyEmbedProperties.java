@@ -34,9 +34,47 @@ import java.util.List;
  *                    changing {@code shopify.store-domain}, which is what every sync call uses.
  */
 @ConfigurationProperties(prefix = "shopify.embedded")
-public record ShopifyEmbedProperties(@DefaultValue("false") boolean enabled, List<String> shopDomains) {
+public record ShopifyEmbedProperties(@DefaultValue("false") boolean enabled, List<String> shopDomains,
+									 String extraClients) {
 
 	public ShopifyEmbedProperties {
 		shopDomains = shopDomains == null ? List.of() : List.copyOf(shopDomains);
+	}
+
+	/** One other Shopify app of the same store, by the credentials its tokens are signed with. */
+	public record ClientApp(String clientId, String secret) {
+	}
+
+	/**
+	 * The <b>other</b> Shopify apps of this store whose session tokens are accepted, as
+	 * {@code clientId:secret} pairs separated by commas ({@code SHOPIFY_EMBEDDED_EXTRA_CLIENTS}).
+	 *
+	 * <p>There is one because the order action lives in a second app: the "Send to PaceSetter" button
+	 * on a Shopify order is an admin UI extension of the print app, and a token minted there carries
+	 * <b>that</b> app's client id, so this app would refuse it however right everything else is.
+	 * Accepting it needs its secret, which is why this is a pair and not just an id — the signature is
+	 * what makes the token proof of anything.
+	 *
+	 * <p>One string rather than a list of objects because these travel as one environment variable in
+	 * a {@code .env} file, and a list of objects binds to an entry of blanks when that variable is
+	 * empty. Blank or malformed entries are dropped.
+	 */
+	public List<ClientApp> extraApps() {
+		if (extraClients == null || extraClients.isBlank()) {
+			return List.of();
+		}
+		List<ClientApp> apps = new java.util.ArrayList<>();
+		for (String pair : extraClients.split(",")) {
+			int colon = pair.indexOf(':');
+			if (colon <= 0) {
+				continue;
+			}
+			String id = pair.substring(0, colon).trim();
+			String secret = pair.substring(colon + 1).trim();
+			if (!id.isEmpty() && !secret.isEmpty()) {
+				apps.add(new ClientApp(id, secret));
+			}
+		}
+		return List.copyOf(apps);
 	}
 }

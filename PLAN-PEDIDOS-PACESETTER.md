@@ -120,6 +120,15 @@ formas de montar el botón:
 - **Admin link** (la elegida): "Más acciones → Enviar a PaceSetter" abre la app embebida en la orden,
   con la vista previa. Es la consola de siempre con su autenticación de siempre: cero trabajo de
   seguridad.
+**Elegido y hecho (2026-09-23): admin action que llama directamente a esta app.** La acción vive en la
+app de impresión (`trophypartner-printer`, client id `6561be91…`), que **no tiene backend
+desplegado** y no lo necesita: la extensión pide su propio token con `auth.idToken()` y llama por
+HTTPS a la app de Contabo, que ahora acepta los tokens de esa app (`shopify.embedded.extra-clients`,
+pares `clientId:secret`) y responde el CORS y el preflight (`ExtensionCorsFilter`). El modal muestra
+la vista previa de esta app y después envía, así que nada del PO está implementado dos veces. Quedan
+dos valores por poner: `PROMOSYNC_URL` en `SendToPaceSetterAction.tsx` (el nombre público del
+servidor, porque ese código corre en el navegador) y el par `clientId:secret` en el `.env` de Contabo.
+
 - **Admin action** (un modal dentro de la página de la orden, sólo si se quiere no salir de ella):
   llama a los endpoints con `fetch()`, y Shopify añade solo `Authorization: Bearer <token>` cuando la
   llamada va al dominio de la app (comprobado en su documentación, 2026-09-22). Pide dos cosas que hoy
