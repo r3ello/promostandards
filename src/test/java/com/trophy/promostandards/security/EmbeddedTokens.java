@@ -18,6 +18,9 @@ final class EmbeddedTokens {
 	static final String STORE = "trophypartner.myshopify.com";
 	static final String CLIENT_ID = "0123456789abcdef";
 	static final String SECRET = "shopify-client-secret";
+	/** The store's OTHER app — the one holding the "Send to PaceSetter" action on an order. */
+	static final String OTHER_APP_ID = "6561be91e1bae2bbb5fb7f68ba5b0de0";
+	static final String OTHER_APP_SECRET = "the-print-app-secret";
 
 	private static final Base64.Encoder B64 = Base64.getUrlEncoder().withoutPadding();
 
@@ -31,9 +34,14 @@ final class EmbeddedTokens {
 
 	/** The same, also accepting {@code alsoAccepted} as names of the same store. */
 	static ShopifySessionToken verifier(boolean enabled, List<String> alsoAccepted) {
+		return verifier(enabled, alsoAccepted, null);
+	}
+
+	/** The same, also accepting the tokens of the apps in {@code extraClients} (clientId:secret). */
+	static ShopifySessionToken verifier(boolean enabled, List<String> alsoAccepted, String extraClients) {
 		return new ShopifySessionToken(
 				new ShopifyProperties(STORE, CLIENT_ID, SECRET, null, "2026-04", null),
-				new ShopifyEmbedProperties(enabled, alsoAccepted));
+				new ShopifyEmbedProperties(enabled, alsoAccepted, extraClients));
 	}
 
 	/** The token Shopify would issue: this store, this app, valid now. */

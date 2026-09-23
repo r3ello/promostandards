@@ -96,7 +96,7 @@ class ShopifySessionTokenTest {
 		ShopifySessionToken verifier = new ShopifySessionToken(
 				new com.trophy.promostandards.shopify.ShopifyProperties("https://" + EmbeddedTokens.STORE + "/",
 						EmbeddedTokens.CLIENT_ID, EmbeddedTokens.SECRET, null, "2026-04", null),
-				new ShopifyEmbedProperties(true, List.of()));
+				new ShopifyEmbedProperties(true, List.of(), null));
 
 		assertThat(verifier.valid(EmbeddedTokens.valid())).isTrue();
 		assertThat(verifier.storeDomains()).containsExactly(EmbeddedTokens.STORE);   // what the CSP names
@@ -110,6 +110,38 @@ class ShopifySessionTokenTest {
 		assertThat(verifier.valid("")).isFalse();
 		assertThat(verifier.valid("not.a.jwt")).isFalse();
 		assertThat(verifier.valid("only-one-part")).isFalse();
+	}
+
+	/**
+	 * The order action lives in the store's other app, so its tokens carry that app's client id. It is
+	 * accepted only when its secret is configured too — the audience picks the secret, the signature
+	 * settles it.
+	 */
+	@Test
+	void acceptsAnotherAppOfTheSameStoreWhenItsSecretIsConfigured() {
+		String pair = EmbeddedTokens.OTHER_APP_ID + ":" + EmbeddedTokens.OTHER_APP_SECRET;
+		ShopifySessionToken verifier = EmbeddedTokens.verifier(true, List.of(), pair);
+		String fromTheOtherApp = EmbeddedTokens.token("https://" + EmbeddedTokens.STORE,
+				EmbeddedTokens.OTHER_APP_ID, 60, EmbeddedTokens.OTHER_APP_SECRET);
+
+		assertThat(verifier.valid(fromTheOtherApp)).isTrue();
+		// This app's own tokens keep working, and the other app's signature is still checked.
+		assertThat(verifier.valid(EmbeddedTokens.valid())).isTrue();
+		assertThat(verifier.valid(EmbeddedTokens.token("https://" + EmbeddedTokens.STORE,
+				EmbeddedTokens.OTHER_APP_ID, 60, "guessed"))).isFalse();
+		// And nothing else gets in by naming an app we hold no secret for.
+		assertThat(EmbeddedTokens.verifier(true).valid(fromTheOtherApp)).isFalse();
+	}
+
+	/** A pair with no secret is not half a credential: it is dropped. */
+	@Test
+	void ignoresAMalformedExtraClientEntry() {
+		for (String broken : List.of(EmbeddedTokens.OTHER_APP_ID, EmbeddedTokens.OTHER_APP_ID + ":", ":x", ",")) {
+			ShopifySessionToken verifier = EmbeddedTokens.verifier(true, List.of(), broken);
+			assertThat(verifier.valid(EmbeddedTokens.token("https://" + EmbeddedTokens.STORE,
+					EmbeddedTokens.OTHER_APP_ID, 60, EmbeddedTokens.OTHER_APP_SECRET))).isFalse();
+			assertThat(verifier.valid(EmbeddedTokens.valid())).isTrue();
+		}
 	}
 
 	@Test
