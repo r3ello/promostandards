@@ -34,7 +34,7 @@ class SupplierOrderEmailTest {
     }
 
     private static Line line(String partId, String title, Map<String, String> personalization) {
-        return new Line(partId, title, null, "PS9250", 2, 2, new BigDecimal("36.99"), "USD", personalization);
+        return new Line(partId, title, null, "PS9250", 2, 2, new BigDecimal("36.99"), "USD", personalization, null);
     }
 
     private static SupplierOrderProperties props(String template) {
@@ -48,6 +48,86 @@ class SupplierOrderEmailTest {
         SupplierOrderMailer mailer = org.mockito.Mockito.mock(SupplierOrderMailer.class);
         org.mockito.Mockito.when(mailer.problem()).thenReturn(null);
         return new SupplierOrderEmail(props, new DefaultResourceLoader(), mailer);
+    }
+
+    private static Line customized(String partId, int quantity, TrophyItem item) {
+        return new Line(partId, "Red/Black Spiral Teardrop Art Glass", null, "PS9349", quantity, quantity,
+                new BigDecimal("51.00"), "USD", Map.of(), item);
+    }
+
+    /** {@code n} pieces, each two lines in two fonts — the shape of #1049, at any size. */
+    private static TrophyItem pieces(int n) {
+        StringBuilder items = new StringBuilder();
+        for (int i = 1; i <= n; i++) {
+            items.append(i == 1 ? "" : ",").append("""
+                    {"item":%d,"values":{"engraving":{"line-1":"Name %d","line-1-font":"Open Sans",\
+                    "line-2":"Team \\"A\\", 2026","line-2-font":"Bebas Neue"}}}""".formatted(i, i));
+        }
+        return TrophyItem.parse("{\"preview\":\"https://cdn.shopify.com/ss-1.png?v=1\",\"items\":[" + items + "]}");
+    }
+
+    /** #1049: every piece in the body with its fonts and the artwork link, and the sheet attached. */
+    @Test
+    void writesEachPieceWithItsFontsAndAttachesTheSheet() {
+        EmailPreview mail = email(props(null)).render(order(List.of(customized("GM828", 3,
+                TrophyItem.parse(TrophyItemTest.ORDER_1049))), null, List.of()));
+
+        assertThat(mail.body()).contains("Piece 1", "textline1", "(Bebas Neue)", "Piece 3", "line2",
+                "Fonts:</span> Open Sans, Bebas Neue",
+                "href=\"https://cdn.shopify.com/s/files/1/0655/6231/2798/files/trophy-preview-p-8159-redblack-spiral-teardrop-art-glass-1790501535902.png?v=1790501537\"",
+                "attached as <strong>PO-1046-engraving.csv</strong>");
+        assertThat(mail.body()).doesNotContain("in the attached engraving sheet.");   // all 3 fit
+        assertThat(mail.text()).contains("Line 2: test 2 (Open Sans)");
+        assertThat(mail.attachments()).singleElement().satisfies(a -> {
+            assertThat(a.filename()).isEqualTo("PO-1046-engraving.csv");
+            assertThat(a.contentType()).isEqualTo("text/csv");
+            assertThat(a.content().split("\r\n")).hasSize(1 + 6);   // header + 3 pieces × 2 lines
+            assertThat(a.content()).contains(
+                    "\"1046\",\"1\",\"GM828\",\"Red/Black Spiral Teardrop Art Glass\",\"1\",\"Line 2\",\"text line2 \",\"Bebas Neue\"");
+        });
+    }
+
+    /** 500 pieces: the body stops at the limit and says where the rest are; the sheet has all of them. */
+    @Test
+    void aLargeOrderKeepsTheBodyShortAndTheSheetComplete() {
+        EmailPreview mail = email(props(null)).render(order(List.of(customized("GM828", 500, pieces(500))),
+                null, List.of()));
+
+        assertThat(mail.body()).contains("Piece " + SupplierOrderEmail.BODY_PIECE_LIMIT)
+                .doesNotContain("Piece " + (SupplierOrderEmail.BODY_PIECE_LIMIT + 1) + "<")
+                .contains("The other " + (500 - SupplierOrderEmail.BODY_PIECE_LIMIT)
+                        + " pieces are in the attached engraving sheet.", "all 500 pieces");
+        assertThat(mail.body().length()).isLessThan(40_000);
+        String csv = mail.attachments().get(0).content();
+        assertThat(csv.split("\r\n")).hasSize(1 + 1000);
+        assertThat(csv).startsWith("﻿\"PO\"").contains("\"Name 500\"", "\"Team \"\"A\"\", 2026\"");
+    }
+
+    /** One logo and one preview per order: written once above the table, never on each line or CSV row. */
+    @Test
+    void writesTheSharedArtworkOnceAndSplitsItOnlyWhenLinesDiffer() {
+        String preview = "https://cdn.shopify.com/ss-1.png?v=1";
+        EmailPreview shared = email(props(null)).render(order(List.of(
+                customized("GM828", 3, pieces(3)), customized("GM829", 2, pieces(2))), null, List.of()));
+
+        assertThat(shared.body()).contains("Artwork for every piece in this order");
+        assertThat(shared.body().split(java.util.regex.Pattern.quote("href=\"" + preview + "\""))).hasSize(2);
+        assertThat(shared.attachments().get(0).content()).doesNotContain(preview);
+
+        TrophyItem other = TrophyItem.parse("{\"preview\":\"https://cdn.shopify.com/ss-2.png\",\"items\":[{\"item\":1}]}");
+        EmailPreview differing = email(props(null)).render(order(List.of(
+                customized("GM828", 3, pieces(3)), customized("GM829", 1, other)), null, List.of()));
+
+        assertThat(differing.body()).doesNotContain("Artwork for every piece")
+                .contains("href=\"" + preview + "\"", "href=\"https://cdn.shopify.com/ss-2.png\"");
+    }
+
+    @Test
+    void attachesNothingWhenNoLineCarriesTheCustomizersRecord() {
+        EmailPreview mail = email(props(null)).render(order(List.of(line("CB35", "Base", Map.of())), null, List.of()));
+
+        assertThat(mail.attachments()).isEmpty();
+        assertThat(mail.body()).doesNotContain("attached as");
     }
 
     /** A half-configured mailbox is said here, not left to the mail server's own stack trace. */

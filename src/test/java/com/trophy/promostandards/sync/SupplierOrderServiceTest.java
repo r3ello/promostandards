@@ -156,6 +156,81 @@ class SupplierOrderServiceTest {
                 "No date the customer needs it by: the PO will not ask for one.");
     }
 
+    /**
+     * GM828 as order #1049 carries it (read live 2026-09-27): Trophy Options' cart transform leaves the
+     * line's own properties empty and puts everything on its {@code lineItemGroup} — the visible copies
+     * of piece 1, the browser's fake path of the logo upload, and {@code _trophy_items}.
+     */
+    private static String gm828(String trophyItems) throws Exception {
+        return gm828(trophyItems, "gid://shopify/LineItemGroup/32487506014");
+    }
+
+    private static String gm828(String trophyItems, String groupId) throws Exception {
+        return """
+                {"name":"Red/Black Spiral Teardrop Art Glass","title":"Red/Black Spiral Teardrop Art Glass",
+                 "variantTitle":null,"sku":"PS9349","quantity":3,"unfulfilledQuantity":3,"customAttributes":[],
+                 "lineItemGroup":{"id":"%s","customAttributes":[
+                   {"key":"Setup Fee","value":"Yes"},{"key":"_design_configuration","value":"Custom Design"},
+                   {"key":"Engraving Logo","value":"C:\\\\fakepath\\\\blippi.jpg"},
+                   {"key":"Engraving - Line 1","value":"textline1"},{"key":"Engraving - Line 1 Font","value":"Open Sans"},
+                   {"key":"_trophy_surcharge","value":"0.50"},
+                   {"key":"_trophy_items","value":%s}]},
+                 "originalUnitPriceSet":{"shopMoney":{"amount":"51.00","currencyCode":"USD"}},
+                 "variant":{"vendorSku":{"value":"GM828"}},"product":{"psId":{"value":"GM828"}}}"""
+                .formatted(groupId, MAPPER.writeValueAsString(trophyItems));
+    }
+
+    @Test
+    void readsTheCustomizersRecordOffTheLineItemGroup() throws Exception {
+        Preview p = preview(order("7300090560606", "#1049", "", gm828(TrophyItemTest.ORDER_1049)));
+
+        assertThat(p.lines()).singleElement().satisfies(l -> {
+            // The record is the whole engraving: piece 1's visible copies and the fake logo path stay out.
+            assertThat(l.personalization()).isEmpty();
+            assertThat(l.customization().pieces()).hasSize(3);
+            assertThat(l.customization().artwork()).containsKeys("logo", "preview");
+        });
+        assertThat(p.blocking()).isEmpty();
+        assertThat(p.notices()).noneMatch(n -> n.contains("no text to engrave"));
+    }
+
+    /** Two component lines of one bundle: the shopper configured one product, so it is engraved once. */
+    @Test
+    void readsAGroupsRecordWithItsFirstLineOnly() throws Exception {
+        Preview p = preview(order("7300090560606", "#1049", "",
+                gm828(TrophyItemTest.ORDER_1049), gm828(TrophyItemTest.ORDER_1049)));
+
+        assertThat(p.lines()).hasSize(2);
+        assertThat(p.lines().get(0).customization()).isNotNull();
+        assertThat(p.lines().get(1).customization()).isNull();
+    }
+
+    /** Without the record, the group's visible properties are the text to engrave, as with Easify's. */
+    @Test
+    void fallsBackToTheGroupsVisiblePropertiesWithoutTheRecord() throws Exception {
+        String noRecord = gm828(TrophyItemTest.ORDER_1049).replace("\"_trophy_items\"", "\"_not_the_record\"");
+        Preview p = preview(order("7300090560606", "#1049", "", noRecord));
+
+        assertThat(p.lines().get(0).customization()).isNull();
+        assertThat(p.lines().get(0).personalization()).containsKey("Engraving - Line 1");
+    }
+
+    /** Unreadable engraving would reach PaceSetter as a blank piece: the order stops instead. */
+    @Test
+    void anUnreadableRecordBlocksTheOrder() throws Exception {
+        Preview p = preview(order("7300090560606", "#1049", "", gm828("{\"items\":[")));
+
+        assertThat(p.blocking()).singleElement().asString().contains("_trophy_item", "could not be read");
+    }
+
+    @Test
+    void saysWhenThePiecesDoNotMatchTheQuantity() throws Exception {
+        String twoPieces = TrophyItemTest.ORDER_1049.replaceFirst(",\\s*\\{\"item\":3.*\\}\\]", "]");
+        Preview p = preview(order("7300090560606", "#1049", "", gm828(twoPieces)));
+
+        assertThat(p.notices()).contains("Red/Black Spiral Teardrop Art Glass: 2 engraved piece(s) for 3 ordered.");
+    }
+
     /** Ordering the wrong item, or none, is worse than stopping: the line blocks, it is not dropped. */
     @Test
     void blocksAPaceSetterLineThatDoesNotSayWhichPartItIs() {
