@@ -165,7 +165,16 @@ class SyncApiTest {
         when(supplierOrders.pending()).thenReturn(List.of(new SupplierOrderService.PendingOrder(
                 "gid://shopify/Order/7291179761758", "#1046", "2026-09-22T16:48:24Z", true, "PAID",
                 "Wake Forest, NC", List.of(new SupplierOrderService.LineSummary("CB35", "Optional Base", 1)),
-                0, List.of())));
+                0, List.of(), null, null)));
+        when(supplierOrders.sent()).thenReturn(List.of(new SupplierOrderService.PendingOrder(
+                "gid://shopify/Order/7300090560606", "#1049", "2026-09-27T09:34:38Z", true, "PAID",
+                "Wake Forest, NC", List.of(new SupplierOrderService.LineSummary("GM828", null, 3)),
+                0, List.of("Already sent to PaceSetter."), "2026-09-27T12:30:00Z", "test@example.com")));
+        mockMvc.perform(get("/api/orders/pacesetter-sent"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].orderName").value("#1049"))
+                .andExpect(jsonPath("$[0].sentAt").value("2026-09-27T12:30:00Z"))
+                .andExpect(jsonPath("$[0].sentTo").value("test@example.com"));
         when(supplierOrders.preview("7291179761758")).thenReturn(java.util.Optional.of(new SupplierOrderService.Preview(
                 "gid://shopify/Order/7291179761758", "#1046", "1046", "2026-09-22T16:48:24Z", true, "PAID",
                 "UNFULFILLED", null, null, null, "Standard", List.of(), List.of(),

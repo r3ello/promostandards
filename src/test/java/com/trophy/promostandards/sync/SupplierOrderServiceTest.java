@@ -194,6 +194,44 @@ class SupplierOrderServiceTest {
         assertThat(p.notices()).noneMatch(n -> n.contains("no text to engrave"));
     }
 
+    private static String sentMark(String recordJson) throws Exception {
+        return ",\"tags\":[\"pacesetter-enviado\"],\"sent\":"
+                + (recordJson == null ? "null" : "{\"value\":" + MAPPER.writeValueAsString(recordJson) + "}");
+    }
+
+    /** Sent orders stay visible: newest send first, with when and to whom, and what went even once fulfilled. */
+    @Test
+    void listsTheSentOrdersNewestSendFirst() throws Exception {
+        String older = order("1", "#1047", sentMark("""
+                {"po":"1047","sentAt":"2026-09-26T10:00:00Z","to":"orders@pacesetterawards.com","lines":[{"partId":"CB35","quantity":2}]}"""),
+                FULFILLED_PACESETTER);
+        String newer = order("2", "#1049", sentMark("""
+                {"po":"1049","sentAt":"2026-09-27T12:30:00Z","to":"test@example.com","lines":[{"partId":"GM828","quantity":3}]}"""),
+                CB35_ENGRAVED);
+        String byHand = order("3", "#1048", sentMark(null), CB35_ENGRAVED);
+        SupplierOrderService service = service(http(Map.of("SupplierSentOrders",
+                "{\"data\":{\"orders\":{\"nodes\":[" + older + "," + byHand + "," + newer + "]}}}")));
+
+        List<SupplierOrderService.PendingOrder> sent = service.sent();
+
+        assertThat(sent).extracting(SupplierOrderService.PendingOrder::orderName)
+                .containsExactly("#1049", "#1047", "#1048");
+        assertThat(sent.get(0).sentAt()).isEqualTo("2026-09-27T12:30:00Z");
+        assertThat(sent.get(0).sentTo()).isEqualTo("test@example.com");
+        // #1047's line is fulfilled by now, so the preview has no line; the record says what went.
+        assertThat(sent.get(1).lines()).singleElement().satisfies(l -> {
+            assertThat(l.partId()).isEqualTo("CB35");
+            assertThat(l.quantity()).isEqualTo(2);
+        });
+        assertThat(sent.get(2).sentAt()).isNull();   // tagged by hand: no record of when
+        assertThat(operations).containsExactly("SupplierSentOrders");
+    }
+
+    @Test
+    void theSentSearchIsTheMarkThePendingSearchExcludes() {
+        assertThat(ShopifyGraphQL.SUPPLIER_SENT_ORDERS).contains("tag:" + SupplierOrderService.SENT_TAG);
+    }
+
     /** Two component lines of one bundle: the shopper configured one product, so it is engraved once. */
     @Test
     void readsAGroupsRecordWithItsFirstLineOnly() throws Exception {

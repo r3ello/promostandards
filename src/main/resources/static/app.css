@@ -267,6 +267,8 @@ body {
 
 /* ---------- states ---------- */
 .row-state td { padding: 0 !important; }
+/* Separates the orders already sent from the ones still to send. */
+.row-group td { background: var(--p-color-bg-surface-secondary); font-weight: var(--p-font-weight-semibold); font-size: var(--p-font-size-325); padding: var(--p-space-200) var(--p-space-400); }
 .empty, .state { text-align: center; color: var(--p-color-text-secondary); padding: var(--p-space-1000) var(--p-space-500); }
 .empty p { margin-top: var(--p-space-300); font-size: var(--p-font-size-325); }
 .state--err { color: var(--p-color-text-critical); }

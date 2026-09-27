@@ -1633,6 +1633,8 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !groupMo
 // order template.
 let ordersLoaded = false;
 let pendingOrders = [];
+// Already emailed, listed under the pending ones: an order must not vanish the moment it goes out.
+let sentOrders = [];
 // Whether the server will send at all (orders.pacesetter.enabled + a usable mailbox). The switch is
 // configuration, not a page state: a console that let someone click it would only earn a 409.
 let orderSending = { sendEnabled: false, switchedOn: false, smtpProblem: null };
@@ -1671,8 +1673,12 @@ async function loadOrders() {
 	await loadOrderSettings();
 	el('ordersMeta').textContent = 'Loading open orders…';
 	ordersBody.innerHTML = `<tr class="row-state"><td colspan="7"><div class="state"><span class="spinner"></span> Reading open orders from Shopify…</div></td></tr>`;
+	// The sent list is history, not work: when it cannot be read (or an older backend has no such
+	// endpoint) the pending list still shows.
+	const sentRequest = api('/api/orders/pacesetter-sent').catch(() => []);
 	try {
 		pendingOrders = await api('/api/orders/pacesetter-pending');
+		sentOrders = (await sentRequest) || [];
 	} catch (err) {
 		pendingOrders = [];
 		el('ordersMeta').textContent = 'Could not read the orders.';
@@ -1684,16 +1690,22 @@ async function loadOrders() {
 
 function renderOrders() {
 	const blocked = pendingOrders.filter((o) => (o.blocking || []).length).length;
-	el('ordersMeta').textContent = pendingOrders.length
+	el('ordersMeta').textContent = (pendingOrders.length
 		? `${pendingOrders.length} open order${pendingOrders.length === 1 ? '' : 's'} with PaceSetter items not sent yet`
 			+ (blocked ? ` · ${blocked} need${blocked === 1 ? 's' : ''} attention first` : '')
-		: 'Nothing to send: no open order has PaceSetter items waiting.';
-	ordersBody.innerHTML = pendingOrders.length
+		: 'Nothing to send: no open order has PaceSetter items waiting.')
+		+ (sentOrders.length ? ` · ${sentOrders.length} recently sent, listed below` : '');
+	ordersBody.innerHTML = (pendingOrders.length
 		? pendingOrders.map(orderRowHtml).join('')
-		: `<tr class="row-state"><td colspan="7"><div class="empty"><strong>All caught up</strong><p>Orders appear here once they are placed with PaceSetter items, and leave once sent.</p></div></td></tr>`;
+		: `<tr class="row-state"><td colspan="7"><div class="empty"><strong>All caught up</strong><p>Orders appear here once they are placed with PaceSetter items, and move to "Sent" below once emailed.</p></div></td></tr>`)
+		+ (sentOrders.length
+			? `<tr class="row-group"><td colspan="7">Sent to PaceSetter <span class="muted">· most recent first</span></td></tr>`
+				+ sentOrders.map(orderRowHtml).join('')
+			: '');
 	// Re-open what was open before a reload, with fresh previews.
+	const listed = [...pendingOrders, ...sentOrders];
 	for (const id of [...openOrders]) {
-		if (pendingOrders.some((o) => numericId(o.orderId) === id)) insertOrderPreview(id);
+		if (listed.some((o) => numericId(o.orderId) === id)) insertOrderPreview(id);
 		else openOrders.delete(id);
 	}
 }
@@ -1706,9 +1718,11 @@ function orderRowHtml(o) {
 	const blocking = o.blocking || [];
 	// "Ready" read as "done": every order here is still waiting to be sent, so the column says what
 	// can be done with it, not how it feels.
-	const state = blocking.length
-		? `<span class="badge badge--critical" title="${esc(blocking.join('\n'))}">Needs attention</span>`
-		: `<span class="badge badge--caution">Not sent · can be sent</span>`;
+	const state = sentOrders.includes(o)
+		? `<span class="badge badge--success" title="${esc(o.sentTo ? `Emailed to ${o.sentTo}` : 'Marked as sent, with no record of when')}">Sent${o.sentAt ? ` · ${esc(sentWhen(o.sentAt))}` : ''}</span>`
+		: blocking.length
+			? `<span class="badge badge--critical" title="${esc(blocking.join('\n'))}">Needs attention</span>`
+			: `<span class="badge badge--caution">Not sent · can be sent</span>`;
 	return `<tr class="prod-row${openOrders.has(id) ? ' is-open' : ''}" data-order="${esc(id)}">
 		<td class="col-expand"><span class="chev">▸</span></td>
 		<td><div class="prod-name">${esc(o.orderName)}</div>${o.test ? '<span class="badge badge--neutral">Test</span>' : ''}</td>
@@ -1718,6 +1732,12 @@ function orderRowHtml(o) {
 		<td>${paymentBadge(o.financialStatus)}</td>
 		<td>${state}</td>
 	</tr>`;
+}
+
+/** Date and time: an order can be sent, reset and sent again the same day. */
+function sentWhen(iso) {
+	const d = new Date(iso);
+	return isNaN(d) ? iso : d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 function orderDate(iso) {
@@ -1786,9 +1806,14 @@ async function focusOrder(id) {
 
 function orderPreviewHtml(p) {
 	const id = numericId(p.orderId);
-	const state = p.ready
-		? '<span class="badge badge--caution">Not sent yet · nothing missing</span>'
-		: '<span class="badge badge--critical">Not sent · cannot be sent yet</span>';
+	let record = null;
+	try { record = p.sent ? JSON.parse(p.sent) : null; } catch (_) { record = null; }
+	const alreadySent = !!p.sent || (p.blocking || []).includes('Already sent to PaceSetter.');
+	const state = alreadySent
+		? `<span class="badge badge--success">Sent to PaceSetter${record && record.sentAt ? ` · ${esc(sentWhen(record.sentAt))}` : ''}</span>`
+		: p.ready
+			? '<span class="badge badge--caution">Not sent yet · nothing missing</span>'
+			: '<span class="badge badge--critical">Not sent · cannot be sent yet</span>';
 	// Three separate reasons the button may be dead, and the page says which one applies.
 	const sendable = p.ready && orderSending.sendEnabled;
 	const sendTitle = !orderSending.switchedOn
@@ -1849,7 +1874,11 @@ function orderPreviewHtml(p) {
 	const needed = `<div><div class="sub-title">Needed by</div><div>${p.dateNeeded
 		? esc(p.dateNeeded) : '<span class="muted">not stated on the order</span>'}</div></div>`;
 	const note = p.note ? `<div><div class="sub-title">Order note</div><div class="ord-note">${esc(p.note)}</div></div>` : '';
-	const sent = p.sent ? `<div><div class="sub-title">Sent</div><div class="ord-note">${esc(p.sent)}</div></div>` : '';
+	const sent = record
+		? `<div><div class="sub-title">Sent</div><div class="ord-note">${record.sentAt ? esc(sentWhen(record.sentAt)) : ''}`
+			+ `${record.to ? ` · to ${esc(record.to)}` : ''}${record.cc ? ` · cc ${esc(record.cc)}` : ''}`
+			+ `${record.po ? ` · P.O. ${esc(record.po)}` : ''}</div></div>`
+		: p.sent ? `<div><div class="sub-title">Sent</div><div class="ord-note">${esc(p.sent)}</div></div>` : '';
 
 	return `<div class="detail">
 		<div class="ord-head"><strong>PO ${esc(p.poNumber || '—')}</strong> ${state}

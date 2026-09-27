@@ -112,10 +112,16 @@ public class SupplierOrderService {
                          String countryCode, String phone) {
     }
 
-    /** A row of the "to send" list: enough to pick the order, the rest is in its preview. */
+    /**
+     * A row of the orders list: enough to pick the order, the rest is in its preview.
+     *
+     * @param sentAt when it was emailed to PaceSetter (from the sent record); null while pending, and
+     *               for an order someone tagged by hand, which has no record
+     * @param sentTo who it was emailed to, as recorded
+     */
     public record PendingOrder(String orderId, String orderName, String createdAt, boolean test,
                                String financialStatus, String destination, List<LineSummary> lines,
-                               int otherLines, List<String> blocking) {
+                               int otherLines, List<String> blocking, String sentAt, String sentTo) {
     }
 
     public record LineSummary(String partId, String title, int quantity) {
@@ -144,10 +150,7 @@ public class SupplierOrderService {
                 if (p.sent() != null || isCancelled(order) || p.lines().isEmpty()) {
                     continue;
                 }
-                pending.add(new PendingOrder(p.orderId(), p.orderName(), p.createdAt(), p.test(),
-                        p.financialStatus(), destination(p.shipTo()),
-                        p.lines().stream().map(l -> new LineSummary(l.partId(), l.title(), l.quantity())).toList(),
-                        p.excluded().size(), p.blocking()));
+                pending.add(row(p, null, null));
             }
             JsonNode pageInfo = orders.path("pageInfo");
             if (!pageInfo.path("hasNextPage").asBoolean(false)) {
@@ -156,6 +159,54 @@ public class SupplierOrderService {
             cursor = pageInfo.path("endCursor").asText(null);
         }
         return pending;
+    }
+
+    /**
+     * The orders already sent, the most recently sent first — what the console lists under the pending
+     * ones, so an order does not disappear the moment it goes out. The recent history only (one page
+     * of the latest 50 tagged orders), whatever their state since: fulfilled or not, they were sent.
+     */
+    public List<PendingOrder> sent() {
+        List<PendingOrder> sent = new ArrayList<>();
+        for (JsonNode order : gql.execute(ShopifyGraphQL.SUPPLIER_SENT_ORDERS, Map.of()).path("orders").path("nodes")) {
+            Preview p = toPreview(order);
+            JsonNode record = sentRecord(p.sent());
+            PendingOrder row = row(p, text(record.path("sentAt")), text(record.path("to")));
+            // What went is what the record says: by now its lines may be fulfilled, and a fulfilled line
+            // leaves the preview.
+            if (record.path("lines").isArray() && !record.path("lines").isEmpty()) {
+                List<LineSummary> went = new ArrayList<>();
+                record.path("lines").forEach(l -> went.add(
+                        new LineSummary(text(l.path("partId")), null, l.path("quantity").asInt(0))));
+                row = new PendingOrder(row.orderId(), row.orderName(), row.createdAt(), row.test(),
+                        row.financialStatus(), row.destination(), went, 0, row.blocking(), row.sentAt(),
+                        row.sentTo());
+            }
+            sent.add(row);
+        }
+        // Newest send first; one tagged by hand has no date and goes last.
+        sent.sort(java.util.Comparator.comparing(PendingOrder::sentAt,
+                java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())));
+        return sent;
+    }
+
+    private static PendingOrder row(Preview p, String sentAt, String sentTo) {
+        List<LineSummary> lines = p.lines().stream()
+                .map(l -> new LineSummary(l.partId(), l.title(), l.quantity())).toList();
+        return new PendingOrder(p.orderId(), p.orderName(), p.createdAt(), p.test(), p.financialStatus(),
+                destination(p.shipTo()), lines, p.excluded().size(), p.blocking(), sentAt, sentTo);
+    }
+
+    /** The {@code trophy_sync.pacesetter_po} JSON; an empty node when absent or not JSON. */
+    private static JsonNode sentRecord(String value) {
+        if (value == null) {
+            return JSON.createObjectNode();
+        }
+        try {
+            return JSON.readTree(value);
+        } catch (JsonProcessingException e) {
+            return JSON.createObjectNode();
+        }
     }
 
     /**

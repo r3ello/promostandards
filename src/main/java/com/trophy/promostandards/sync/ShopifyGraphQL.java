@@ -275,6 +275,35 @@ final class ShopifyGraphQL {
             }
             """;
 
+    /**
+     * The orders already sent to PaceSetter, newest first: the console lists them under the pending
+     * ones, so an order does not vanish the moment it goes out. One page — the recent history, not an
+     * archive. The selection must stay the same as {@link #SUPPLIER_PENDING_ORDERS}: one mapping reads both.
+     */
+    static final String SUPPLIER_SENT_ORDERS = """
+            query SupplierSentOrders {
+              orders(first: 50, sortKey: UPDATED_AT, reverse: true, query: "tag:pacesetter-enviado") {
+                nodes {
+                  id name createdAt test cancelledAt displayFinancialStatus displayFulfillmentStatus tags note
+                  customAttributes { key value }
+                  sent: metafield(namespace: "trophy_sync", key: "pacesetter_po") { value }
+                  shippingAddress { name company address1 address2 city province provinceCode zip country countryCodeV2 phone }
+                  shippingLine { title }
+                  lineItems(first: 50) {
+                    nodes {
+                      name title variantTitle sku quantity unfulfilledQuantity
+                      customAttributes { key value }
+                      lineItemGroup { id customAttributes { key value } }
+                      originalUnitPriceSet { shopMoney { amount currencyCode } }
+                      variant { vendorSku: metafield(namespace: "trophy_sync", key: "vendor_sku") { value } }
+                      product { psId: metafield(namespace: "custom", key: "ps_product_id") { value } }
+                    }
+                  }
+                }
+              }
+            }
+            """;
+
     /** One order, read the same way as {@link #SUPPLIER_PENDING_ORDERS}: the preview of what would be sent. */
     static final String SUPPLIER_ORDER_BY_ID = """
             query SupplierOrderById($id: ID!) {

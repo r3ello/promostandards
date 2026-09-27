@@ -106,6 +106,7 @@ CASES: dict[str, dict] = {
     "ORDER_BY_ID": {"id": GHOST["order"]},
     "ORDER_BY_PO": {"query": "name:does-not-exist"},
     "SUPPLIER_PENDING_ORDERS": {},
+    "SUPPLIER_SENT_ORDERS": {},
     "SUPPLIER_ORDER_BY_ID": {"id": GHOST["order"]},
     "TAGS_ADD": {"id": GHOST["order"], "tags": ["probe-does-not-stick"]},
     "FULFILLMENT_CREATE": {"fulfillment": {"lineItemsByFulfillmentOrder": [
