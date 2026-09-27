@@ -264,6 +264,7 @@ final class ShopifyGraphQL {
                     nodes {
                       name title variantTitle sku quantity unfulfilledQuantity
                       customAttributes { key value }
+                      lineItemGroup { id customAttributes { key value } }
                       originalUnitPriceSet { shopMoney { amount currencyCode } }
                       variant { vendorSku: metafield(namespace: "trophy_sync", key: "vendor_sku") { value } }
                       product { psId: metafield(namespace: "custom", key: "ps_product_id") { value } }
@@ -287,6 +288,7 @@ final class ShopifyGraphQL {
                   nodes {
                     name title variantTitle sku quantity unfulfilledQuantity
                     customAttributes { key value }
+                    lineItemGroup { id customAttributes { key value } }
                     originalUnitPriceSet { shopMoney { amount currencyCode } }
                     variant { vendorSku: metafield(namespace: "trophy_sync", key: "vendor_sku") { value } }
                     product { psId: metafield(namespace: "custom", key: "ps_product_id") { value } }

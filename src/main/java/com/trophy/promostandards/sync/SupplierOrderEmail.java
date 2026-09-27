@@ -33,6 +33,13 @@ import java.util.stream.Stream;
 @Component
 public class SupplierOrderEmail {
 
+    /**
+     * Engraved pieces written out in the body; the rest are only in the attached sheet. An order can
+     * hold 500 pieces, and a body that long is clipped by the mail client (Gmail cuts at ~102 KB)
+     * without saying so — the worst way to lose an engraving.
+     */
+    static final int BODY_PIECE_LIMIT = 25;
+
     private static final DateTimeFormatter DATE =
             DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH).withZone(ZoneId.systemDefault());
 
@@ -77,7 +84,14 @@ public class SupplierOrderEmail {
      */
     public record EmailPreview(String to, String cc, String bcc, String from, String replyTo,
                                String subject, String body, String text, boolean canSend,
-                               Recipients defaults, List<String> missing) {
+                               Recipients defaults, List<String> missing, List<Attachment> attachments) {
+    }
+
+    /**
+     * A file sent with the message. Today only the engraving sheet: every piece of every line, one row
+     * per engraved line, as CSV — it opens in Excel, sorts, and is never clipped the way a body is.
+     */
+    public record Attachment(String filename, String contentType, String content) {
     }
 
     public EmailPreview render(Preview order) {
@@ -107,9 +121,11 @@ public class SupplierOrderEmail {
             missing.addAll(order.blocking());
         }
         String body = fill(template(), values);
+        Attachment sheet = EngravingSheet.of(order);
         return new EmailPreview(to, cc, bcc, props.from(), props.replyTo(),
                 fill(props.subject(), values), body, asText(body), props.isEnabled(),
-                new Recipients(props.to(), props.cc(), props.bcc()), missing);
+                new Recipients(props.to(), props.cc(), props.bcc()), missing,
+                sheet == null ? List.of() : List.of(sheet));
     }
 
     private String template() {
@@ -130,7 +146,14 @@ public class SupplierOrderEmail {
         v.put("accountNumber", esc(props.accountNumber()));
         v.put("accountLine", props.accountNumber() == null || props.accountNumber().isBlank()
                 ? "" : " · Account " + esc(props.accountNumber()));
-        v.put("lines", lines(order.lines()));
+        Map<String, String> shared = sharedArtwork(order.lines());
+        v.put("artworkBlock", shared.isEmpty() ? "" : "<div style=\"margin:0 0 16px;\">"
+                + "<div><strong>Artwork for every piece in this order</strong></div>" + artwork(shared) + "</div>");
+        v.put("lines", lines(order.lines(), !shared.isEmpty()));
+        int pieces = EngravingSheet.pieces(order);
+        v.put("attachmentLine", pieces == 0 ? "" : "<p style=\"margin:0 0 16px;\">The engraving for all "
+                + pieces + " piece" + (pieces == 1 ? "" : "s") + " &mdash; each line with its font &mdash; "
+                + "is also attached as <strong>" + esc(EngravingSheet.filename(order)) + "</strong>.</p>");
         v.put("shipTo", shipTo(order.shipTo()));
         v.put("shippingMethod", order.shippingMethod() == null ? "your usual method" : esc(order.shippingMethod()));
         v.put("contact", props.contact() == null || props.contact().isBlank() ? "there" : esc(props.contact()));
@@ -152,12 +175,14 @@ public class SupplierOrderEmail {
      * have always listed. No prices: PaceSetter prices the order from their own table and invoices it,
      * and a figure of ours in the PO is only something to argue about.
      */
-    private String lines(List<Line> lines) {
+    private String lines(List<Line> lines, boolean artworkShown) {
         StringBuilder rows = new StringBuilder();
+        int[] budget = {BODY_PIECE_LIMIT};
         for (Line line : lines) {
             String engraving = line.personalization().entrySet().stream()
                     .map(e -> "<div><span style=\"color:#616161;\">" + esc(e.getKey()) + ":</span> " + esc(e.getValue()) + "</div>")
-                    .reduce("", String::concat);
+                    .reduce("", String::concat)
+                    + customization(line.customization(), budget, artworkShown);
             rows.append("""
                     <tr>
                       <td style="padding:8px;border-bottom:1px solid #e3e3e3;vertical-align:top;"><strong>%s</strong></td>
@@ -170,6 +195,74 @@ public class SupplierOrderEmail {
                     engraving.isEmpty() ? "<span style=\"color:#616161;\">none</span>" : engraving));
         }
         return rows.toString();
+    }
+
+    /**
+     * The logo and the preview when every customized line carries the same ones — the usual case: one
+     * logo and one preview per order, whatever the text on each piece. Then they are written once,
+     * above the table, instead of on every line. Empty when lines differ (each keeps its own) or none
+     * has any.
+     */
+    static Map<String, String> sharedArtwork(List<Line> lines) {
+        List<Map<String, String>> all = lines.stream().filter(l -> l.customization() != null)
+                .map(l -> l.customization().artwork()).distinct().toList();
+        return all.size() == 1 ? all.get(0) : Map.of();
+    }
+
+    /** As links: 500 images do not travel in an email, and PaceSetter opens the one it needs. */
+    private static String artwork(Map<String, String> artwork) {
+        StringBuilder out = new StringBuilder();
+        artwork.forEach((key, value) -> out.append("<div><span style=\"color:#616161;\">")
+                .append(esc(TrophyItem.label(key))).append(":</span> ")
+                .append(value.startsWith("http")
+                        ? "<a href=\"" + esc(value) + "\" style=\"color:#005bd3;\">" + esc(value) + "</a>"
+                        : esc(value))
+                .append("</div>"));
+        return out.toString();
+    }
+
+    /**
+     * The line's artwork (unless the whole order shares it and it is already above the table), the
+     * fonts it needs, and each piece's lines with their font — until the body's budget runs out, after
+     * which the attached sheet carries the rest and the body says so.
+     */
+    private static String customization(TrophyItem item, int[] budget, boolean artworkShown) {
+        if (item == null) {
+            return "";
+        }
+        StringBuilder out = new StringBuilder(artworkShown ? "" : artwork(item.artwork()));
+        if (!item.fonts().isEmpty()) {
+            out.append("<div><span style=\"color:#616161;\">Fonts:</span> ")
+                    .append(esc(String.join(", ", item.fonts()))).append("</div>");
+        }
+        int shown = 0;
+        for (TrophyItem.Piece piece : item.pieces()) {
+            if (budget[0] <= 0) {
+                break;
+            }
+            budget[0]--;
+            shown++;
+            out.append("<div style=\"margin-top:6px;\"><div><strong>Piece ").append(piece.number()).append("</strong>");
+            if (piece.texts().isEmpty()) {
+                out.append(" <span style=\"color:#616161;\">no text</span>");
+            }
+            out.append("</div>");
+            for (TrophyItem.Text t : piece.texts()) {
+                out.append("<div>").append(esc(t.label())).append(": ").append(esc(t.text().strip()));
+                if (t.font() != null) {
+                    out.append(" <span style=\"color:#616161;\">(").append(esc(t.font())).append(")</span>");
+                }
+                out.append("</div>");
+            }
+            out.append("</div>");
+        }
+        int left = item.pieces().size() - shown;
+        if (left > 0) {
+            out.append("<div style=\"margin-top:6px;\"><em>").append(shown == 0 ? "All " + left : "The other " + left)
+                    .append(" piece").append(left == 1 ? " is" : "s are")
+                    .append(" in the attached engraving sheet.</em></div>");
+        }
+        return out.toString();
     }
 
     private String shipTo(ShipTo a) {

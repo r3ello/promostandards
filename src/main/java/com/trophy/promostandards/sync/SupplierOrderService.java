@@ -3,6 +3,7 @@ package com.trophy.promostandards.sync;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.trophy.promostandards.shopify.ShopifyGraphQLClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,11 +13,13 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -92,10 +95,13 @@ public class SupplierOrderService {
      * @param orderedQuantity what the customer ordered
      * @param personalization the line's visible properties (Easify's "Line 1", "Engraving Style", …),
      *                        in the order the store shows them; keys differ from product to product
+     * @param customization   the customizer's {@code _trophy_items}: artwork and the text and font of every
+     *                        line on every piece. Null when the line has none (or it could not be read,
+     *                        which blocks the order)
      */
     public record Line(String partId, String title, String variantTitle, String sku, int quantity,
                        int orderedQuantity, BigDecimal unitPrice, String currency,
-                       Map<String, String> personalization) {
+                       Map<String, String> personalization, TrophyItem customization) {
     }
 
     public record ExcludedLine(String title, String sku, int quantity, String reason) {
@@ -262,6 +268,7 @@ public class SupplierOrderService {
         List<ExcludedLine> excluded = new ArrayList<>();
         List<String> blocking = new ArrayList<>();
         List<String> notices = new ArrayList<>();
+        Set<String> groupsSeen = new HashSet<>();
 
         for (JsonNode item : order.path("lineItems").path("nodes")) {
             String partId = text(item.path("variant").path("vendorSku").path("value"));
@@ -278,10 +285,32 @@ public class SupplierOrderService {
                 continue;
             }
             JsonNode money = item.path("originalUnitPriceSet").path("shopMoney");
-            Map<String, String> personalization = personalization(item.path("customAttributes"));
+            // A group's properties belong to the product the shopper configured, not to each component
+            // line it was expanded into: read them with the first of its lines only.
+            String group = text(item.path("lineItemGroup").path("id"));
+            JsonNode attributes = attributes(item, group == null || groupsSeen.add(group));
+            TrophyItem customization = null;
+            String raw = attribute(attributes, TrophyItem.KEY);
+            if (raw != null) {
+                try {
+                    customization = TrophyItem.parse(raw);
+                } catch (IllegalArgumentException e) {
+                    // The engraving is what PaceSetter executes: a PO without it would be engraved blank.
+                    blocking.add(title + ": its customization (" + TrophyItem.KEY + ") could not be read — "
+                            + e.getMessage() + ".");
+                }
+            }
+            // The customizer's record is the whole engraving. Its visible properties next to it repeat
+            // piece 1 only, and "Engraving Logo" is the browser's C:\fakepath of the upload: shown too,
+            // they would be read as the instructions.
+            Map<String, String> personalization = customization != null ? Map.of() : personalization(attributes);
             lines.add(new Line(partId, title, text(item.path("variantTitle")), text(item.path("sku")), open,
                     ordered, money.hasNonNull("amount") ? new BigDecimal(money.path("amount").asText()) : null,
-                    text(money.path("currencyCode")), personalization));
+                    text(money.path("currencyCode")), personalization, customization));
+            if (customization != null && customization.pieces().size() != ordered) {
+                notices.add(title + ": " + customization.pieces().size() + " engraved piece(s) for "
+                        + ordered + " ordered.");
+            }
             if (partId == null) {
                 blocking.add(title + ": a PaceSetter product whose variant has no trophy_sync.vendor_sku, so "
                         + "nothing says which part to order. Sync the product, then reload.");
@@ -290,7 +319,7 @@ public class SupplierOrderService {
                 notices.add(title + ": " + (ordered - open) + " of " + ordered + " already fulfilled; the PO asks for the "
                         + open + " left.");
             }
-            if (personalization.isEmpty()) {
+            if (personalization.isEmpty() && (customization == null || customization.pieces().isEmpty())) {
                 notices.add(title + ": no text to engrave on the line.");
             }
         }
@@ -341,7 +370,7 @@ public class SupplierOrderService {
             return fromAttributes;
         }
         for (JsonNode item : order.path("lineItems").path("nodes")) {
-            String perLine = dateAttribute(item.path("customAttributes"));
+            String perLine = dateAttribute(attributes(item, true));
             if (perLine != null) {
                 return perLine;
             }
@@ -384,6 +413,37 @@ public class SupplierOrderService {
             }
         }
         return visible;
+    }
+
+    /**
+     * The line's own properties, then its group's. A product configured by Trophy Options is turned
+     * into a bundle by its cart transform, and the order keeps what the shopper entered on the
+     * {@code lineItemGroup}, not on the line — the line's own list is empty.
+     */
+    static JsonNode attributes(JsonNode item, boolean withGroup) {
+        ArrayNode all = JSON.createArrayNode();
+        Set<String> keys = new HashSet<>();
+        for (JsonNode a : item.path("customAttributes")) {
+            all.add(a);
+            keys.add(a.path("key").asText());
+        }
+        if (withGroup) {
+            for (JsonNode a : item.path("lineItemGroup").path("customAttributes")) {
+                if (keys.add(a.path("key").asText())) {
+                    all.add(a);
+                }
+            }
+        }
+        return all;
+    }
+
+    private static String attribute(JsonNode attributes, String key) {
+        for (JsonNode a : attributes) {
+            if (key.equals(text(a.path("key")))) {
+                return text(a.path("value"));
+            }
+        }
+        return null;
     }
 
     private static ShipTo shipTo(JsonNode a) {

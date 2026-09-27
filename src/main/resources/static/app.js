@@ -1807,8 +1807,18 @@ function orderPreviewHtml(p) {
 
 	const lineRows = (p.lines || []).map((l) => {
 		const perso = Object.entries(l.personalization || {});
-		const persoHtml = perso.length
-			? `<dl class="ord-perso">${perso.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`
+		// The customizer's record (Trophy Options, _trophy_items): a summary here, every piece in the email preview below.
+		const c = l.customization;
+		const custom = c && c.pieces ? [
+			...Object.entries(c.artwork || {}).map(([k, v]) => /^https?:/.test(v)
+				? `<dt>${esc(k)}</dt><dd><a href="${esc(v)}" target="_blank" rel="noopener">open</a></dd>`
+				: `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`),
+			`<dt>Pieces</dt><dd>${c.pieces.length}</dd>`,
+			...(c.pieces[0] ? [`<dt>Piece ${c.pieces[0].number}</dt><dd>${(c.pieces[0].texts || [])
+				.map((t) => `${esc(t.text)}${t.font ? ` <span class="muted">(${esc(t.font)})</span>` : ''}`).join('<br>') || '—'}</dd>`] : []),
+		].join('') : '';
+		const persoHtml = perso.length || custom
+			? `<dl class="ord-perso">${perso.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}${custom}</dl>`
 			: '<span class="muted">—</span>';
 		const qty = l.quantity === l.orderedQuantity ? `${l.quantity}` : `${l.quantity} <span class="muted">of ${l.orderedQuantity}</span>`;
 		const price = l.unitPrice == null ? '—' : esc(currency(l.currency || 'USD')(l.unitPrice));

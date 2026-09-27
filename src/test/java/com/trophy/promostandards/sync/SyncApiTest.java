@@ -188,7 +188,7 @@ class SyncApiTest {
                 "gid://shopify/Order/7291179761758", "#1046", "1046", "2026-09-22T16:48:24Z", true, "PAID",
                 "UNFULFILLED", null, "5/11/2026", null, "Standard",
                 List.of(new SupplierOrderService.Line("CB35", "Optional Base", null, "PS9250", 1, 1,
-                        new java.math.BigDecimal("36.99"), "USD", java.util.Map.of())),
+                        new java.math.BigDecimal("36.99"), "USD", java.util.Map.of(), null)),
                 List.of(), List.of(), List.of(), null)));
 
         mockMvc.perform(get("/api/orders/7291179761758/pacesetter-po/email"))

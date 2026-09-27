@@ -5,6 +5,7 @@ import jakarta.mail.internet.MimeMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.mail.javamail.MimeMessageHelper;
@@ -89,6 +90,10 @@ public class SupplierOrderMailer {
             }
             helper.setSubject(mail.subject());
             helper.setText(mail.text(), mail.body());
+            for (SupplierOrderEmail.Attachment a : mail.attachments()) {
+                helper.addAttachment(a.filename(),
+                        new ByteArrayResource(a.content().getBytes(StandardCharsets.UTF_8)), a.contentType());
+            }
             sender.send(message);
             log.info("Sent purchase order email to {} (subject: {})", mail.to(), mail.subject());
         } catch (Exception e) {
