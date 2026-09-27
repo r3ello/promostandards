@@ -73,6 +73,12 @@ public class SupplierOrderController {
         return orders.pending();
     }
 
+    /** The orders already emailed to PaceSetter, most recently sent first, with when and to whom. */
+    @GetMapping("/pacesetter-sent")
+    public List<PendingOrder> sent() {
+        return orders.sent();
+    }
+
     /** What this order would send: its PaceSetter lines, the address, and what stops it. Writes nothing. */
     @GetMapping("/{orderId}/pacesetter-po")
     public Preview preview(@PathVariable String orderId) {
