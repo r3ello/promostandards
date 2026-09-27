@@ -34,11 +34,12 @@ import java.util.stream.Stream;
 public class SupplierOrderEmail {
 
     /**
-     * Engraved pieces written out in the body; the rest are only in the attached sheet. An order can
-     * hold 500 pieces, and a body that long is clipped by the mail client (Gmail cuts at ~102 KB)
-     * without saying so — the worst way to lose an engraving.
+     * The most engraved pieces an order may have for the body to list them; above it the body lists
+     * none and the attached sheet is the engraving. All or nothing, never the first few: a body showing
+     * 25 of 500 pieces gets worked from, and the other 475 are never opened. And an order can hold 500,
+     * which a mail client clips (Gmail at ~102 KB) without saying so.
      */
-    static final int BODY_PIECE_LIMIT = 25;
+    static final int BODY_PIECE_LIMIT = 5;
 
     private static final DateTimeFormatter DATE =
             DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH).withZone(ZoneId.systemDefault());
@@ -149,11 +150,16 @@ public class SupplierOrderEmail {
         Map<String, String> shared = sharedArtwork(order.lines());
         v.put("artworkBlock", shared.isEmpty() ? "" : "<div style=\"margin:0 0 16px;\">"
                 + "<div><strong>Artwork for every piece in this order</strong></div>" + artwork(shared) + "</div>");
-        v.put("lines", lines(order.lines(), !shared.isEmpty()));
         int pieces = EngravingSheet.pieces(order);
-        v.put("attachmentLine", pieces == 0 ? "" : "<p style=\"margin:0 0 16px;\">The engraving for all "
-                + pieces + " piece" + (pieces == 1 ? "" : "s") + " &mdash; each line with its font &mdash; "
-                + "is also attached as <strong>" + esc(EngravingSheet.filename(order)) + "</strong>.</p>");
+        boolean inBody = pieces <= BODY_PIECE_LIMIT;
+        String sheet = esc(EngravingSheet.filename(order));
+        v.put("lines", lines(order.lines(), !shared.isEmpty(), inBody, sheet));
+        v.put("attachmentLine", pieces == 0 ? "" : inBody
+                ? "<p style=\"margin:0 0 16px;\">The engraving for all " + pieces + " piece" + (pieces == 1 ? "" : "s")
+                        + " &mdash; each line with its font &mdash; is also attached as <strong>" + sheet + "</strong>.</p>"
+                : "<p style=\"margin:0 0 16px;\"><strong>The engraving for all " + pieces + " pieces &mdash; each line "
+                        + "with its font &mdash; is in the attached " + sheet + "</strong>, one row per engraved line. "
+                        + "This email does not list them.</p>");
         v.put("shipTo", shipTo(order.shipTo()));
         v.put("shippingMethod", order.shippingMethod() == null ? "your usual method" : esc(order.shippingMethod()));
         v.put("contact", props.contact() == null || props.contact().isBlank() ? "there" : esc(props.contact()));
@@ -175,14 +181,13 @@ public class SupplierOrderEmail {
      * have always listed. No prices: PaceSetter prices the order from their own table and invoices it,
      * and a figure of ours in the PO is only something to argue about.
      */
-    private String lines(List<Line> lines, boolean artworkShown) {
+    private String lines(List<Line> lines, boolean artworkShown, boolean piecesInBody, String sheet) {
         StringBuilder rows = new StringBuilder();
-        int[] budget = {BODY_PIECE_LIMIT};
         for (Line line : lines) {
             String engraving = line.personalization().entrySet().stream()
                     .map(e -> "<div><span style=\"color:#616161;\">" + esc(e.getKey()) + ":</span> " + esc(e.getValue()) + "</div>")
                     .reduce("", String::concat)
-                    + customization(line.customization(), budget, artworkShown);
+                    + customization(line.customization(), artworkShown, piecesInBody, sheet);
             rows.append("""
                     <tr>
                       <td style="padding:8px;border-bottom:1px solid #e3e3e3;vertical-align:top;"><strong>%s</strong></td>
@@ -223,10 +228,11 @@ public class SupplierOrderEmail {
 
     /**
      * The line's artwork (unless the whole order shares it and it is already above the table), the
-     * fonts it needs, and each piece's lines with their font — until the body's budget runs out, after
-     * which the attached sheet carries the rest and the body says so.
+     * fonts it needs, and — when the order is small enough — each piece's lines with their font.
+     * Otherwise only how many pieces, and where they are.
      */
-    private static String customization(TrophyItem item, int[] budget, boolean artworkShown) {
+    private static String customization(TrophyItem item, boolean artworkShown, boolean piecesInBody,
+                                        String sheet) {
         if (item == null) {
             return "";
         }
@@ -235,13 +241,12 @@ public class SupplierOrderEmail {
             out.append("<div><span style=\"color:#616161;\">Fonts:</span> ")
                     .append(esc(String.join(", ", item.fonts()))).append("</div>");
         }
-        int shown = 0;
+        if (!piecesInBody) {
+            int n = item.pieces().size();
+            return out.append("<div style=\"margin-top:6px;\"><em>").append(n).append(" piece").append(n == 1 ? "" : "s")
+                    .append(" &mdash; engraving in the attached ").append(sheet).append("</em></div>").toString();
+        }
         for (TrophyItem.Piece piece : item.pieces()) {
-            if (budget[0] <= 0) {
-                break;
-            }
-            budget[0]--;
-            shown++;
             out.append("<div style=\"margin-top:6px;\"><div><strong>Piece ").append(piece.number()).append("</strong>");
             if (piece.texts().isEmpty()) {
                 out.append(" <span style=\"color:#616161;\">no text</span>");
@@ -255,12 +260,6 @@ public class SupplierOrderEmail {
                 out.append("</div>");
             }
             out.append("</div>");
-        }
-        int left = item.pieces().size() - shown;
-        if (left > 0) {
-            out.append("<div style=\"margin-top:6px;\"><em>").append(shown == 0 ? "All " + left : "The other " + left)
-                    .append(" piece").append(left == 1 ? " is" : "s are")
-                    .append(" in the attached engraving sheet.</em></div>");
         }
         return out.toString();
     }
