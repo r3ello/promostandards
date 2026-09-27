@@ -87,20 +87,34 @@ class SupplierOrderEmailTest {
         });
     }
 
-    /** 500 pieces: the body stops at the limit and says where the rest are; the sheet has all of them. */
+    /**
+     * 500 pieces: the body lists none — never the first few, which would be worked from and the rest
+     * missed — and says where they are; the sheet has all of them.
+     */
     @Test
-    void aLargeOrderKeepsTheBodyShortAndTheSheetComplete() {
+    void aLargeOrderListsNoPieceInTheBodyAndAllInTheSheet() {
         EmailPreview mail = email(props(null)).render(order(List.of(customized("GM828", 500, pieces(500))),
                 null, List.of()));
 
-        assertThat(mail.body()).contains("Piece " + SupplierOrderEmail.BODY_PIECE_LIMIT)
-                .doesNotContain("Piece " + (SupplierOrderEmail.BODY_PIECE_LIMIT + 1) + "<")
-                .contains("The other " + (500 - SupplierOrderEmail.BODY_PIECE_LIMIT)
-                        + " pieces are in the attached engraving sheet.", "all 500 pieces");
-        assertThat(mail.body().length()).isLessThan(40_000);
+        assertThat(mail.body()).doesNotContain("Piece 1<", "Name 1")
+                .contains("500 pieces &mdash; engraving in the attached PO-1046-engraving.csv",
+                        "Fonts:</span> Open Sans, Bebas Neue", "This email does not list them.");
+        assertThat(mail.body().length()).isLessThan(15_000);
         String csv = mail.attachments().get(0).content();
         assertThat(csv.split("\r\n")).hasSize(1 + 1000);
         assertThat(csv).startsWith("﻿\"PO\"").contains("\"Name 500\"", "\"Team \"\"A\"\", 2026\"");
+    }
+
+    /** The limit is the order's pieces, not a line's: 3 + 3 is over it, so neither line lists them. */
+    @Test
+    void theLimitCountsEveryPieceOfTheOrder() {
+        EmailPreview atLimit = email(props(null)).render(order(List.of(
+                customized("GM828", 3, pieces(3)), customized("GM829", 2, pieces(2))), null, List.of()));
+        EmailPreview over = email(props(null)).render(order(List.of(
+                customized("GM828", 3, pieces(3)), customized("GM829", 3, pieces(3))), null, List.of()));
+
+        assertThat(atLimit.body()).contains("Piece 3", "also attached as");
+        assertThat(over.body()).doesNotContain("Piece 1<").contains("3 pieces &mdash; engraving in the attached");
     }
 
     /** One logo and one preview per order: written once above the table, never on each line or CSV row. */

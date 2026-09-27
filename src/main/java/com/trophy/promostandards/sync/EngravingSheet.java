@@ -7,8 +7,8 @@ import com.trophy.promostandards.sync.SupplierOrderService.Preview;
 import java.util.List;
 
 /**
- * Every engraved piece of an order as one CSV, attached to the PO. The body shows the first
- * {@link SupplierOrderEmail#BODY_PIECE_LIMIT}; this carries all of them, whatever the count — an
+ * Every engraved piece of an order as one CSV, attached to the PO. The body lists the pieces only
+ * up to {@link SupplierOrderEmail#BODY_PIECE_LIMIT} in the whole order; this carries all of them, whatever the count — an
  * order of 500 pieces is 500 × lines rows, a few tens of KB, which no mail client clips.
  *
  * <p>No artwork column: the logo and the preview are one per order line (in practice one per order),
