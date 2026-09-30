@@ -9,6 +9,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
@@ -96,7 +97,16 @@ public record TrophyItem(Map<String, String> artwork, List<Piece> pieces) {
         }
         String csv = root.path(CSV).asText("").trim();
         if (!csv.isEmpty() && root.path("items").isEmpty()) {
-            List<Piece> pieces = csvPieces(csvLoader.apply(csv));
+            // The spreadsheet holds only text; the fonts chosen in the customizer come alongside, one per
+            // line for every piece (#1055: {"fonts":{"line-1-font":"Roboto"}}), keyed like items[]' values.
+            Map<String, String> fonts = new LinkedHashMap<>();
+            root.path("fonts").fields().forEachRemaining(f -> {
+                Matcher m = FONT.matcher(f.getKey());
+                if (m.matches() && f.getValue().isTextual() && !f.getValue().asText().isBlank()) {
+                    fonts.put(label(m.group(1)).toLowerCase(Locale.ROOT), f.getValue().asText().trim());
+                }
+            });
+            List<Piece> pieces = csvPieces(csvLoader.apply(csv), fonts);
             JsonNode count = root.path("count");
             if (count.canConvertToInt() && count.asInt() != pieces.size()) {
                 // A short file is a truncated download or a changed upload: the PO would miss pieces.
@@ -157,9 +167,12 @@ public record TrophyItem(Map<String, String> artwork, List<Piece> pieces) {
     /**
      * The shopper's spreadsheet: a header naming the columns ({@code Line 1,Line 2}), then one row per
      * piece. A {@code <column> Font} column is that column's font (none seen yet, but it is how the
-     * JSON form pairs them). A row with nothing in it is not a piece.
+     * JSON form pairs them); without one, the column's font is the record's for that line. A row with
+     * nothing in it is not a piece.
+     *
+     * @param columnFonts font per column, keyed by its lower-cased label ("line 1")
      */
-    static List<Piece> csvPieces(String text) {
+    static List<Piece> csvPieces(String text, Map<String, String> columnFonts) {
         List<List<String>> rows = csvRows(text.startsWith("﻿") ? text.substring(1) : text);
         if (rows.isEmpty()) {
             throw new IllegalArgumentException("its CSV is empty");
@@ -186,8 +199,9 @@ public record TrophyItem(Map<String, String> artwork, List<Piece> pieces) {
                     continue;
                 }
                 Integer f = fontOf.get(c);
-                String font = f == null || f >= row.size() || row.get(f).isBlank() ? null : row.get(f).trim();
                 String label = header.get(c).isEmpty() ? "Column " + (c + 1) : header.get(c);
+                String font = f == null || f >= row.size() || row.get(f).isBlank()
+                        ? columnFonts.get(label.toLowerCase(Locale.ROOT)) : row.get(f).trim();
                 texts.add(new Text("engraving", label, row.get(c), font));
             }
             pieces.add(new Piece(pieces.size() + 1, texts));
