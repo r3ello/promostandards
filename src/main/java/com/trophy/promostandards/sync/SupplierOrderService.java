@@ -60,13 +60,15 @@ public class SupplierOrderService {
     private final SupplierOrderEmail email;
     private final SupplierOrderMailer mailer;
     private final SupplierOrderProperties props;
+    private final TrophyCsv trophyCsv;
 
     public SupplierOrderService(ShopifyGraphQLClient gql, SupplierOrderEmail email,
-                                SupplierOrderMailer mailer, SupplierOrderProperties props) {
+                                SupplierOrderMailer mailer, SupplierOrderProperties props, TrophyCsv trophyCsv) {
         this.gql = gql;
         this.email = email;
         this.mailer = mailer;
         this.props = props;
+        this.trophyCsv = trophyCsv;
     }
 
     /**
@@ -344,7 +346,7 @@ public class SupplierOrderService {
             String raw = attribute(attributes, TrophyItem.KEY);
             if (raw != null) {
                 try {
-                    customization = TrophyItem.parse(raw);
+                    customization = TrophyItem.parse(raw, trophyCsv::fetch);
                 } catch (IllegalArgumentException e) {
                     // The engraving is what PaceSetter executes: a PO without it would be engraved blank.
                     blocking.add(title + ": its customization (" + TrophyItem.KEY + ") could not be read — "
