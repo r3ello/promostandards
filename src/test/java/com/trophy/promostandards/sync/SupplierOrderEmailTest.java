@@ -83,7 +83,7 @@ class SupplierOrderEmailTest {
             assertThat(a.contentType()).isEqualTo("text/csv");
             assertThat(a.content().split("\r\n")).hasSize(1 + 6);   // header + 3 pieces × 2 lines
             assertThat(a.content()).contains(
-                    "\"1046\",\"1\",\"GM828\",\"Red/Black Spiral Teardrop Art Glass\",\"1\",\"Line 2\",\"text line2 \",\"Bebas Neue\"");
+                    "\"1046\",\"1\",\"GM828\",\"Red/Black Spiral Teardrop Art Glass\",\"3\",\"1\",\"Line 2\",\"text line2 \",\"Bebas Neue\"");
         });
     }
 
@@ -134,6 +134,24 @@ class SupplierOrderEmailTest {
 
         assertThat(differing.body()).doesNotContain("Artwork for every piece")
                 .contains("href=\"" + preview + "\"", "href=\"https://cdn.shopify.com/ss-2.png\"");
+    }
+
+    /**
+     * #1051: GM828 × 10 customized and CB35 × 1 with nothing to engrave. The sheet is what PaceSetter
+     * works from, so it lists both — a product missing from it reads as a product not ordered.
+     */
+    @Test
+    void theSheetListsEveryLineOfTheOrderNotOnlyTheCustomizedOnes() {
+        EmailPreview mail = email(props(null)).render(order(List.of(customized("GM828", 10, pieces(10)),
+                line("CB35", "Base", Map.of()), line("GI307", "Plaque", Map.of("Line 1", "Coach Ann"))),
+                null, List.of()));
+
+        String csv = mail.attachments().get(0).content();
+        assertThat(csv.split("\r\n")).hasSize(1 + 20 + 1 + 1);
+        assertThat(csv).contains("\"Quantity\"",
+                "\"1046\",\"1\",\"GM828\",\"Red/Black Spiral Teardrop Art Glass\",\"10\",\"10\",\"Line 1\",\"Name 10\"",
+                "\"1046\",\"2\",\"CB35\",\"Base\",\"2\",\"\",\"\",\"\",\"\"",
+                "\"1046\",\"3\",\"GI307\",\"Plaque\",\"2\",\"\",\"Line 1\",\"Coach Ann\",\"\"");
     }
 
     @Test

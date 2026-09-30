@@ -7,7 +7,7 @@ import com.trophy.promostandards.sync.SupplierOrderService.Preview;
 import java.util.List;
 
 /**
- * Every engraved piece of an order as one CSV, attached to the PO. The body lists the pieces only
+ * Every line of the PO and every engraved piece as one CSV, attached to the PO. The body lists the pieces only
  * up to {@link SupplierOrderEmail#BODY_PIECE_LIMIT} in the whole order; this carries all of them, whatever the count — an
  * order of 500 pieces is 500 × lines rows, a few tens of KB, which no mail client clips.
  *
@@ -21,7 +21,7 @@ import java.util.List;
  */
 final class EngravingSheet {
 
-    static final List<String> HEADER = List.of("PO", "Order line", "Item", "Description", "Piece", "Field",
+    static final List<String> HEADER = List.of("PO", "Order line", "Item", "Description", "Quantity", "Piece", "Field",
             "Text", "Font");
 
     private EngravingSheet() {
@@ -37,7 +37,14 @@ final class EngravingSheet {
                 .mapToInt(l -> l.customization().pieces().size()).sum();
     }
 
-    /** @return the sheet, or null when no line has a piece to engrave */
+    /**
+     * Every line of the PO, not only the customized ones: the sheet is what the engraver works from, and
+     * a product missing from it reads as a product not ordered (#1051: GM828 × 10 listed, CB35 not).
+     * A customized line gives a row per engraved line of each piece; a line with plain properties
+     * (Easify) a row per property; a line with nothing to engrave one row, so it is still there.
+     *
+     * @return the sheet, or null when no line has a piece to engrave
+     */
     static Attachment of(Preview order) {
         if (pieces(order) == 0) {
             return null;
@@ -47,24 +54,32 @@ final class EngravingSheet {
         int lineNo = 0;
         for (Line line : order.lines()) {
             lineNo++;
+            List<String> head = List.of(order.poNumber(), String.valueOf(lineNo),
+                    line.partId() == null ? "?" : line.partId(), line.title(), String.valueOf(line.quantity()));
             TrophyItem item = line.customization();
-            if (item == null) {
-                continue;
-            }
-            String part = line.partId() == null ? "?" : line.partId();
-            for (TrophyItem.Piece piece : item.pieces()) {
-                if (piece.texts().isEmpty()) {
-                    row(csv, List.of(order.poNumber(), String.valueOf(lineNo), part, line.title(),
-                            String.valueOf(piece.number()), "", "", ""));
+            if (item != null && !item.pieces().isEmpty()) {
+                for (TrophyItem.Piece piece : item.pieces()) {
+                    String n = String.valueOf(piece.number());
+                    if (piece.texts().isEmpty()) {
+                        row(csv, head, n, "", "", "");
+                    }
+                    for (TrophyItem.Text t : piece.texts()) {
+                        row(csv, head, n, t.label(), t.text(), t.font() == null ? "" : t.font());
+                    }
                 }
-                for (TrophyItem.Text t : piece.texts()) {
-                    row(csv, List.of(order.poNumber(), String.valueOf(lineNo), part, line.title(),
-                            String.valueOf(piece.number()), t.label(), t.text(),
-                            t.font() == null ? "" : t.font()));
-                }
+            } else if (!line.personalization().isEmpty()) {
+                line.personalization().forEach((k, v) -> row(csv, head, "", k, v, ""));
+            } else {
+                row(csv, head, "", "", "", "");
             }
         }
         return new Attachment(filename(order), "text/csv", csv.toString());
+    }
+
+    private static void row(StringBuilder csv, List<String> head, String... rest) {
+        List<String> all = new java.util.ArrayList<>(head);
+        all.addAll(List.of(rest));
+        row(csv, all);
     }
 
     /** RFC 4180: every field quoted, quotes doubled, CRLF — text a shopper typed can hold any of them. */

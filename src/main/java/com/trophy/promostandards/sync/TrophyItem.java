@@ -9,8 +9,10 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -44,6 +46,8 @@ public record TrophyItem(Map<String, String> artwork, List<Piece> pieces) {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Pattern NUMBERED = Pattern.compile("(.+?)-(\\d+)");
     private static final Pattern FONT = Pattern.compile("(.+?-\\d+)-font");
+    private static final Pattern CSV_FONT = Pattern.compile("(?i)(.+?)[\\s_-]*font");
+    private static final String CSV = "csv";
 
     /** @param number the customizer's own piece number ({@code item}), 1-based */
     public record Piece(int number, List<Text> texts) {
@@ -59,6 +63,21 @@ public record TrophyItem(Map<String, String> artwork, List<Piece> pieces) {
 
     /** @throws IllegalArgumentException when the value is not the customizer's JSON */
     public static TrophyItem parse(String json) {
+        return parse(json, url -> {
+            throw new IllegalArgumentException("its engraving is in a CSV file, which was not downloaded");
+        });
+    }
+
+    /**
+     * Also reads the large-order form: past a size the customizer stops writing {@code items[]} and
+     * uploads the shopper's spreadsheet instead, recording {@code {"csv":"https://cdn.shopify.com/…",
+     * "count":223}} (#1053). Its rows become the pieces, so everything downstream is the same.
+     *
+     * @param csvLoader the file's text for its URL; throws {@link IllegalArgumentException} when it cannot
+     * @throws IllegalArgumentException when the value is not the customizer's JSON, or its CSV cannot be
+     *                                  read or holds a different number of pieces than it says
+     */
+    public static TrophyItem parse(String json, Function<String, String> csvLoader) {
         JsonNode root;
         try {
             root = JSON.readTree(json);
@@ -71,9 +90,30 @@ public record TrophyItem(Map<String, String> artwork, List<Piece> pieces) {
         Map<String, String> artwork = new LinkedHashMap<>();
         for (Iterator<Map.Entry<String, JsonNode>> it = root.fields(); it.hasNext(); ) {
             Map.Entry<String, JsonNode> f = it.next();
-            if (f.getValue().isValueNode() && !f.getValue().asText().isBlank()) {
+            // The CSV's URL and its count describe the pieces, not artwork for the engraver.
+            if (f.getValue().isTextual() && !f.getValue().asText().isBlank() && !CSV.equals(f.getKey())) {
                 artwork.put(f.getKey(), f.getValue().asText().trim());
             }
+        }
+        String csv = root.path(CSV).asText("").trim();
+        if (!csv.isEmpty() && root.path("items").isEmpty()) {
+            // The spreadsheet holds only text; the fonts chosen in the customizer come alongside, one per
+            // line for every piece (#1055: {"fonts":{"line-1-font":"Roboto"}}), keyed like items[]' values.
+            Map<String, String> fonts = new LinkedHashMap<>();
+            root.path("fonts").fields().forEachRemaining(f -> {
+                Matcher m = FONT.matcher(f.getKey());
+                if (m.matches() && f.getValue().isTextual() && !f.getValue().asText().isBlank()) {
+                    fonts.put(label(m.group(1)).toLowerCase(Locale.ROOT), f.getValue().asText().trim());
+                }
+            });
+            List<Piece> pieces = csvPieces(csvLoader.apply(csv), fonts);
+            JsonNode count = root.path("count");
+            if (count.canConvertToInt() && count.asInt() != pieces.size()) {
+                // A short file is a truncated download or a changed upload: the PO would miss pieces.
+                throw new IllegalArgumentException("its CSV has " + pieces.size() + " piece(s) but the record says "
+                        + count.asInt());
+            }
+            return new TrophyItem(artwork, pieces);
         }
         List<Piece> pieces = new ArrayList<>();
         JsonNode items = root.path("items");
@@ -122,6 +162,92 @@ public record TrophyItem(Map<String, String> artwork, List<Piece> pieces) {
             texts.add(new Text(group, label(key), text, font == null || font.isBlank() ? null : font));
         }
         return texts;
+    }
+
+    /**
+     * The shopper's spreadsheet: a header naming the columns ({@code Line 1,Line 2}), then one row per
+     * piece. A {@code <column> Font} column is that column's font (none seen yet, but it is how the
+     * JSON form pairs them); without one, the column's font is the record's for that line. A row with
+     * nothing in it is not a piece.
+     *
+     * @param columnFonts font per column, keyed by its lower-cased label ("line 1")
+     */
+    static List<Piece> csvPieces(String text, Map<String, String> columnFonts) {
+        List<List<String>> rows = csvRows(text.startsWith("﻿") ? text.substring(1) : text);
+        if (rows.isEmpty()) {
+            throw new IllegalArgumentException("its CSV is empty");
+        }
+        List<String> header = rows.get(0).stream().map(String::trim).toList();
+        Map<Integer, Integer> fontOf = new LinkedHashMap<>();   // text column → its font column
+        for (int c = 0; c < header.size(); c++) {
+            Matcher m = CSV_FONT.matcher(header.get(c));
+            if (m.matches()) {
+                int column = header.indexOf(m.group(1).trim());
+                if (column >= 0) {
+                    fontOf.put(column, c);
+                }
+            }
+        }
+        List<Piece> pieces = new ArrayList<>();
+        for (List<String> row : rows.subList(1, rows.size())) {
+            if (row.stream().allMatch(String::isBlank)) {
+                continue;
+            }
+            List<Text> texts = new ArrayList<>();
+            for (int c = 0; c < header.size() && c < row.size(); c++) {
+                if (fontOf.containsValue(c) || row.get(c).isBlank()) {
+                    continue;
+                }
+                Integer f = fontOf.get(c);
+                String label = header.get(c).isEmpty() ? "Column " + (c + 1) : header.get(c);
+                String font = f == null || f >= row.size() || row.get(f).isBlank()
+                        ? columnFonts.get(label.toLowerCase(Locale.ROOT)) : row.get(f).trim();
+                texts.add(new Text("engraving", label, row.get(c), font));
+            }
+            pieces.add(new Piece(pieces.size() + 1, texts));
+        }
+        return pieces;
+    }
+
+    /** RFC 4180: quoted fields may hold commas, doubled quotes and line breaks; CRLF or LF. */
+    private static List<List<String>> csvRows(String text) {
+        List<List<String>> rows = new ArrayList<>();
+        List<String> row = new ArrayList<>();
+        StringBuilder field = new StringBuilder();
+        boolean quoted = false;
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            if (quoted) {
+                if (ch == '"' && i + 1 < text.length() && text.charAt(i + 1) == '"') {
+                    field.append('"');
+                    i++;
+                } else if (ch == '"') {
+                    quoted = false;
+                } else {
+                    field.append(ch);
+                }
+            } else if (ch == '"') {
+                quoted = true;
+            } else if (ch == ',') {
+                row.add(field.toString());
+                field.setLength(0);
+            } else if (ch == '\n' || ch == '\r') {
+                if (ch == '\r' && i + 1 < text.length() && text.charAt(i + 1) == '\n') {
+                    i++;
+                }
+                row.add(field.toString());
+                field.setLength(0);
+                rows.add(row);
+                row = new ArrayList<>();
+            } else {
+                field.append(ch);
+            }
+        }
+        if (field.length() > 0 || !row.isEmpty()) {
+            row.add(field.toString());
+            rows.add(row);
+        }
+        return rows;
     }
 
     /** {@code line-1} → "Line 1", {@code text-box-2} → "Text box 2". */

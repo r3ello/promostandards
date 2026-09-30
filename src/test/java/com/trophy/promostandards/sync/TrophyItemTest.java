@@ -50,4 +50,42 @@ class TrophyItemTest {
         assertThatThrownBy(() -> TrophyItem.parse("{\"items\":[")).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> TrophyItem.parse("[1,2]")).isInstanceOf(IllegalArgumentException.class);
     }
+
+    /** The large-order form: a header, one row per piece, a font column paired by name, blank rows skipped. */
+    @Test
+    void readsTheSpreadsheetForm() {
+        TrophyItem item = TrophyItem.parse("{\"preview\":\"https://cdn.shopify.com/p.png\",\"csv\":\"https://cdn.shopify.com/a.csv\",\"count\":2}",
+                url -> "Line 1,Line 1 Font,Line 2\nAnn,Open Sans,\"say \"\"hi\"\"\"\n,,\nBob,,Two\n");
+
+        assertThat(item.artwork()).containsOnlyKeys("preview");
+        assertThat(item.pieces()).hasSize(2);
+        assertThat(item.pieces().get(0).texts()).containsExactly(
+                new TrophyItem.Text("engraving", "Line 1", "Ann", "Open Sans"),
+                new TrophyItem.Text("engraving", "Line 2", "say \"hi\"", null));
+        assertThat(item.pieces().get(1).number()).isEqualTo(2);
+    }
+
+    /** #1055: the spreadsheet holds only text; the record's fonts apply to their column on every piece. */
+    @Test
+    void appliesTheRecordsFontsToTheSpreadsheetsColumns() {
+        TrophyItem item = TrophyItem.parse("{\"csv\":\"https://cdn.shopify.com/a.csv\",\"count\":2,"
+                        + "\"fonts\":{\"line-1-font\":\"Roboto\"}}",
+                url -> "﻿Line 1,Line 2,Line 3\r\nSchool of Arts,Ralph B. Lara,2026\r\nSchool of Arts,Pablo R. Yordy,2026");
+
+        assertThat(item.artwork()).isEmpty();
+        assertThat(item.pieces()).hasSize(2);
+        assertThat(item.pieces().get(1).texts()).containsExactly(
+                new TrophyItem.Text("engraving", "Line 1", "School of Arts", "Roboto"),
+                new TrophyItem.Text("engraving", "Line 2", "Pablo R. Yordy", null),
+                new TrophyItem.Text("engraving", "Line 3", "2026", null));
+        assertThat(item.fonts()).containsExactly("Roboto");
+    }
+
+    /** Fewer rows than the record says is a truncated or changed file: the PO would miss pieces. */
+    @Test
+    void refusesASpreadsheetShorterThanItsCount() {
+        assertThatThrownBy(() -> TrophyItem.parse("{\"csv\":\"https://cdn.shopify.com/a.csv\",\"count\":223}",
+                url -> "Line 1\nAnn\n"))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("1 piece(s) but the record says 223");
+    }
 }

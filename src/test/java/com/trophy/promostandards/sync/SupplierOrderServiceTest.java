@@ -38,6 +38,7 @@ class SupplierOrderServiceTest {
     private final List<Map<?, ?>> variables = new ArrayList<>();
     private final List<String> operations = new ArrayList<>();
     private final SupplierOrderMailer mailer = mock(SupplierOrderMailer.class);
+    private final TrophyCsv trophyCsv = mock(TrophyCsv.class);
 
     /** A PaceSetter line on a synced variant, with Easify's engraving. */
     private static final String CB35_ENGRAVED = """
@@ -122,7 +123,7 @@ class SupplierOrderServiceTest {
         ShopifyGraphQLClient gql = new ShopifyGraphQLClient(http, tokens, shopify, TEST_RETRY);
         return new SupplierOrderService(gql,
                 new SupplierOrderEmail(props, new org.springframework.core.io.DefaultResourceLoader(), mailer),
-                mailer, props);
+                mailer, props, trophyCsv);
     }
 
     private Preview preview(String orderJson) {
@@ -259,6 +260,35 @@ class SupplierOrderServiceTest {
         Preview p = preview(order("7300090560606", "#1049", "", gm828("{\"items\":[")));
 
         assertThat(p.blocking()).singleElement().asString().contains("_trophy_item", "could not be read");
+    }
+
+    /** #1053: past a size Trophy Options uploads the shopper's spreadsheet and records only its link. */
+    private static final String LARGE_ORDER_RECORD = """
+            {"csv":"https://cdn.shopify.com/s/files/1/0655/6231/2798/files/trophy-items-engraving_template-1790705634936.csv?v=1790705636","count":3}""";
+
+    @Test
+    void readsTheSpreadsheetOfALargeOrderAsItsPieces() throws Exception {
+        when(trophyCsv.fetch(org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn("\uFEFFLine 1,Line 2\r\nAnn,Coach\r\nBob,\r\n\"Cruz, Jr.\",Captain\r\n");
+        Preview p = preview(order("7302088687710", "#1053", "", gm828(LARGE_ORDER_RECORD)));
+
+        assertThat(p.lines()).singleElement().satisfies(l -> {
+            assertThat(l.customization().pieces()).hasSize(3);
+            assertThat(l.customization().pieces().get(2).texts()).extracting(TrophyItem.Text::text)
+                    .containsExactly("Cruz, Jr.", "Captain");
+            assertThat(l.customization().artwork()).isEmpty();   // the link is the pieces, not artwork
+        });
+        assertThat(p.blocking()).isEmpty();
+    }
+
+    /** A spreadsheet that cannot be had is an order whose engraving is unknown: it stops. */
+    @Test
+    void aSpreadsheetThatCannotBeDownloadedBlocksTheOrder() throws Exception {
+        when(trophyCsv.fetch(org.mockito.ArgumentMatchers.anyString()))
+                .thenThrow(new IllegalArgumentException("its CSV could not be downloaded (HTTP 404)"));
+        Preview p = preview(order("7302088687710", "#1053", "", gm828(LARGE_ORDER_RECORD)));
+
+        assertThat(p.blocking()).singleElement().asString().contains("could not be read", "HTTP 404");
     }
 
     @Test
