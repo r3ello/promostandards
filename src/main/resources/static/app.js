@@ -2012,11 +2012,19 @@ function orderEmailHtml(m) {
 	const missing = (m.missing || []).length
 		? `<div class="state--warn"><strong>Before this can go out</strong><ul>${m.missing.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>`
 		: '';
+	// What goes with the message (the engraving sheet), downloadable as it will be attached: for a large
+	// order it is the only place the engraving is, so it has to be readable before the send.
+	const attachments = (m.attachments || []).map((a) => {
+		const rows = Math.max(0, String(a.content || '').split('\r\n').filter(Boolean).length - 1);
+		const href = `data:${a.contentType || 'text/plain'};charset=utf-8,${encodeURIComponent(a.content || '')}`;
+		return `<a href="${esc(href)}" download="${esc(a.filename)}">${esc(a.filename)}</a> <span class="muted">(${rows} row${rows === 1 ? '' : 's'})</span>`;
+	}).join(' · ');
 	// srcdoc, so the message renders as PaceSetter sees it without its styles reaching this page.
 	return `${missing}
 		<div class="ord-email__head">
 			${editable('To', 'to', m.to)}${editable('Cc', 'cc', m.cc)}${editable('Bcc', 'bcc', m.bcc)}
 			${readonly('From', m.from)}${readonly('Reply-To', m.replyTo)}${readonly('Subject', m.subject)}
+			${attachments ? `<div class="ord-email__field"><span>Attached</span><span>${attachments}</span></div>` : ''}
 		</div>
 		<div class="ord-email__changed" data-changed hidden></div>
 		<iframe class="ord-email__body" title="Email preview" sandbox srcdoc="${esc(m.body)}"></iframe>`;
