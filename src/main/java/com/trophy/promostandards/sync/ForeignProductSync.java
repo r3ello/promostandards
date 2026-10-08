@@ -58,7 +58,7 @@ class ForeignProductSync {
     private static final int MEDIA_READY_ATTEMPTS = 8;
 
     /** Option names this app knows how to write. Anything else means hands off the variants. */
-    private static final Set<String> KNOWN_OPTIONS = Set.of("title", "color", "size");
+    private static final Set<String> KNOWN_OPTIONS = Set.of("title", "color", "size", "year");
 
     private final ShopifyGraphQLClient gql;
     private final CatalogService catalog;
@@ -69,11 +69,15 @@ class ForeignProductSync {
     private final ImageProperties images;
     /** What a product with no legacy number puts in front of its part ids to make a SKU. */
     private final String skuPrefix;
+    /** Whether a supplier image URL is worth publishing (see {@link ImageUrlProbe}). */
+    private final java.util.function.Predicate<String> imageExists;
 
     ForeignProductSync(ShopifyGraphQLClient gql, CatalogService catalog, PricingPolicy pricingPolicy,
                        ShopifyProperties shopify, SyncProperties props, ObjectMapper objectMapper,
-                       ImageProperties images, String skuPrefix) {
+                       ImageProperties images, String skuPrefix,
+                       java.util.function.Predicate<String> imageExists) {
         this.images = images;
+        this.imageExists = imageExists;
         this.skuPrefix = skuPrefix;
         this.gql = gql;
         this.catalog = catalog;
@@ -107,10 +111,20 @@ class ForeignProductSync {
         SupplierProduct union = unioned.product();
         List<StoreVariant> store = storeVariants(storeProduct);
         Map<String, JsonNode> options = optionsByName(storeProduct);
+        boolean writable = writableShape(productId, gid, storeProduct);
 
-        List<String> colorLabels = VariantOptions.colorLabels(union.variants());
-        boolean emitSize = VariantOptions.hasSize(union.variants()) || options.containsKey("size");
-        ForeignVariantPlan plan = ForeignVariantPlan.of(union.variants(), colorLabels, emitSize, store,
+        // A years-of-service family (CD902Y1 … CD902Y50) is chosen by year and nothing else: one Year
+        // option, no Color, no Size. A product synced before that rule carries Color/Size, and is
+        // converted in place first; when that cannot be done safely it keeps Color/Size.
+        List<String> years = VariantOptions.yearLabels(union.variants());
+        if (years != null && !(writable && toYearOption(gid, options))) {
+            years = null;
+        }
+        String primary = years != null ? VariantOptions.YEAR : VariantOptions.COLOR;
+        List<String> labels = years != null ? years : VariantOptions.colorLabels(union.variants());
+        boolean emitSize = years == null
+                && (VariantOptions.hasSize(union.variants()) || options.containsKey("size"));
+        ForeignVariantPlan plan = ForeignVariantPlan.of(union.variants(), labels, emitSize, store,
                 v -> unioned.supplierIdByKey().get(variantKey(v)));
 
         // The store keeps its own numbering: the legacy catalogue's SKU plus what tells the
@@ -124,12 +138,11 @@ class ForeignProductSync {
         // only render a selector with nothing to select — and this app is what put them there.
         boolean single = union.variants().size() == 1;
 
-        boolean writable = writableShape(productId, gid, storeProduct);
         if (writable) {
             if (single) {
                 revertToSimpleProduct(gid, options);
             } else {
-                ensureOptions(gid, options, plan, emitSize);
+                ensureOptions(gid, options, plan, emitSize, primary);
             }
         }
         if (!plan.orphans().isEmpty()) {
@@ -140,9 +153,12 @@ class ForeignProductSync {
                     plan.orphans().size(),
                     plan.orphans().stream().map(ForeignVariantPlan.StoreVariant::sku).toList());
         }
-        int updated = updateExisting(gid, plan, writable, emitSize, skuByPart, single);
+        int updated = updateExisting(gid, plan, writable, emitSize, primary, skuByPart, single);
         Map<String, String> createdIds = writable && !single
-                ? createMissing(gid, plan, emitSize, skuByPart) : Map.of();
+                ? createMissing(gid, plan, emitSize, primary, skuByPart) : Map.of();
+        if (years != null) {
+            orderYears(gid, years);
+        }
         int inventory = pushInventory(gid, plan, writable);
         int published = syncMedia(gid, union, storeProduct, plan, createdIds, skuByPart);
         List<String> added = extendSupplierIds(gid, imported, unioned.discoveredIds());
@@ -180,8 +196,10 @@ class ForeignProductSync {
         for (Variant v : variants) {
             supplierIds.add(unioned.supplierIdByKey().getOrDefault(variantKey(v), v.supplierPartId()));
         }
-        return new GroupPreview(unioned.product(), VariantOptions.colorLabels(variants),
-                List.copyOf(supplierIds), VariantOptions.hasSize(variants));
+        List<String> years = VariantOptions.yearLabels(variants);
+        return new GroupPreview(unioned.product(),
+                years != null ? years : VariantOptions.colorLabels(variants),
+                List.copyOf(supplierIds), years == null && VariantOptions.hasSize(variants));
     }
 
     /**
@@ -334,7 +352,8 @@ class ForeignProductSync {
             String size = null;
             for (JsonNode o : n.path("selectedOptions")) {
                 String name = o.path("name").asText("");
-                if (VariantOptions.COLOR.equalsIgnoreCase(name)) {
+                // Year stands where Color does: it is the option a years family is chosen by.
+                if (VariantOptions.COLOR.equalsIgnoreCase(name) || VariantOptions.YEAR.equalsIgnoreCase(name)) {
                     color = o.path("value").asText(null);
                 } else if (VariantOptions.SIZE.equalsIgnoreCase(name)) {
                     size = o.path("value").asText(null);
@@ -446,14 +465,78 @@ class ForeignProductSync {
         }
     }
 
+    /**
+     * Turns a product synced before the Year rule — {@code Color} + {@code Size} — into a Year
+     * product, keeping every variant: {@code Size} is dropped and {@code Color} renamed. The values
+     * are rewritten afterwards with the rest of the variant, like any other sync.
+     *
+     * <p>{@code Size} goes first and {@code NON_DESTRUCTIVE}: Shopify then refuses rather than
+     * deletes when two variants would be left with the same Color value, and nothing has changed
+     * yet. Only after that is Color renamed, so a refusal leaves the product as it was and the
+     * caller keeps Color/Size.
+     *
+     * @return whether the product now has (or will get, from its Title option) a Year option;
+     * {@code options} is updated to match
+     */
+    private boolean toYearOption(String gid, Map<String, JsonNode> options) {
+        if (options.containsKey("year") || !options.containsKey("color")) {
+            return true;    // already Year, or Title / nothing — ensureOptions names it Year
+        }
+        JsonNode size = options.get("size");
+        if (size != null) {
+            try {
+                Map<String, Object> vars = Map.of("productId", gid,
+                        "options", List.of(size.path("id").asText()), "strategy", "NON_DESTRUCTIVE");
+                checkUserErrors(require(gql.execute(ShopifyGraphQL.PRODUCT_OPTIONS_DELETE, vars))
+                        .path("productOptionsDelete"), "productOptionsDelete");
+            } catch (RuntimeException e) {
+                log.warn("Could not drop the Size option of years family {}; keeping Color/Size: {}",
+                        gid, e.getMessage());
+                return false;
+            }
+            options.remove("size");
+        }
+        JsonNode color = options.get("color");
+        Map<String, Object> vars = new LinkedHashMap<>();
+        vars.put("productId", gid);
+        vars.put("option", Map.of("id", color.path("id").asText(), "name", VariantOptions.YEAR));
+        vars.put("variantStrategy", "LEAVE_AS_IS");
+        checkUserErrors(require(gql.execute(ShopifyGraphQL.PRODUCT_OPTION_UPDATE, vars))
+                .path("productOptionUpdate"), "productOptionUpdate");
+        options.put("year", options.remove("color"));
+        log.info("Converted {} to a single Year option", gid);
+        return true;
+    }
+
+    /**
+     * Puts the years in numeric order — 1, 2, 5, 10 rather than the 1, 10, 15, 2 that creation
+     * order (the SKUs' alphabetical order) leaves. Cosmetic, so never fatal.
+     */
+    private void orderYears(String gid, List<String> years) {
+        List<String> sorted = years.stream().distinct()
+                .sorted(java.util.Comparator.comparingInt(Integer::parseInt)).toList();
+        List<Map<String, Object>> values = new ArrayList<>();
+        for (String year : sorted) {
+            values.add(Map.of("name", year));
+        }
+        try {
+            Map<String, Object> vars = Map.of("productId", gid,
+                    "options", List.of(Map.of("name", VariantOptions.YEAR, "values", values)));
+            checkUserErrors(require(gql.execute(ShopifyGraphQL.PRODUCT_OPTIONS_REORDER, vars))
+                    .path("productOptionsReorder"), "productOptionsReorder");
+        } catch (RuntimeException e) {
+            log.warn("Could not put the years of {} in order: {}", gid, e.getMessage());
+        }
+    }
+
     private void ensureOptions(String gid, Map<String, JsonNode> options, ForeignVariantPlan plan,
-                               boolean emitSize) {
+                               boolean emitSize, String primary) {
         Entry first = plan.adopted() != null ? plan.adopted()
                 : plan.entries().isEmpty() ? null : plan.entries().get(0);
         if (first == null) {
             return;
         }
-        if (!options.containsKey("color")) {
+        if (!options.containsKey(primary.toLowerCase(Locale.ROOT))) {
             JsonNode title = options.get("title");
             if (title != null) {
                 List<Map<String, Object>> valuesToUpdate = new ArrayList<>();
@@ -464,13 +547,13 @@ class ForeignProductSync {
                 }
                 Map<String, Object> vars = new LinkedHashMap<>();
                 vars.put("productId", gid);
-                vars.put("option", Map.of("id", title.path("id").asText(), "name", VariantOptions.COLOR));
+                vars.put("option", Map.of("id", title.path("id").asText(), "name", primary));
                 vars.put("optionValuesToUpdate", valuesToUpdate);
                 vars.put("variantStrategy", "LEAVE_AS_IS");
                 checkUserErrors(require(gql.execute(ShopifyGraphQL.PRODUCT_OPTION_UPDATE, vars))
                         .path("productOptionUpdate"), "productOptionUpdate");
             } else {
-                createOption(gid, VariantOptions.COLOR, 1, first.colorLabel());
+                createOption(gid, primary, 1, first.colorLabel());
             }
         }
         if (emitSize && !options.containsKey("size")) {
@@ -492,7 +575,7 @@ class ForeignProductSync {
      * and — for the adopted legacy variant — its SKU and option values.
      */
     private int updateExisting(String gid, ForeignVariantPlan plan, boolean writable, boolean emitSize,
-                               Map<String, String> skuByPart, boolean single) {
+                               String primary, Map<String, String> skuByPart, boolean single) {
         List<Map<String, Object>> variants = new ArrayList<>();
         for (Entry e : plan.toUpdate()) {
             if (!writable && e.action() == Action.ADOPT) {
@@ -510,7 +593,7 @@ class ForeignProductSync {
                 variant.put("inventoryItem", item);
                 if (!single) {
                     // A plain product has no options to write values for.
-                    variant.put("optionValues", optionValues(e, emitSize));
+                    variant.put("optionValues", optionValues(e, emitSize, primary));
                 }
             }
             variant.put("metafields", variantMetafields(e));
@@ -532,7 +615,7 @@ class ForeignProductSync {
      * the only place they exist without paying for another lookup
      */
     private Map<String, String> createMissing(String gid, ForeignVariantPlan plan, boolean emitSize,
-                                              Map<String, String> skuByPart) {
+                                              String primary, Map<String, String> skuByPart) {
         List<Entry> missing = plan.toCreate();
         if (missing.isEmpty()) {
             return Map.of();
@@ -541,7 +624,7 @@ class ForeignProductSync {
         List<Map<String, Object>> variants = new ArrayList<>();
         for (Entry e : missing) {
             Map<String, Object> variant = new LinkedHashMap<>();
-            variant.put("optionValues", optionValues(e, emitSize));
+            variant.put("optionValues", optionValues(e, emitSize, primary));
             BigDecimal price = pricingPolicy.retailPrice(e.variant().supplierNet(), e.variant().listPrice());
             if (price != null) {
                 variant.put("price", price.toPlainString());
@@ -577,9 +660,9 @@ class ForeignProductSync {
         return createdBySku;
     }
 
-    private List<Map<String, String>> optionValues(Entry e, boolean emitSize) {
+    private List<Map<String, String>> optionValues(Entry e, boolean emitSize, String primary) {
         List<Map<String, String>> values = new ArrayList<>();
-        values.add(Map.of("optionName", VariantOptions.COLOR, "name", e.colorLabel()));
+        values.add(Map.of("optionName", primary, "name", e.colorLabel()));
         if (emitSize) {
             values.add(Map.of("optionName", VariantOptions.SIZE, "name", VariantOptions.size(e.sizeLabel())));
         }
@@ -606,10 +689,22 @@ class ForeignProductSync {
     private int syncMedia(String gid, SupplierProduct product, JsonNode storeProduct,
                           ForeignVariantPlan plan, Map<String, String> createdIds,
                           Map<String, String> skuByPart) {
-        List<String> gallery = product.imageUrls();
+        // Media Shopify could not fetch shows as a broken tile and nothing else: whatever happens
+        // next, those go. They are this app's own failed uploads (a supplier URL that was a 404).
+        List<String> failed = new ArrayList<>();
+        for (JsonNode node : storeProduct.path("media").path("nodes")) {
+            if ("FAILED".equals(node.path("status").asText(null))) {
+                failed.add(node.path("id").asText());
+            }
+        }
+        List<String> gallery = product.imageUrls().stream().filter(imageExists).toList();
         if (gallery.isEmpty()) {
-            log.debug("No supplier images for {}; leaving the product's own images alone", gid);
+            log.debug("No usable supplier images for {}; leaving the product's own images alone", gid);
+            deleteMedia(gid, failed, "failed");
             return 0;
+        }
+        if (!images.isReplaceExisting()) {
+            deleteMedia(gid, failed, "failed");
         }
 
         // Colour per image, so a variant can find its own; the rest of the gallery gets the title.
@@ -668,6 +763,20 @@ class ForeignProductSync {
                     plan, createdIds, skuByPart);
         }
         return media.size();
+    }
+
+    /** Removes media from a product; never fatal, since a stale image is not a wrong price. */
+    private void deleteMedia(String gid, List<String> ids, String what) {
+        if (ids.isEmpty()) {
+            return;
+        }
+        try {
+            JsonNode deleted = gql.execute(ShopifyGraphQL.FILE_DELETE, Map.of("fileIds", ids));
+            checkUserErrors(require(deleted).path("fileDelete"), "fileDelete");
+            log.info("Removed {} {} image(s) from {}", ids.size(), what, gid);
+        } catch (RuntimeException e) {
+            log.warn("Could not remove {} {} image(s) from {}: {}", ids.size(), what, gid, e.getMessage());
+        }
     }
 
     /**

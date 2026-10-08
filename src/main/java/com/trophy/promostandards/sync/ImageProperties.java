@@ -17,9 +17,15 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param replaceExisting  delete the product's current images before publishing the supplier's
  * @param attachToVariants point each variant at the image of its own colour, so the storefront
  *                         swaps the photo when a shopper picks a colour
+ * @param verifyUrls       ask the supplier's server for each image first and leave out the ones it
+ *                         answers 404/410 for, which Shopify would keep as broken {@code FAILED} media
  */
 @ConfigurationProperties(prefix = "sync.images")
-public record ImageProperties(Boolean replaceExisting, Boolean attachToVariants) {
+public record ImageProperties(Boolean replaceExisting, Boolean attachToVariants, Boolean verifyUrls) {
+
+    public boolean isVerifyUrls() {
+        return verifyUrls == null || verifyUrls;
+    }
 
     public boolean isReplaceExisting() {
         return replaceExisting == null || replaceExisting;

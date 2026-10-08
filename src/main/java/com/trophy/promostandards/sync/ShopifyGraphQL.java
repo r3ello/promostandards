@@ -30,7 +30,7 @@ final class ShopifyGraphQL {
                   id
                   handle
                   title
-                  media(first: 100) { nodes { id alt } }
+                  media(first: 100) { nodes { id alt status } }
                   legacySku: metafield(namespace: "migration", key: "legacy_sku") { value }
                   options { id name position optionValues { id name } }
                   variants(first: 100) {
@@ -68,7 +68,7 @@ final class ShopifyGraphQL {
                 id
                 handle
                 title
-                media(first: 100) { nodes { id alt } }
+                media(first: 100) { nodes { id alt status } }
                 legacySku: metafield(namespace: "migration", key: "legacy_sku") { value }
                 options { id name position optionValues { id name } }
                 variants(first: 100) {
@@ -507,6 +507,19 @@ final class ShopifyGraphQL {
                                   optionValuesToUpdate: $optionValuesToUpdate,
                                   variantStrategy: $variantStrategy) {
                 product { id options { id name optionValues { id name } } }
+                userErrors { field message code }
+              }
+            }
+            """;
+
+    /**
+     * Reorder an option's values, and the variants with them. Used to put a years family in numeric
+     * order (1, 2, 5, 10) instead of the order its variants were created in.
+     */
+    static final String PRODUCT_OPTIONS_REORDER = """
+            mutation ProductOptionsReorder($productId: ID!, $options: [OptionReorderInput!]!) {
+              productOptionsReorder(productId: $productId, options: $options) {
+                product { id }
                 userErrors { field message code }
               }
             }

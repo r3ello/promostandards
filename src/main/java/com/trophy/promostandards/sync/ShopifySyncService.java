@@ -137,7 +137,8 @@ public class ShopifySyncService {
         this.objectMapper = objectMapper;
         this.syncStates = syncStates;
         this.foreignSync = new ForeignProductSync(gql, catalog, pricingPolicy, shopify, props,
-                objectMapper, images, creation.skuPrefixOrDefault());
+                objectMapper, images, creation.skuPrefixOrDefault(),
+                images.isVerifyUrls() ? new ImageUrlProbe()::exists : url -> true);
     }
 
     /**
