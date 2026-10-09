@@ -96,6 +96,43 @@ class VariantOptionsTest {
                 .containsExactly("Default", "Default");
     }
 
+    /**
+     * CD902Y*, as PaceSetter serves it on 2026-10-08: fourteen parts, one per year, of which only
+     * the ones it reports stock for carry a colour and a size. The year is what tells them apart.
+     */
+    @Test
+    void namesAYearsFamilyByTheYearAlone() {
+        List<Variant> variants = List.of(
+                variant("CD902Y1", null, null),
+                variant("CD902Y10", "Black Frost", "9 X 7 X 0.875"),
+                variant("CD902Y15", "Black Frost", "9 X 7 X 0.875"),
+                variant("CD902Y2", null, null),
+                variant("CD902Y5", "Black Frost", "9 X 7 X 0.875"),
+                variant("CD902Y50", null, null));
+
+        // The shared stem is CD902Y1 for the first three; it is backed off to the Y.
+        assertThat(VariantOptions.yearLabels(variants)).containsExactly("1", "10", "15", "2", "5", "50");
+        assertThat(VariantOptions.yearLabels(List.of(variant("CD904Y10", null, null),
+                variant("CD904Y15", null, null)))).containsExactly("10", "15");
+    }
+
+    @Test
+    void anythingElseIsNotAYearsFamily() {
+        // A stem that does not end in Y: a measurement or a colour code.
+        assertThat(VariantOptions.yearLabels(List.of(variant("C0610", null, null),
+                variant("C0611", null, null)))).isNull();
+        // Different products that happen to carry a year (CD1235AY5 / CD1236AY5B).
+        assertThat(VariantOptions.yearLabels(List.of(variant("CD1235AY5", null, null),
+                variant("CD1236AY5B", null, null)))).isNull();
+        // A year sold in two sizes: the year alone would name two variants the same.
+        assertThat(VariantOptions.yearLabels(List.of(variant("CD902Y5", null, "S"),
+                variant("CD902Y5", null, "M")))).isNull();
+        // A part whose tail is not a number, and a lone part.
+        assertThat(VariantOptions.yearLabels(List.of(variant("CD902Y5", null, null),
+                variant("CD902Y5B", null, null)))).isNull();
+        assertThat(VariantOptions.yearLabels(List.of(variant("CD902Y5", null, null)))).isNull();
+    }
+
     private static Variant uncoloured(String partId, String label) {
         return new Variant(partId, null, null, partId, null, null, null, List.of(), null, null, label);
     }

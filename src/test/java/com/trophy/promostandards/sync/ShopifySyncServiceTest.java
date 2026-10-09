@@ -44,7 +44,7 @@ class ShopifySyncServiceTest {
     private static final DiscountProperties DISCOUNTS = new DiscountProperties(null, null, null, null);
 
     /** Defaults: the supplier's images replace the product's, and each variant gets its colour's. */
-    private static final ImageProperties IMAGES = new ImageProperties(null, null);
+    private static final ImageProperties IMAGES = new ImageProperties(null, null, false);
 
     /** Most tests below exercise the create path, which the store keeps switched off. */
     private static final ProductCreationProperties CREATE = new ProductCreationProperties(true, null, null, null, null,
@@ -533,6 +533,140 @@ class ShopifySyncServiceTest {
         // CM778 is a product of its own that ps_product_ids never listed: the list grows to cover it
         // (one MetafieldsSet), on top of the ps_last_sync_at stamp (another).
         assertThat(operations.stream().filter("MetafieldsSet"::equals).toList()).hasSize(2);
+    }
+
+    /**
+     * CD902Y* as the 2026-09-14 sync left it: Color + Size, the stocked years named from their
+     * inventory row ("Black Frost (10) / 9 X 7 X 0.875") and the rest from their description
+     * ("1 / One Size"). The next sync converts it in place to one Year option — Size dropped
+     * without deleting a variant, Color renamed, every value rewritten to the year, years in order.
+     */
+    @Test
+    void convertsAYearsFamilyToASingleYearOption() {
+        ShopifyHttp http = (path, body, headers) -> {
+            String query = String.valueOf(((Map<?, ?>) body).get("query"));
+            Map<?, ?> variables = (Map<?, ?>) ((Map<?, ?>) body).get("variables");
+            String response;
+            String operation;
+            if (query.contains("ProductByHandle")) {
+                operation = "ProductByHandle";
+                response = String.valueOf(variables.get("query")).contains("p-5375-plaque") ? """
+                        {"data":{"products":{"nodes":[{
+                          "id":"gid://shopify/Product/5375",
+                          "handle":"p-5375-plaque",
+                          "legacySku":{"value":"PS6057"},
+                          "media":{"nodes":[{"id":"gid://shopify/MediaImage/1","status":"FAILED"},
+                            {"id":"gid://shopify/MediaImage/2","status":"READY"}]},
+                          "options":[
+                            {"id":"gid://shopify/ProductOption/1","name":"Color","position":1,
+                             "optionValues":[{"id":"gid://shopify/ProductOptionValue/11","name":"1"},
+                               {"id":"gid://shopify/ProductOptionValue/12","name":"Black Frost (10)"},
+                               {"id":"gid://shopify/ProductOptionValue/13","name":"2"}]},
+                            {"id":"gid://shopify/ProductOption/2","name":"Size","position":2,
+                             "optionValues":[{"id":"gid://shopify/ProductOptionValue/21","name":"One Size"},
+                               {"id":"gid://shopify/ProductOptionValue/22","name":"9 X 7 X 0.875"}]}],
+                          "variants":{"nodes":[
+                            {"id":"gid://shopify/ProductVariant/1","sku":"PS6057-1","vendorSku":{"value":"CD902Y1"},
+                             "selectedOptions":[{"name":"Color","value":"1"},{"name":"Size","value":"One Size"}],
+                             "inventoryItem":{"id":"gid://shopify/InventoryItem/1","tracked":false}},
+                            {"id":"gid://shopify/ProductVariant/10","sku":"PS6057-10","vendorSku":{"value":"CD902Y10"},
+                             "selectedOptions":[{"name":"Color","value":"Black Frost (10)"},
+                               {"name":"Size","value":"9 X 7 X 0.875"}],
+                             "inventoryItem":{"id":"gid://shopify/InventoryItem/10","tracked":true}},
+                            {"id":"gid://shopify/ProductVariant/2","sku":"PS6057-2","vendorSku":{"value":"CD902Y2"},
+                             "selectedOptions":[{"name":"Color","value":"2"},{"name":"Size","value":"One Size"}],
+                             "inventoryItem":{"id":"gid://shopify/InventoryItem/2","tracked":false}}
+                          ]}
+                        }]}}}"""
+                        : "{\"data\":{\"products\":{\"nodes\":[]}}}";
+            } else if (query.contains("ImportedProducts")) {
+                operation = "ImportedProducts";
+                response = """
+                        {"data":{"products":{"pageInfo":{"hasNextPage":false},"nodes":[{
+                          "id":"gid://shopify/Product/5375",
+                          "handle":"p-5375-plaque",
+                          "psId":{"value":"CD902Y*"},
+                          "psIds":{"value":"[\\"CD902Y*\\"]"},
+                          "psSource":{"value":"migration"}
+                        }]}}}""";
+            } else if (query.contains("ProductOptionsDelete")) {
+                operation = "ProductOptionsDelete";
+                response = "{\"data\":{\"productOptionsDelete\":{\"deletedOptionsIds\":[],\"userErrors\":[]}}}";
+            } else if (query.contains("ProductOptionUpdate")) {
+                operation = "ProductOptionUpdate";
+                response = "{\"data\":{\"productOptionUpdate\":{\"product\":{\"id\":\"gid://shopify/Product/5375\"},\"userErrors\":[]}}}";
+            } else if (query.contains("FileDelete")) {
+                operation = "FileDelete";
+                response = "{\"data\":{\"fileDelete\":{\"deletedFileIds\":[],\"userErrors\":[]}}}";
+            } else if (query.contains("ProductOptionsReorder")) {
+                operation = "ProductOptionsReorder";
+                response = "{\"data\":{\"productOptionsReorder\":{\"product\":{\"id\":\"gid://shopify/Product/5375\"},\"userErrors\":[]}}}";
+            } else if (query.contains("VariantsUpdate")) {
+                operation = "VariantsUpdate";
+                response = "{\"data\":{\"productVariantsBulkUpdate\":{\"productVariants\":[],\"userErrors\":[]}}}";
+            } else if (query.contains("InventoryActivate")) {
+                operation = "InventoryActivate";
+                response = "{\"data\":{\"inventoryBulkToggleActivation\":{\"inventoryItem\":{\"id\":\"gid://shopify/InventoryItem/10\"},\"userErrors\":[]}}}";
+            } else if (query.contains("InventorySet")) {
+                operation = "InventorySet";
+                response = "{\"data\":{\"inventorySetQuantities\":{\"inventoryAdjustmentGroup\":{\"createdAt\":\"now\"},\"userErrors\":[]}}}";
+            } else if (query.contains("MetafieldsSet")) {
+                operation = "MetafieldsSet";
+                response = "{\"data\":{\"metafieldsSet\":{\"metafields\":[],\"userErrors\":[]}}}";
+            } else {
+                throw new IllegalStateException("unexpected query: " + query);
+            }
+            operations.add(operation);
+            variablesByOperation.put(operation, variables);
+            try {
+                return MAPPER.readTree(response);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        };
+        ShopifySyncService service = service(http);
+        when(catalog.aggregate("CD902Y*")).thenReturn(new SupplierProduct("CD902Y*",
+                "Anniversary Achievement Plaque", null, null, null, List.of(), List.of(
+                new Variant("CD902Y1", null, null, "CD902Y1", new BigDecimal("50"), null, null, List.of(), null, null),
+                new Variant("CD902Y10", "Black Frost", "9 X 7 X 0.875", "CD902Y10", new BigDecimal("50"), null,
+                        250, List.of(), null, null),
+                new Variant("CD902Y2", null, null, "CD902Y2", new BigDecimal("50"), null, null, List.of(), null, null)),
+                List.of(), List.of(), List.of()));
+
+        SyncResult result = service.importProduct("CD902Y*");
+
+        assertThat(result.variantCount()).isEqualTo(3);
+        // Size goes first, refusing rather than deleting a variant; then Color is renamed; then the
+        // variants are rewritten; then the years are put in order. Nothing is created.
+        assertThat(operations).containsSubsequence("ProductOptionsDelete", "ProductOptionUpdate",
+                "VariantsUpdate", "ProductOptionsReorder");
+        assertThat(operations).doesNotContain("VariantsCreate", "ProductOptionsCreate");
+        assertThat(varsOf("ProductOptionsDelete").get("options"))
+                .isEqualTo(List.of("gid://shopify/ProductOption/2"));
+        assertThat(varsOf("ProductOptionsDelete").get("strategy")).isEqualTo("NON_DESTRUCTIVE");
+        Map<?, ?> renamed = (Map<?, ?>) varsOf("ProductOptionUpdate").get("option");
+        assertThat(renamed.get("id")).isEqualTo("gid://shopify/ProductOption/1");
+        assertThat(renamed.get("name")).isEqualTo("Year");
+
+        // Every variant keeps its id and is valued with its year, under Year alone.
+        List<Object> updated = objects(varsOf("VariantsUpdate").get("variants"));
+        assertThat(updated).extracting(v -> String.valueOf(((Map<?, ?>) v).get("id"))).containsExactly(
+                "gid://shopify/ProductVariant/1", "gid://shopify/ProductVariant/10",
+                "gid://shopify/ProductVariant/2");
+        assertThat(updated).extracting(v -> objects(((Map<?, ?>) v).get("optionValues"))).containsExactly(
+                List.of(Map.of("optionName", "Year", "name", "1")),
+                List.of(Map.of("optionName", "Year", "name", "10")),
+                List.of(Map.of("optionName", "Year", "name", "2")));
+
+        List<?> order = (List<?>) ((Map<?, ?>) objects(varsOf("ProductOptionsReorder").get("options")).get(0))
+                .get("values");
+        assertThat(order).extracting(v -> String.valueOf(((Map<?, ?>) v).get("name")))
+                .containsExactly("1", "2", "10");
+
+        // No usable supplier image (live, its only one is a 404 — ImageUrlProbeTest), so nothing is
+        // published; the broken upload a past sync left behind goes, and the working image stays.
+        assertThat(operations).doesNotContain("ProductAddMedia");
+        assertThat(varsOf("FileDelete").get("fileIds")).isEqualTo(List.of("gid://shopify/MediaImage/1"));
     }
 
     /** A store product built on options this app does not model keeps its variants untouched. */

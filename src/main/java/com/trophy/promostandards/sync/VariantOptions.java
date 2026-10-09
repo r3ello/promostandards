@@ -28,6 +28,7 @@ final class VariantOptions {
 
     static final String COLOR = "Color";
     static final String SIZE = "Size";
+    static final String YEAR = "Year";
     static final String DEFAULT_COLOR = "Default";
     static final String DEFAULT_SIZE = "One Size";
 
@@ -84,6 +85,56 @@ final class VariantOptions {
             applySuffixes(variants, labels, colour);
         }
         return labels;
+    }
+
+    /**
+     * The years of a years-of-service family, or {@code null} when {@code variants} is not one.
+     *
+     * <p>PaceSetter sells an anniversary award as one part per year — {@code CD902Y1}, {@code CD902Y5}
+     * … {@code CD902Y50} — and describes them all alike. Its Product Data names no colour, so the
+     * parts it also reports stock for were labelled from their inventory row ("Black Frost (10) /
+     * 9 X 7 X 0.875") and the rest from their description ("1 / One Size"): one selector, two naming
+     * schemes, and the year buried in a suffix. The year is the only thing the shopper chooses, so a
+     * family like this gets a single {@code Year} option valued with the number alone.
+     *
+     * <p>A family is one where every part id is a shared stem ending in {@code Y} plus a distinct
+     * number. The shared stem is backed off past any digit the numbers happen to share ({@code Y1},
+     * {@code Y10}, {@code Y15} share {@code Y1}). Anything else — one part, a part sold in several
+     * sizes (two variants, one year), a stem not ending in {@code Y} — is not a family.
+     */
+    static List<String> yearLabels(List<Variant> variants) {
+        if (variants.size() < 2) {
+            return null;
+        }
+        List<String> partIds = new ArrayList<>(variants.size());
+        for (Variant v : variants) {
+            if (v.supplierPartId() == null || v.supplierPartId().isBlank()) {
+                return null;
+            }
+            partIds.add(v.supplierPartId().trim());
+        }
+        String first = partIds.get(0);
+        int prefix = commonPrefixLength(partIds);
+        while (prefix > 0 && Character.isDigit(first.charAt(prefix - 1))) {
+            prefix--;
+        }
+        if (prefix < 2 || Character.toUpperCase(first.charAt(prefix - 1)) != 'Y') {
+            return null;
+        }
+        List<String> years = new ArrayList<>(partIds.size());
+        Set<String> seen = new LinkedHashSet<>();
+        for (String partId : partIds) {
+            String tail = partId.substring(prefix);
+            if (!tail.matches("\\d{1,3}")) {
+                return null;
+            }
+            String year = String.valueOf(Integer.parseInt(tail));
+            if (!seen.add(year)) {
+                return null;
+            }
+            years.add(year);
+        }
+        return years;
     }
 
     /** Suffixes every label of one ambiguous colour with what its part id adds over the others. */
