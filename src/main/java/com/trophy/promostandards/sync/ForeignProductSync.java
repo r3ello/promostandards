@@ -145,14 +145,8 @@ class ForeignProductSync {
                 ensureOptions(gid, options, plan, emitSize, primary);
             }
         }
-        if (!plan.orphans().isEmpty()) {
-            // Reported, never touched. A store variant also lands here when its vendor_sku was
-            // mangled or its options were edited by hand, and when the supplier answered short —
-            // discontinuing those would be wrong, so the decision stays with a person.
-            log.info("{} has {} store variant(s) no supplier id covers: {}", productId,
-                    plan.orphans().size(),
-                    plan.orphans().stream().map(ForeignVariantPlan.StoreVariant::sku).toList());
-        }
+        int removed = writable && !single
+                ? removeDiscontinued(productId, gid, plan, store, union, unioned.complete()) : 0;
         int updated = updateExisting(gid, plan, writable, emitSize, primary, skuByPart, single);
         Map<String, String> createdIds = writable && !single
                 ? createMissing(gid, plan, emitSize, primary, skuByPart) : Map.of();
@@ -164,10 +158,80 @@ class ForeignProductSync {
         List<String> added = extendSupplierIds(gid, imported, unioned.discoveredIds());
 
         log.info("Synced foreign product {} -> {}: {} supplier variants ({} created, {} updated, "
-                        + "{} inventory rows, {} images{})",
-                productId, gid, plan.entries().size(), createdIds.size(), updated, inventory, published,
+                        + "{} removed, {} inventory rows, {} images{})",
+                productId, gid, plan.entries().size(), createdIds.size(), updated, removed, inventory,
+                published,
                 added.isEmpty() ? "" : ", +" + added.size() + " supplier ids");
         return new Result(plan.entries().size(), createdIds.size(), inventory, added, published);
+    }
+
+    /**
+     * Deletes the store variants PaceSetter no longer has. PaceSetter is the source of truth
+     * (client requirement, 2026-10-09): a variant it stopped listing goes from the store too.
+     *
+     * <p>The safeguard is telling "PaceSetter says it is gone" from "PaceSetter did not answer" —
+     * its Product Data drops whole products for weeks (CM745*, 26 more on 2026-10-09) — so a variant
+     * is deleted only when <b>all</b> of these hold:
+     * <ol>
+     *   <li>this app wrote it: it carries {@code trophy_sync.vendor_sku} (a variant made by hand or
+     *       by the migration is never this app's to delete);</li>
+     *   <li>its part is in no supplier answer of this run, not even a family copy;</li>
+     *   <li>the supplier product it stands for ({@code custom.promo_standard_id}) answered <b>in
+     *       full</b> this run — parts, prices and inventory — and simply did not list it;</li>
+     *   <li>at most half of the product's variants go: more than that is a supplier answering
+     *       short, not a catalogue change, and is left for a person to look at.</li>
+     * </ol>
+     * Anything else stays and is logged, as every unmatched variant was before. Never fatal.
+     *
+     * @return how many variants were deleted
+     */
+    private int removeDiscontinued(String productId, String gid, ForeignVariantPlan plan,
+                                   List<StoreVariant> store, SupplierProduct union, Set<String> complete) {
+        if (plan.orphans().isEmpty()) {
+            return 0;
+        }
+        Set<String> served = new LinkedHashSet<>();
+        for (Variant v : union.variants()) {
+            served.add(upper(v.supplierPartId()));
+        }
+        List<StoreVariant> gone = new ArrayList<>();
+        List<String> kept = new ArrayList<>();
+        for (StoreVariant v : plan.orphans()) {
+            boolean discontinued = v.vendorSku() != null && !v.vendorSku().isBlank()
+                    && !served.contains(upper(v.vendorSku()))
+                    && v.promoStandardId() != null && complete.contains(upper(v.promoStandardId()));
+            if (discontinued) {
+                gone.add(v);
+            } else {
+                kept.add(v.sku());
+            }
+        }
+        if (!kept.isEmpty()) {
+            log.info("{} has {} store variant(s) no supplier id covers, kept (not provably "
+                    + "discontinued): {}", productId, kept.size(), kept);
+        }
+        if (gone.isEmpty()) {
+            return 0;
+        }
+        if (gone.size() * 2 > store.size()) {
+            log.warn("{}: PaceSetter no longer lists {} of its {} variants {}; too many to be a "
+                    + "catalogue change, nothing deleted", productId, gone.size(), store.size(),
+                    gone.stream().map(StoreVariant::sku).toList());
+            return 0;
+        }
+        try {
+            Map<String, Object> vars = Map.of("productId", gid,
+                    "variantsIds", gone.stream().map(StoreVariant::id).toList());
+            checkUserErrors(require(gql.execute(ShopifyGraphQL.VARIANTS_BULK_DELETE, vars))
+                    .path("productVariantsBulkDelete"), "productVariantsBulkDelete");
+            log.info("{}: deleted {} variant(s) PaceSetter no longer lists: {}", productId, gone.size(),
+                    gone.stream().map(v -> v.sku() + " (" + v.vendorSku() + ")").toList());
+            return gone.size();
+        } catch (RuntimeException e) {
+            log.warn("{}: could not delete the variants PaceSetter no longer lists: {}", productId,
+                    e.getMessage());
+            return 0;
+        }
     }
 
     // ---------------------------------------------------------------- supplier side
@@ -231,6 +295,12 @@ class ForeignProductSync {
         // one image, so a family's variant photos only exist across these calls. They have to reach
         // the product's gallery or there would be nothing for a variant to be pointed at.
         Set<String> gallery = new LinkedHashSet<>(seed.imageUrls());
+        // Ids PaceSetter answered for in full this time — Product Data with parts, a price table AND
+        // an Inventory answer. Only what such an id no longer lists may be removed from the store.
+        Set<String> complete = new LinkedHashSet<>();
+        if (answeredInFull(seed)) {
+            complete.add(upper(seed.productId()));
+        }
         known.add(upper(seed.productId()));
         collect(byKey, authoritative, sources, seed.productId(), seed.variants());
         if (imported != null) {
@@ -238,7 +308,7 @@ class ForeignProductSync {
                 if (!known.add(upper(id))) {
                     continue;
                 }
-                if (aggregateInto(byKey, authoritative, sources, id, seed.productId(), gallery)) {
+                if (aggregateInto(byKey, authoritative, sources, id, seed.productId(), gallery, complete)) {
                     products.add(upper(id));
                 }
             }
@@ -253,7 +323,7 @@ class ForeignProductSync {
             if (!known.add(upper(partId))) {
                 continue;
             }
-            if (aggregateInto(byKey, authoritative, sources, partId, seed.productId(), gallery)) {
+            if (aggregateInto(byKey, authoritative, sources, partId, seed.productId(), gallery, complete)) {
                 products.add(upper(partId));
                 discovered.add(partId);
             }
@@ -270,26 +340,40 @@ class ForeignProductSync {
         byKey.forEach((key, variant) -> supplierIdByKey.put(key,
                 products.contains(upper(variant.supplierPartId())) ? variant.supplierPartId()
                         : sources.getOrDefault(key, variant.supplierPartId())));
-        return new Union(product, List.copyOf(discovered), supplierIdByKey);
+        return new Union(product, List.copyOf(discovered), supplierIdByKey, Set.copyOf(complete));
+    }
+
+    /**
+     * Whether an aggregate is PaceSetter's full answer: {@code aggregate} only returns at all when
+     * Product Data had parts and Pricing had a table, but Inventory is optional — and a variant that
+     * only exists as an inventory row (a family colour, a decoration code) is missing from an answer
+     * whose Inventory call failed. That is silence, not PaceSetter saying the variant is gone.
+     */
+    private static boolean answeredInFull(SupplierProduct aggregate) {
+        return aggregate.warnings().stream().noneMatch(w -> w.startsWith("Inventory"));
     }
 
     /**
      * The union so far, plus the supplier ids it turned up that {@code ps_product_ids} did not list.
      *
      * @param supplierIdByKey the supplier product each variant stands for, by (part id, size) key
+     * @param complete        the supplier ids (upper-cased) PaceSetter answered for in full
      */
     private record Union(SupplierProduct product, List<String> discoveredIds,
-                         Map<String, String> supplierIdByKey) {
+                         Map<String, String> supplierIdByKey, Set<String> complete) {
     }
 
     /** @return whether the supplier serves {@code id} as a product of its own. */
     private boolean aggregateInto(Map<String, Variant> byKey, Set<String> authoritative,
                                   Map<String, String> sources, String id, String forProduct,
-                                  Set<String> gallery) {
+                                  Set<String> gallery, Set<String> complete) {
         try {
             SupplierProduct aggregate = catalog.aggregate(id);
             collect(byKey, authoritative, sources, id, aggregate.variants());
             gallery.addAll(aggregate.imageUrls());
+            if (answeredInFull(aggregate)) {
+                complete.add(upper(id));
+            }
             return true;
         } catch (RuntimeException e) {
             // Not every part id is a product id, and an id the supplier no longer serves must not

@@ -669,6 +669,140 @@ class ShopifySyncServiceTest {
         assertThat(varsOf("FileDelete").get("fileIds")).isEqualTo(List.of("gid://shopify/MediaImage/1"));
     }
 
+    /**
+     * A product on Color/Size whose store variants are given as {@code variantsJson}; it covers the
+     * single supplier id {@code psId}. Every mutation the foreign sync can send is answered.
+     */
+    private ShopifyHttp storeWithVariants(String psId, String variantsJson) {
+        return (path, body, headers) -> {
+            String query = String.valueOf(((Map<?, ?>) body).get("query"));
+            Map<?, ?> variables = (Map<?, ?>) ((Map<?, ?>) body).get("variables");
+            String operation;
+            String response;
+            if (query.contains("ProductByHandle")) {
+                operation = "ProductByHandle";
+                response = String.valueOf(variables.get("query")).contains("p-9000-tower") ? """
+                        {"data":{"products":{"nodes":[{
+                          "id":"gid://shopify/Product/9000","handle":"p-9000-tower",
+                          "legacySku":{"value":"PS9000"},
+                          "options":[{"id":"gid://shopify/ProductOption/1","name":"Color","position":1,
+                              "optionValues":[{"id":"gid://shopify/ProductOptionValue/1","name":"Clear"}]},
+                            {"id":"gid://shopify/ProductOption/2","name":"Size","position":2,
+                              "optionValues":[{"id":"gid://shopify/ProductOptionValue/2","name":"One Size"}]}],
+                          "variants":{"nodes":%s}
+                        }]}}}""".formatted(variantsJson)
+                        : "{\"data\":{\"products\":{\"nodes\":[]}}}";
+            } else if (query.contains("ImportedProducts")) {
+                operation = "ImportedProducts";
+                response = """
+                        {"data":{"products":{"pageInfo":{"hasNextPage":false},"nodes":[{
+                          "id":"gid://shopify/Product/9000","handle":"p-9000-tower",
+                          "psId":{"value":"%1$s"},"psIds":{"value":"[\\"%1$s\\"]"},
+                          "psSource":{"value":"migration"}
+                        }]}}}""".formatted(psId);
+            } else {
+                operation = query.contains("VariantsDelete") ? "VariantsDelete"
+                        : query.contains("VariantsCreate") ? "VariantsCreate"
+                        : query.contains("VariantsUpdate") ? "VariantsUpdate"
+                        : query.contains("InventoryActivate") ? "InventoryActivate"
+                        : query.contains("InventorySet") ? "InventorySet"
+                        : query.contains("MetafieldsSet") ? "MetafieldsSet"
+                        : query.contains("ProductOption") ? "ProductOption" : null;
+                if (operation == null) {
+                    throw new IllegalStateException("unexpected query: " + query);
+                }
+                // One generic success shape: every payload field the code reads is optional.
+                response = "{\"data\":{\"productVariantsBulkDelete\":{\"userErrors\":[]},"
+                        + "\"productVariantsBulkCreate\":{\"productVariants\":[],\"userErrors\":[]},"
+                        + "\"productVariantsBulkUpdate\":{\"productVariants\":[],\"userErrors\":[]},"
+                        + "\"inventoryBulkToggleActivation\":{\"userErrors\":[]},"
+                        + "\"inventorySetQuantities\":{\"userErrors\":[]},"
+                        + "\"metafieldsSet\":{\"metafields\":[],\"userErrors\":[]},"
+                        + "\"productOptionUpdate\":{\"userErrors\":[]},"
+                        + "\"productOptionsCreate\":{\"userErrors\":[]}}}";
+            }
+            operations.add(operation);
+            variablesByOperation.put(operation, variables);
+            try {
+                return MAPPER.readTree(response);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        };
+    }
+
+    private static String storeVariant(int id, String vendorSku, String psId) {
+        return """
+                {"id":"gid://shopify/ProductVariant/%d","sku":"PS9000-%d",%s%s
+                 "selectedOptions":[{"name":"Color","value":"V%d"},{"name":"Size","value":"One Size"}],
+                 "inventoryItem":{"id":"gid://shopify/InventoryItem/%d","tracked":false}}""".formatted(id, id,
+                vendorSku == null ? "" : "\"vendorSku\":{\"value\":\"" + vendorSku + "\"},",
+                psId == null ? "" : "\"psId\":{\"value\":\"" + psId + "\"},", id, id);
+    }
+
+    private static SupplierProduct tower(List<String> warnings, String... partIds) {
+        List<Variant> variants = new ArrayList<>();
+        for (String partId : partIds) {
+            variants.add(new Variant(partId, "Clear", null, partId, new BigDecimal("10"), null, 5,
+                    List.of(), null, null));
+        }
+        return new SupplierProduct("GI491A", "Tower", null, null, null, List.of(), variants, List.of(),
+                List.of(), warnings);
+    }
+
+    /**
+     * PaceSetter is the source of truth: a variant it stopped listing goes from the store — but only
+     * that one. A variant this app never wrote, and one whose supplier product was not part of this
+     * answer, stay.
+     */
+    @Test
+    void deletesOnlyTheVariantsPaceSetterProvablyDropped() {
+        ShopifySyncService service = service(storeWithVariants("GI491A", "["
+                + storeVariant(1, "GI491A", "GI491A") + ","
+                + storeVariant(2, "GI491B", "GI491A") + ","
+                + storeVariant(3, "DCGI491A", "GI491A") + ","      // dropped by GI491A: deleted
+                + storeVariant(4, null, null) + ","                // made by hand: kept
+                + storeVariant(5, "CM999X", "CM999") + "]"));       // CM999 did not answer: kept
+        when(catalog.aggregate("GI491A")).thenReturn(tower(List.of(), "GI491A", "GI491B"));
+
+        service.importProduct("GI491A");
+
+        assertThat(varsOf("VariantsDelete").get("variantsIds"))
+                .isEqualTo(List.of("gid://shopify/ProductVariant/3"));
+    }
+
+    /** An Inventory call that failed is silence: whatever only an inventory row carried stays. */
+    @Test
+    void neverDeletesOnAnAnswerWhoseInventoryFailed() {
+        ShopifySyncService service = service(storeWithVariants("GI491A", "["
+                + storeVariant(1, "GI491A", "GI491A") + ","
+                + storeVariant(2, "GI491B", "GI491A") + ","
+                + storeVariant(3, "DCGI491A", "GI491A") + "]"));
+        when(catalog.aggregate("GI491A")).thenReturn(tower(
+                List.of("Inventory: ProductID not found — variant stock is left as Shopify has it"),
+                "GI491A", "GI491B"));
+
+        service.importProduct("GI491A");
+
+        assertThat(operations).doesNotContain("VariantsDelete");
+    }
+
+    /** More than half of a product gone at once is a short answer, not a catalogue change. */
+    @Test
+    void neverDeletesMostOfAProduct() {
+        ShopifySyncService service = service(storeWithVariants("GI491A", "["
+                + storeVariant(1, "GI491A", "GI491A") + ","
+                + storeVariant(2, "GI491B", "GI491A") + ","
+                + storeVariant(3, "GI491C", "GI491A") + ","
+                + storeVariant(4, "GI491D", "GI491A") + ","
+                + storeVariant(5, "GI491E", "GI491A") + "]"));
+        when(catalog.aggregate("GI491A")).thenReturn(tower(List.of(), "GI491A", "GI491B"));
+
+        service.importProduct("GI491A");
+
+        assertThat(operations).doesNotContain("VariantsDelete");
+    }
+
     /** A store product built on options this app does not model keeps its variants untouched. */
     @Test
     void importLeavesUnmodelledOptionsAlone() {

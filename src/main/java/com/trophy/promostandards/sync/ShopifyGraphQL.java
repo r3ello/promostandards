@@ -137,6 +137,19 @@ final class ShopifyGraphQL {
             }
             """;
 
+    /**
+     * Delete variants of one product: the ones PaceSetter no longer lists (see
+     * {@code ForeignProductSync.removeDiscontinued} for the conditions).
+     */
+    static final String VARIANTS_BULK_DELETE = """
+            mutation VariantsDelete($productId: ID!, $variantsIds: [ID!]!) {
+              productVariantsBulkDelete(productId: $productId, variantsIds: $variantsIds) {
+                product { id }
+                userErrors { field message }
+              }
+            }
+            """;
+
     /** List the store's locations (to discover the inventory location GID for configuration). */
     static final String LOCATIONS = """
             query Locations {
