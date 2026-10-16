@@ -403,6 +403,14 @@ sync:
     cache-file: data/pending-data.json
     ttl: 6h
 
+  # The console's Status view (GET /api/catalog/status): every PromoStandards product of the store
+  # sorted by where it stands against PaceSetter. A build reads one price per sellable id (~1,300)
+  # on top of the catalog scan and the pending-data Inventory answers, so it is kept a day.
+  catalog-status:
+    enabled: true
+    cache-file: data/catalog-status.json
+    ttl: 24h
+
   # "Group variants" index for the console table: collapses sibling product ids (one product the
   # supplier split across ids, e.g. one per size) into one row, keyed on Common Grouping related
   # products. Built ON DEMAND (never at startup) with one getProduct per product, throttled to 5

@@ -1645,14 +1645,19 @@ const numericId = (gid) => String(gid || '').split('/').pop();
 
 function viewFromHash() {
 	const m = /^#orders(?:\/(\d+))?$/.exec(location.hash);
-	return m ? { view: 'orders', orderId: m[1] || null } : { view: 'products', orderId: null };
+	if (m) return { view: 'orders', orderId: m[1] || null };
+	const st = /^#status(?:\/([A-Z_]+))?$/.exec(location.hash);
+	if (st) return { view: 'status', orderId: null, group: st[1] || null };
+	return { view: 'products', orderId: null };
 }
 
 function routeView() {
-	const { view, orderId } = viewFromHash();
+	const { view, orderId, group } = viewFromHash();
 	el('viewTabs').querySelectorAll('.seg').forEach((s) => s.classList.toggle('is-active', s.dataset.view === view));
 	el('viewProducts').hidden = view !== 'products';
 	el('viewOrders').hidden = view !== 'orders';
+	el('viewStatus').hidden = view !== 'status';
+	if (view === 'status') { showStatus(group); return; }
 	if (view !== 'orders') return;
 	if (!ordersLoaded) loadOrders().then(() => focusOrder(orderId));
 	else focusOrder(orderId);
@@ -1902,10 +1907,166 @@ function orderPreviewHtml(p) {
 	</div>`;
 }
 
+// --- catalog status ---------------------------------------------------------
+// Every PaceSetter product of the store sorted by where it stands (GET /api/catalog/status). The
+// report is built server-side in the background and kept a day; while one is being built the view
+// polls, and the hash keeps the open group (#status/NEEDS_FIX) so a link can point at it.
+const STATUS_GROUPS = [
+	{ key: 'SYNCED', label: 'Synced', tone: 'success', note: 'The sync has run on these and PaceSetter still describes them. Prices and stock update on their own.' },
+	{ key: 'READY', label: 'Ready to sync', tone: 'success', note: 'PaceSetter has everything for these and they have never been synced. Sync is offered only where it cannot duplicate another store product’s variants.' },
+	{ key: 'NEEDS_FIX', label: 'Needs merge or code fix', tone: 'caution', note: 'Their codes are colours or sizes of a PaceSetter product: list the product code, or merge the store products it is split across.' },
+	{ key: 'WAITING', label: 'Waiting on PaceSetter', tone: 'caution', note: 'PaceSetter lists these codes but has no product data or no price for them. Nothing to do in the store until it does.' },
+	{ key: 'SYNCED_NO_DATA', label: 'Lost PaceSetter data', tone: 'critical', note: 'Synced once, but PaceSetter no longer describes them, so they are no longer updated. Ask PaceSetter, or set them to draft.' },
+	{ key: 'DISCONTINUED', label: 'Discontinued', tone: 'neutral', note: 'PaceSetter has none of their codes any more. Those set to draft carry the pacesetter-discontinued tag.' },
+	{ key: 'NEW_AT_SUPPLIER', label: 'New at PaceSetter', tone: 'neutral', note: 'PaceSetter products the store does not carry in any form. Creating them is a reviewed batch, not a click.' },
+	{ key: 'ARCHIVED', label: 'Archived', tone: 'neutral', note: 'Archived in the store — most were merged into another product.' },
+];
+let statusReport = null;
+let statusGroup = 'NEEDS_FIX';
+let statusTimer = null;
+const statusBody = el('statusBody');
+
+function ago(iso) {
+	if (!iso) return '';
+	const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+	if (mins < 1) return 'just now';
+	if (mins < 60) return `${mins} min ago`;
+	const h = Math.round(mins / 60);
+	return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} days ago`;
+}
+
+function showStatus(group) {
+	if (group && STATUS_GROUPS.some((g) => g.key === group)) statusGroup = group;
+	if (!statusReport) loadStatus(false);
+	else renderStatus();
+}
+
+async function loadStatus(rebuild) {
+	clearTimeout(statusTimer);
+	const btn = el('statusRefresh');
+	btn.disabled = true;
+	try {
+		statusReport = await api('/api/catalog/status' + (rebuild ? '/refresh' : ''), rebuild ? 'POST' : 'GET');
+	} catch (e) {
+		el('statusMeta').textContent = `Could not load the catalog status: ${e.message}`;
+		btn.disabled = false;
+		return;
+	}
+	btn.disabled = false;
+	renderStatus();
+	// A build runs in the background; look again until it has finished.
+	if (statusReport.building || statusReport.status === 'building') {
+		statusTimer = setTimeout(() => { if (!el('viewStatus').hidden) loadStatus(false); }, 5000);
+	}
+}
+
+function renderStatus() {
+	const r = statusReport;
+	const meta = el('statusMeta');
+	const clear = () => { el('statusTiles').innerHTML = ''; el('statusHead').innerHTML = ''; statusBody.innerHTML = ''; el('statusNote').textContent = ''; };
+	if (!r || r.status === 'empty') {
+		meta.textContent = 'No report yet. Press Rebuild to create one (2–3 minutes).';
+		clear();
+		return;
+	}
+	if (r.status === 'building') {
+		meta.innerHTML = '<span class="spinner"></span> Building the report — 2–3 minutes. You can leave this tab: it keeps building, and this page updates on its own.';
+		clear();
+		return;
+	}
+	const total = (r.products || []).length;
+	meta.innerHTML = `${total.toLocaleString()} store products · built ${esc(ago(r.builtAt))}`
+		+ (r.building ? ' · <span class="spinner"></span> rebuilding…' : '');
+	el('statusWarnings').innerHTML = (r.warnings || []).map((w) => `<div class="state state--warn">${esc(w)}</div>`).join('');
+	el('statusTiles').innerHTML = STATUS_GROUPS.map((g) => {
+		const n = (r.counts && r.counts[g.key]) || 0;
+		return `<button class="status-tile tone-${g.tone}${g.key === statusGroup ? ' is-active' : ''}" role="tab" aria-selected="${g.key === statusGroup}" data-status-group="${g.key}">
+			<span class="status-tile__n">${n.toLocaleString()}</span><span class="status-tile__label">${esc(g.label)}</span></button>`;
+	}).join('');
+	const g = STATUS_GROUPS.find((x) => x.key === statusGroup);
+	el('statusNote').textContent = g.note;
+	if (statusGroup === 'NEW_AT_SUPPLIER') renderNewAtSupplier(r);
+	else renderStatusEntries(r, (r.products || []).filter((e) => e.category === statusGroup));
+}
+
+function renderStatusEntries(r, entries) {
+	el('statusHead').innerHTML = `<tr><th class="col-thumb" aria-label="Image"></th><th>Product</th><th>PaceSetter codes</th><th>Why</th><th class="col-actions" aria-label="Action"></th></tr>`;
+	if (!entries.length) {
+		statusBody.innerHTML = `<tr class="row-state"><td colspan="5"><div class="empty"><strong>Nothing here</strong></div></td></tr>`;
+		return;
+	}
+	statusBody.innerHTML = entries.map((e) => {
+		const link = r.adminProducts && e.adminId ? `${r.adminProducts}${e.adminId}` : null;
+		const name = esc(e.title || e.handle || '');
+		const title = link ? `<a href="${esc(link)}" target="_blank" rel="noopener">${name}</a>` : name;
+		const state = e.status && e.status !== 'ACTIVE' ? ` <span class="badge badge--neutral">${esc(e.status.toLowerCase())}</span>` : '';
+		const tag = e.discontinuedTag
+			? ' <span class="badge badge--neutral" title="Tagged pacesetter-discontinued">discontinued tag</span>'
+			: (e.category === 'DISCONTINUED' && e.status === 'ACTIVE' ? ' <span class="badge badge--critical">still active</span>' : '');
+		const codes = e.supplierIds || [];
+		const codeHtml = codes.slice(0, 4).map((c) => `<span class="sku">${esc(c)}</span>`).join(' ')
+			+ (codes.length > 4 ? ` <span class="muted" title="${esc(codes.join(', '))}">+${codes.length - 4}</span>` : '');
+		const why = esc(e.reason || '') + (e.syncBlockedReason ? `<div class="muted status-blocked">${esc(e.syncBlockedReason)}</div>` : '');
+		let action = '';
+		if (e.category === 'READY') {
+			action = e.syncable
+				? `<button class="btn btn--sm btn--primary" data-status-sync="${esc(codes[0] || '')}">Sync</button>`
+				: `<button class="btn btn--sm" disabled title="${esc(e.syncBlockedReason || '')}">Sync</button>`;
+		}
+		return `<tr>
+			<td class="col-thumb"><span class="thumb-cell ${e.imageUrl ? '' : 'is-empty'}">${e.imageUrl ? `<img src="${esc(e.imageUrl)}" alt="" loading="lazy" onerror="this.closest('.thumb-cell').classList.add('is-empty');this.remove()">` : ''}</span></td>
+			<td><div class="prod-name">${title}${state}${tag}</div><div class="muted">${esc(e.handle || '')}</div></td>
+			<td class="status-codes">${codeHtml}</td>
+			<td>${why}</td>
+			<td class="col-actions">${action}</td>
+		</tr>`;
+	}).join('');
+}
+
+function renderNewAtSupplier(r) {
+	el('statusHead').innerHTML = `<tr><th>PaceSetter code</th><th>Name</th><th>Already in the store?</th></tr>`;
+	const rows = [...(r.newAtSupplier || []).map((s) => ({ ...s, isNew: true })), ...(r.related || [])];
+	statusBody.innerHTML = rows.length ? rows.map((s) => `<tr>
+			<td><span class="sku">${esc(s.productId)}</span></td>
+			<td>${esc(s.name || '')}</td>
+			<td>${s.isNew ? '<span class="badge badge--success">No — new</span>'
+				: `<span class="muted">Its variants are in ${(s.relatedHandles || []).map(esc).join(', ')} under other codes</span>`}</td>
+		</tr>`).join('')
+		: `<tr class="row-state"><td colspan="3"><div class="empty"><strong>Nothing new at PaceSetter</strong></div></td></tr>`;
+	if (r.notImportable) {
+		el('statusNote').textContent += ` ${r.notImportable.toLocaleString()} more PaceSetter codes have no product data or no price and are not listed.`;
+	}
+}
+
+el('statusTiles').addEventListener('click', (e) => {
+	const tile = e.target.closest('[data-status-group]'); if (!tile) return;
+	statusGroup = tile.dataset.statusGroup;
+	history.replaceState(null, '', `#status/${statusGroup}`);
+	renderStatus();
+});
+el('statusRefresh').addEventListener('click', () => loadStatus(true));
+statusBody.addEventListener('click', async (e) => {
+	const btn = e.target.closest('[data-status-sync]'); if (!btn) return;
+	const pid = btn.dataset.statusSync;
+	btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+	try {
+		const res = await api(`/api/sync/products/${encodeURIComponent(pid)}`, 'POST', null);
+		toast(`Synced ${pid}: ${res.variantCount} variants`);
+		for (const w of res.warnings || []) toast(`${pid}: ${w}`, true);
+		if (res.discountError) toast(`Discounts for ${pid}: ${res.discountError}`, true);
+		btn.outerHTML = '<span class="badge badge--success">Synced</span>';
+	} catch (err) {
+		toast(err.message, true);
+		btn.disabled = false; btn.textContent = 'Sync';
+	}
+});
+
 el('viewTabs').addEventListener('click', (e) => {
 	const seg = e.target.closest('.seg'); if (!seg) return;
 	if (seg.dataset.view === 'orders') {
 		if (location.hash !== '#orders') location.hash = '#orders';
+	} else if (seg.dataset.view === 'status') {
+		if (!location.hash.startsWith('#status')) location.hash = '#status';
 	} else if (location.hash) {
 		// Dropping the hash with pushState, not `location.hash = ''`, which would leave a bare "#".
 		history.pushState(null, '', location.pathname + location.search);

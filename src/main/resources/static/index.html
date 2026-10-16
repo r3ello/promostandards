@@ -76,11 +76,13 @@
 	</header>
 
 	<main class="page" id="appMain" hidden>
-		<!-- Views: the catalog, and the orders on their way to PaceSetter. The hash keeps the choice
-		     (#orders, #orders/<order id>), so a link can open one order directly. -->
+		<!-- Views: the catalog, the orders on their way to PaceSetter, and where the store stands against
+		     PaceSetter. The hash keeps the choice (#orders, #orders/<order id>, #status, #status/<group>),
+		     so a link can open one order or one group directly. -->
 		<nav class="segmented view-tabs" id="viewTabs" role="tablist" aria-label="View">
 			<button class="seg is-active" data-view="products" role="tab">Products</button>
 			<button class="seg" data-view="orders" role="tab">Orders</button>
+			<button class="seg" data-view="status" role="tab">Status</button>
 		</nav>
 
 		<div id="viewProducts">
@@ -233,6 +235,32 @@
 							</tr>
 						</thead>
 						<tbody id="ordersBody"></tbody>
+					</table>
+				</div>
+			</section>
+		</div>
+
+		<!-- Catalog status (GET /api/catalog/status): every PaceSetter product of the store sorted by
+		     where it stands, built in the background and kept a day. -->
+		<div id="viewStatus" hidden>
+			<section class="card">
+				<div class="card__head">
+					<div>
+						<h1 class="card__title">Catalog status</h1>
+						<p class="card__sub" id="statusMeta">Where every PaceSetter product of the store stands.</p>
+						<p class="card__sub status-hint">This report reads every PaceSetter product, so building it takes 2–3 minutes — the first time, and each time you press Rebuild. It is then kept for a day and opens instantly.</p>
+					</div>
+					<div class="card__actions">
+						<button class="btn" id="statusRefresh" title="Reads every PaceSetter price again: a few minutes">↻ Rebuild</button>
+					</div>
+				</div>
+				<div id="statusWarnings"></div>
+				<div class="status-tiles" id="statusTiles" role="tablist" aria-label="Groups"></div>
+				<p class="status-note" id="statusNote"></p>
+				<div class="table-wrap">
+					<table class="index-table" id="statusTable">
+						<thead id="statusHead"></thead>
+						<tbody id="statusBody"></tbody>
 					</table>
 				</div>
 			</section>

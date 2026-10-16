@@ -2,6 +2,7 @@ package com.trophy.promostandards.sync.web;
 
 import com.trophy.promostandards.db.CatalogQuery;
 import com.trophy.promostandards.sync.CatalogGroupIndex;
+import com.trophy.promostandards.sync.CatalogStatusService;
 import com.trophy.promostandards.sync.CatalogSummaryService;
 import com.trophy.promostandards.sync.CatalogTitleIndex;
 import com.trophy.promostandards.sync.PendingDataIndex;
@@ -10,6 +11,7 @@ import com.trophy.promostandards.sync.model.PendingDataView;
 import com.trophy.promostandards.sync.model.ProductGroupPreview;
 import com.trophy.promostandards.sync.model.CatalogEntry;
 import com.trophy.promostandards.sync.model.CatalogGroupView;
+import com.trophy.promostandards.sync.model.CatalogStatusView;
 import com.trophy.promostandards.sync.model.CatalogTitleView;
 import com.trophy.promostandards.sync.model.ProductDetail;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -37,15 +39,17 @@ public class CatalogController {
     private final CatalogTitleIndex titleIndex;
     private final PendingDataIndex pendingData;
     private final ProductGroupService groups;
+    private final CatalogStatusService status;
 
     public CatalogController(CatalogSummaryService summaries, CatalogGroupIndex groupIndex,
                              CatalogTitleIndex titleIndex, PendingDataIndex pendingData,
-                             ProductGroupService groups) {
+                             ProductGroupService groups, CatalogStatusService status) {
         this.summaries = summaries;
         this.groupIndex = groupIndex;
         this.titleIndex = titleIndex;
         this.pendingData = pendingData;
         this.groups = groups;
+        this.status = status;
     }
 
     /** Cheap list: one entry (id + imported flag) per discoverable product. */
@@ -156,5 +160,22 @@ public class CatalogController {
     @PostMapping("/pending-data/refresh")
     public PendingDataView refreshPendingData() {
         return pendingData.refresh();
+    }
+
+    /**
+     * Where every PromoStandards product of the store stands against PaceSetter — synced, ready,
+     * needing a merge or a code fix, waiting on PaceSetter, discontinued, archived — and what
+     * PaceSetter sells that the store does not carry. Built in the background (a price read per
+     * sellable id), kept a day: the first call may answer {@code status=building}; poll until ready.
+     */
+    @GetMapping("/status")
+    public CatalogStatusView catalogStatus() {
+        return status.view();
+    }
+
+    /** Rebuild the catalog status in the background; answers with the report shown meanwhile. */
+    @PostMapping("/status/refresh")
+    public CatalogStatusView refreshCatalogStatus() {
+        return status.refresh();
     }
 }

@@ -431,6 +431,32 @@ final class ShopifyGraphQL {
             """;
 
     /**
+     * Every PromoStandards product of the store with what the catalog status needs to say where it
+     * stands: lifecycle status, tags (the {@code pacesetter-discontinued} mark), the supplier ids it
+     * covers, whether the sync ever ran on it, and a thumbnail. Archived products are included: those
+     * are the ones a grouping absorbed. Read-only; ~12 pages for the live store.
+     */
+    static final String CATALOG_STATUS_PRODUCTS = """
+            query CatalogStatusProducts($cursor: String) {
+              products(first: 100, after: $cursor, query: "tag:promostandards") {
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  id
+                  handle
+                  title
+                  status
+                  tags
+                  featuredMedia { preview { image { url } } }
+                  psId: metafield(namespace: "custom", key: "ps_product_id") { value }
+                  psIds: metafield(namespace: "custom", key: "ps_product_ids") { value }
+                  lastSync: metafield(namespace: "trophy_sync", key: "last_sync_at") { value }
+                  groupedInto: metafield(namespace: "trophy_sync", key: "grouped_into") { value }
+                }
+              }
+            }
+            """;
+
+    /**
      * Replace a product's images with the supplier's. Media is the one thing {@code productSet} would
      * be right for and cannot be used on: migrated products must never see it (it is declarative over
      * variants). {@code productUpdate} takes media without touching anything else.
