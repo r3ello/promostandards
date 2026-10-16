@@ -1,0 +1,99 @@
+# Productos de la tienda que apuntan a variantes de PaceSetter — 2026-10-06
+
+Productos de Shopify cuyo `ps_product_id(s)` es un id de **parte** (variante) de PaceSetter, no de producto, y cuyo producto padre está **repartido entre varios productos de la tienda**. Ejemplo: `CM745*` (15 colores) está en `p-8884` (6 colores) y `p-8885` (3 colores). Ninguno se ha sincronizado nunca: siguen con la variante única de la migración.
+
+Datos: tienda y PaceSetter leídos el 2026-09-16 (`reports/sync-simulation-2026-09-16/`). CM745 comprobado en vivo el 2026-10-05: sin cambios.
+
+## Resumen
+
+- **76 grupos** = 104 productos de PaceSetter repartidos en **236 productos de la tienda**.
+- **A. 45 grupos (129 productos de tienda) — el padre tiene ficha y precio**: se sincronizan en cuanto se fusionen. 14 tienen stock; 13 traerían además 56 variantes que hoy no están en ningún producto.
+- **B. 31 grupos (107 productos de tienda) — al padre le falta la ficha o el precio**: fusionarlos no basta. El caso típico (24) es Pricing que lista las variantes con precio pero Product Data responde "no product": las variantes existen, la ficha no.
+- 15 grupos juntan **varios** productos de PaceSetter (p. ej. tallas A/B/C con ids distintos): el superviviente llevaría todos en `ps_product_ids`.
+- 22 de los del grupo A tienen pedido mínimo mayor que 1.
+
+## A. Listos tras fusionar
+
+| # | PaceSetter | nombre PaceSetter | productos tienda | variantes PS | no están en la tienda | stock | mín. |
+|---|---|---|---|---|---|---|---|
+| 1 | `CM291*` | Leatherette Oval Keychain | `p-6014` Cork Leatherette Oval Keychain (3), `p-8091` Leatherette Oval Keychain (3), `p-8710` Black/Silver Leatherette Oval Keychain (1), `p-8748` Dark Brown Leatherette Oval Keychain (1), `p-8770` Grey Leatherette Oval Keychain (1), `p-8829` Light Brown Leatherette Oval Keychain (1), `p-8843` Pink Leatherette Oval Keychain (1), `p-8856` Rawhide Leatherette Oval Keychain (1), `p-8859` Rose Leatherette Oval Keychain (1) | 11 | — | 145 | 50 |
+| 2 | `C071A` `C071B` | Florentine Gold Edge Plate on Ebony Board / Florentine Gold Edge Plate on Ebony Board | `p-5734` Florentine Edge Plate on Ebony Board Medium (1), `p-5736` Florentine Gold Edge Plate on Ebony Board Large (1), `p-5737` Florentine Gold Edge Plate on Ebony Board (1), `p-6329` Walnut Finish Plaque with Black Florentine Plate (2), `p-8219` Walnut Finish Plaque with Black Florentine (1), `p-8898` Walnut Finish Plaque with Black Florentine (1) | 8 | C071BSEF | — | 1 |
+| 3 | `GI638` | Clear Crystal Chisel Carve | `p-5565` Chisel Carved with Reflective Black Bottom Award (1), `p-5567` Chisel Carved with Reflective Gold Bottom Award (1), `p-5569` Chisel Carved with Reflective Red Bottom Award (1), `p-5593` Clear Crystal Chisel Carve Award (1), `p-8727` Chisel Carved Reflective Blue Bottom Award (1), `p-8728` Chisel Carved Reflective Green Bottom Award (1) | 6 | — | — | 1 |
+| 4 | `CM293` | 7-Piece Leatherette Manicure Gift Set | `p-8696` 7-Piece Black/Silver Leatherette Manicure Gift Set (1), `p-8697` 7-Piece Dark Brown Leatherette Manicure Gift Set (1), `p-8698` 7-Piece Light Brown Leatherette Manicure Gift Set (1), `p-8699` 7-Piece Pink Leatherette Manicure Gift Set (1), `p-8700` 7-Piece Rawhide Leatherette Manicure Gift Set (1) | 6 | CM293TL | — | 10 |
+| 5 | `CM296` | Leatherette Phone Easel | `p-8711` Black/Silver Leatherette Phone Easel (1), `p-8749` Dark Brown Leatherette Phone Easel (1), `p-8771` Grey Leatherette Phone Easel (1), `p-8830` Light Brown Leatherette Phone Easel (1), `p-8857` Rawhide Leatherette Phone Easel (1) | 5 | — | — | 6 |
+| 6 | `C3501A` `C3501B` `C3501C` | Certificate/Overlay Plaque for 7" x 5" Insert / Certificate/Overlay Plaque for 8" x 6" Insert / Certificate/Overlay Plaque for 8Â½" x 11" Insert | `p-5708` Ebony Finish Certificate/Overlay Plaque (3), `p-5869` Genuine Walnut Certificate Plaque (1), `p-6324` Walnut Finish Certificate/Overlay Plaque in Gift Box (3), `p-6325` Walnut Finish Certificate/Overlay Plaque in Mailer Box (5) | 12 | C3501AEBM C3501BEBM C3501CEBM | — | 1 |
+| 7 | `CD961` | Layered Acrylic Plaque with Color Back and  Circle-Cutout Silver Plate (includes imprint in 2 locations) | `p-5968` Layered Acrylic Plaque w/Black Back and Circle (1), `p-5971` Layered Acrylic Plaque with Orange Back and Circle Award (1), `p-8779` Layered Acrylic Plaque w/Blue Back and Circle (1), `p-8780` Layered Acrylic Plaque w/Green and Circle (1) | 4 | — | — | 1 |
+| 8 | `CM237A*` `CM237B*` | Leatherette Portfolio / Leatherette Portfolio | `p-8096` Leatherette Portfolio (6), `p-8813` Leatherette Portfolio with Notepad (lrg) (7), `p-8814` Leatherette Portfolio with Notepad (sml) (7), `p-8815` Leatherette Portfolio Small (6) | 25 | — | 304 | 4 |
+| 9 | `GI595` | Clear Glass with Bold Black Crystal Accent | `p-5600` Clear Glass with Bold Black Crystal Accent (1), `p-5603` Clear Glass with Bold Red Crystal Accent (1), `p-8733` Clear Glass with Bold Blue Crystal Accent (1), `p-8734` Clear Glass with Bold Green Crystal Accent (1) | 4 | — | — | 1 |
+| 10 | `C021A` `C021B` | Ebony Finish Plaque with Marble Mist / Ebony Finish Plaque with Marble Mist | `p-5712` Ebony Finish Plaque with Marble Mist Small (3), `p-5713` Ebony Finish Plaque with Marble Mist Large (3), `p-8899` Walnut Finish Plaque with Marble Mist Plate (6) | 12 | — | — | 1 |
+| 11 | `CD1101A` `CD1101B` `CD1101C` | Blue Acrylic Color Drops, Small / Blue Acrylic Color Drops, Med / Blue Acrylic Color Drops, Large | `p-7888` Blue Acrylic Color Drops Award (3), `p-8061` Green Acrylic Color Drops Award (3), `p-8153` Red Acrylic Color Drops Award (2) | 9 | CD1101CR | — | 6 |
+| 12 | `CD636` | Arched Brilliance Lucite Award on Clear Base  (Includes Laser in 2 Locations) | `p-5473` Blue Arched Brilliance Award on Clear Base (1), `p-6192` Red Arched Brilliance Award on Clear Base (1), `p-8763` Green Arched Brilliance Award on Clear Base (1) | 3 | — | — | 1 |
+| 13 | `CD904AY*` | Anniversary Freestanding Single Digit Black 1 Year | `p-5377` Anniversary Freestanding 5 Year Award (1), `p-7627` Anniversary Freestanding 3 Year Award (1), `p-7628` Anniversary Freestanding 1 Year Award (1) | 5 | CD904Y2 CD904Y4 | — | 1 |
+| 14 | `CM240*` | Leatherette Round Coaster | `p-5623` Cork Round Coaster (1), `p-8098` Leatherette Round Coaster (3), `p-8817` Leatherette Round Coaster (8) | 12 | — | 112 | 6 |
+| 15 | `CM455` | Leatherette Money Clip | `p-8088` Leatherette Money Clip Large (1), `p-8799` Leatherette Money Clip Small (1), `p-8800` Leatherette Money Clip Large (4) | 7 | CM455BB | — | 10 |
+| 16 | `CM754` | Walnut Double Row Challenge Coin Display | `p-8218` Walnut Double Row Challenge Coin Display (1), `p-8220` Walnut Quadruple Row Challenge Coin Display (1), `p-8222` Walnut Triple Row Challenge Coin Display (1) | 3 | — | — | 1 |
+| 17 | `GI515` | Curved Beveled-Top Crystal with Bowed Glass Accent | `p-5433` Black Curved Beveled (1), `p-5484` Blue Curved Beveled (1), `p-8765` Green Curved Beveled (1) | 3 | — | — | 1 |
+| 18 | `GI673` | Clear Crystal with Blue & Black Crystal Accents | `p-7930` Clear Crystal with Black Crystal Accents (1), `p-7931` Clear Crystal with Blue & Black Crystal Accents (1), `p-7932` Clear Crystal with Red & Black Crystal Accents (1) | 3 | — | — | 1 |
+| 19 | `GM805` | Blue Teardrop Art Glass | `p-7898` Blue Teardrop Art Glass (1), `p-8067` Green Teardrop Art Glass (1), `p-8158` Red Teardrop Art Glass (1) | 3 | — | — | 1 |
+| 20 | `C0642` | Star Cast Self-Standing Plaque | `p-5899` Gold Star Self-Standing Plaque (1), `p-6249` Silver Star Self-Standing Plaque (1) | 2 | — | — | 1 |
+| 21 | `C4801A` `C4801AA` `C4801B` `C4801C` | Slide-in Certificate Plaque - Walnut Finish for 8" x 6" Insert / Slide-in Certificate Plaque - Walnut Finish for 7" x 5" Insert / Slide-in Certificate Plaque - Walnut Finish for 10" x 8" Insert / Slide-in Certificate Plaque - Walnut Finish for 11" x 8Â½" Insert | `p-6270` Slide-in Certificate Walnut Plaque in Gift Box (4), `p-6271` Slide-in Certificate Walnut Plaque in Mailer Box (4) | 8 | — | — | 1 |
+| 22 | `C4802` | Certificate Frame with Metallized Accent | `p-6321` Walnut Certificate Frame with Gold Metallized Accent (1), `p-8709` Black Certificate Frame with Silver Metallized Accent (1) | 2 | — | — | 1 |
+| 23 | `C610L` | Medium Chisel Carve Tower | `p-6082` Medium Gold Chisel Carve Tower Award (1), `p-8832` Medium Blue Chisel Carve Tower Award (1) | 2 | — | — | 1 |
+| 24 | `CD476` `CD477` `CD478` | Cascade Metal Stars on Genuine Italian Marble Base - Small / Cascade Metal Stars on Genuine Italian Marble Base - Medium / Cascade Metal Stars on Genuine Italian Marble Base - Large | `p-5530` Bronze Cascade Metal Stars Award (3), `p-5881` Gold Cascade Metal Stars Award (3) | 9 | CD476S CD477S CD478S | — | 1 |
+| 25 | `CD848` | Lucite Wave Monument on Black Marble Base | `p-5504` Blue Lucite Rising Tide Wave Monument Award (1), `p-5891` Gold Lucite Rising Tide Wave Monument Trophy (1) | 2 | — | — | 1 |
+| 26 | `CD945` | Frosted Lucite on Black Piano Plaque and Color Plate | `p-5840` Frosted Lucite on Black Piano Plaque and Black Plate (1), `p-8755` Frosted Lucite on Black Piano Plaque and Blue Plate (1) | 2 | — | — | 1 |
+| 27 | `CM241*` | Leatherette Square Coaster | `p-5625` Cork Square Coaster (1), `p-8821` Leatherette Square Coaster (8) | 12 | CM241BB CM241BV CM241WM | 175 | 6 |
+| 28 | `CM243*` | Leatherette Hard Business Card Case | `p-8084` Leatherette Hard Business Card Case (3), `p-8796` Leatherette Hard Business Card Case (8) | 10 | — | 340 | 10 |
+| 29 | `CM244*` | Leatherette Notepad and Pen | `p-8805` Large Leatherette Notepad and Pen (11), `p-8806` Leatherette Notepad and Pen Small (1) | 11 | — | 35 | 10 |
+| 30 | `CM254` | 6 oz. Matte Black Stainless Steel Lasered Flask | `p-8694` 6 oz. Matte Black Stainless Steel Lasered Flask (1), `p-8695` 6 oz Powder Coated Green Stainless Steel Lasered Flask (1) | 2 | — | — | 10 |
+| 31 | `CM282*` | Cork Round 6-Coaster Set | `p-5624` Cork Round (1), `p-8818` Leatherette Set of 6 Round Coasters (6) | 7 | — | 514 | 4 |
+| 32 | `CM283*` | Leatherette Square 6-Coaster Set | `p-5626` Cork Square Coasters Set (1), `p-8822` Leatherette Square Coasters Set (6) | 9 | CM283BS CM283RD | 58 | 4 |
+| 33 | `CM292` | Leatherette Slim-Line Wallet | `p-8819` Leatherette Slim Small (4), `p-8820` Leatherette Slim Large (1) | 5 | — | — | 10 |
+| 34 | `CM332*` `CM333` | Leatherette Bottle Opener / Leatherette Bottle Opener | `p-5618` Cork Bottle Opener (1), `p-8784` Leatherette Bottle Opener (15) | 16 | CM332BV CM333CK CM333TL | 99 | 25 |
+| 35 | `CM372` | Leatherette Cigar Case with Cutter, Bamboo | `p-8080` Leatherette Cigar Case with Cutter (1), `p-8787` Leatherette Cigar Case with Cutter (7) | 8 | — | — | 6 |
+| 36 | `CM711` `CM712` `CM713*` `CM726*` `CM731` | Polar Camel 20 oz. Ringneck Tumbler / Polar Camel 12 oz. Stemless Tumbler / Polar Camel 16 oz. Stemless Tumbler / Polar Camel 15 oz. Mug, Black / Polar Camel Powder Coated Insulated Travel Water Bottle Includes Straw | `p-8848` Polar Camel Small (50), `p-8850` Polar Camel Medium (15) | 87 | CM711BK CM711BKRG CM711WHRG CM712BKRG CM712CR CM712WHRG CM712YW CM713CR CM713YW CM726BK CM731BKRG CM731LB CM731LP CM731MR CM731OR CM731PK CM731PU CM731RD CM731TL CM731WH CM731WHRG CM731YW | 201 | 24 |
+| 37 | `CM723*` | Golf Bag Tag with Tees | `p-8761` Golf Bag Tag with Tees (1), `p-8762` Leatherette Golf Bag Tag with Tees (5) | 6 | — | 85 | 10 |
+| 38 | `CM745*` | Tahoe Insulated Stemless Tumbler 16 oz. | `p-8884` Tahoe Stemless Cocktail Tumbler (6), `p-8885` Tahoe Stemless Cocktail Tumblers (3) | 15 | CM745GY CM745CR CM745GR CM745OR CM745WH CM745YW | 22620 | 36 |
+| 39 | `CM746*` `CM747*` | Tahoe Insulated Stemless Tumbler 30 oz. / Tahoe Insulated Tumbler Medium 20oz | `p-8886` Tahoe Travel Mug (2), `p-8887` Tahoe Travel Tumbler (16) | 26 | CM746TL CM746WH CM746CR CM746GR CM746GY CM746MR CM747GR CM747WH | 47867 | 24 |
+| 40 | `CM750` | Black Walnut Cutting & Charcuterie Board | `p-7881` Black Walnut Cutting & Charcuterie Board Large (2), `p-7882` Black Walnut Cutting & Charcuterie Board (4) | 6 | — | — | 6 |
+| 41 | `CM816*` | Powder Coated Tumbler | `p-8853` Powder Coated Tumbler Small (8), `p-8854` Powder Coated Tumbler Large (1) | 9 | — | 26 | 24 |
+| 42 | `GI513A` `GI513B` `GI513C` | Optic Crystal Gemstone Award - Small / Optic Crystal Gemstone Award - Medium / Optic Crystal Gemstone Award - Tall | `p-5509` Blue Optic Crystal Gemstone Award (3), `p-8768` Green Optic Crystal Gemstone Award (3) | 6 | — | — | 1 |
+| 43 | `GI603` | 3 Tier Glass Tower - Amber | `p-5337` 3 Tier Glass Tower Award Amber (1), `p-5338` 3 Tier Glass Tower Blue Award (1) | 2 | — | — | 1 |
+| 44 | `GI608` | Clear and Black Crystal Jewel-Cut Pillar  (Includes Silver Color-Fill on Black) | `p-5668` Crystal Towers w/ Black Jewel cut Pillar (1), `p-5669` Crystal Towers w/ White Jewel cut Pillar (1) | 2 | — | — | 1 |
+| 45 | `GI672` | Angular Clear/Blue Glass | `p-7837` Angular Clear/Black Glass Award (1), `p-7838` Angular Clear/Blue Glass Award (1) | 2 | — | — | 1 |
+
+## B. El padre no tiene ficha o precio
+
+| # | PaceSetter | qué devuelve PaceSetter | productos tienda |
+|---|---|---|---|
+| 1 | `C609LB` … `C701L` (5) | ficha, precio; sin ficha, precio | `p-5430` Black Chisel Carve Tower Award on Base, `p-5478` Blue Chisel Carve Tower Award, `p-5479` Blue Chisel Carved Tower Award On Base, `p-5882` Gold Chisel Carve Tower Award, `p-5883` Gold Chisel Carved Tower on Base Award, `p-5897` Gold Spectrum Chisel Carved Tower Award, `p-5908` Green Chisel Carve Tower Award on Base, `p-5909` Green Chisel Carve Tower Award, `p-6182` Purple Chisel Carve Tower Award on Base, `p-6196` Red Chisel Carve Tower Award on Base, `p-6208` Red Spectrum Chisel Carved Tower Award, `p-8147` Purple Chisel Carve Tower Award, `p-8719` Blue Spectrum Chisel Carved Tower Small, `p-8760` Gold Chisel Carved Tower On Base Large, `p-8890` Teal Chisel Carve Tower Award on Base, `p-8891` Teal Chisel Carve Tower Award |
+| 2 | `C750` | sin ficha, precio | `p-8716` Blue Halley Collection Plaque, `p-8776` Large Gold Halley Plaque, `p-8777` Large Green Halley Plaque, `p-8778` Large Red Halley Plaque, `p-8833` Medium Gold Halley Plaque, `p-8834` Medium Green Halley Plaque, `p-8835` Medium Red Halley Plaque, `p-8876` Small Gold Halley Plaque, `p-8877` Small Green Halley Plaque, `p-8878` Small Red Halley Plaque |
+| 3 | `CD953AK/CD953AL/CD953AR/CD953AZ/CD953CO/CD953CT/CD953GA/CD953IA/CD953IL/CD953IN/CD953KS/CD953KY/CD953LA/CD953ME/CD953MN/CD953MO/CD953MS/CD953MT/CD953ND/CD953NE/CD953NH/CD953NJ/CD953NM/CD953NV/CD953NY/CD953OH/CD953OK/CD953OR/CD953PA/CD953RI/CD953SC/CD953SD/CD953TX/CD953UT/CD953VA/CD953VT/CD953WA/CD953WI/CD953WV/CD953WY` | sin ficha, sin precio | `p-8001` Frosted Acrylic CA State Cutout on Black Plaque, `p-8004` Frosted Acrylic DE State Cutout on Black Plaque, `p-8005` Frosted Acrylic FL State Cutout on Black Plaque, `p-8007` Frosted Acrylic HI State Cutout on Black Plaque, `p-8009` Frosted Acrylic ID State Cutout on Black Plaque, `p-8015` Frosted Acrylic MA State Cutout on Black Plaque, `p-8016` Frosted Acrylic MD State Cutout on Black Plaque, `p-8018` Frosted Acrylic MI State Cutout on Black Plaque, `p-8023` Frosted Acrylic NC State Cutout on Black Plaque, `p-8038` Frosted Acrylic TN State Cutout on Black Plaque |
+| 4 | `C023` | sin ficha, precio | `p-5510` Blue Plaque w/ Marble Mist Small, `p-5511` Blue Plaque w/ Marble Mist Large, `p-6205` Red Plaque w/ Marble Mist Small, `p-6206` Red Plaque with Marble Mist Large, `p-8758` Genuine Walnut Elliptical Plaque with Marble Mist, `p-8845` Plaque w/ Green Marble Mist |
+| 5 | `CD414*` | ficha, sin precio | `p-7896` Blue Marble Florentine Plate on Ebony Finish Board, `p-8156` Red Marble Florentine Plate on Ebony Board, `p-8718` Blue Marble Florentine Plate on Ebony Board, `p-8766` Green Marble Florentine Plate on Ebony Board, `p-8767` Green Marble Florentine Plate on Walnut Finish Board, `p-8858` Red Marble Florentine Plate on Walnut Finish Board |
+| 6 | `CD547A` `CD547B` `CD547C` | ficha, precio; sin ficha, precio | `p-5696` Digi-color Mahogany Plaque, `p-6081` Medium Digi, `p-6322` Walnut Finish  Digi, `p-6326` Walnut Finish Digi, `p-7985` Extra-Large Digi, `p-8775` Large Digi Large |
+| 7 | `DCC3001BEB` `DCCD520` | ficha, precio; sin ficha, precio | `p-5711` Ebony Finish Plaque with choice of plate and board, `p-7984` Ebony Piano Finish Plaque, `p-8729` Choice of Digi Small, `p-8730` Choice of Digi Large |
+| 8 | `C072` | sin ficha, precio | `p-5896` Gold Plaque w/ Black with Gold Florentine Plate, `p-8756` Genuine Walnut Elliptical Plaque with Black/Silver Florentine Small, `p-8757` Genuine Walnut Elliptical Plaque with Black/Silver Florentine Large |
+| 9 | `GM453` | sin ficha, precio | `p-6101` Optic Clear Crystal Cube XX Large Award, `p-6102` Optic Clear Crystal Cube X Large Award Trophy, `p-6103` Optic Clear Crystal Cube Award Trophy |
+| 10 | `C075` | sin ficha, precio | `p-6258` Simplicity Plate on Walnut Finish Board Plaque, `p-8874` Simplicity Plate on Walnut Finish Board |
+| 11 | `C076` | sin ficha, precio | `p-6256` Simplicity Plate on Ebony Board Plaque, `p-8873` Simplicity Plate on Ebony Board |
+| 12 | `CD1053` | sin ficha, precio | `p-8057` Golf Course Silhouette Award, `p-8058` Golf Course Silhouette Award Trophy |
+| 13 | `CD1217` | ficha, sin precio | `p-8154` Red Cascade Carved Acrylic Award, `p-8714` Blue Cascade Carved Acrylic Award |
+| 14 | `CD603` | sin ficha, precio | `p-5493` Blue Gemstone Brilliance Lucite Peak Award, `p-5913` Green Gemstone Brilliance Lucite Peak Award |
+| 15 | `CD852` | sin ficha, precio | `p-5488` Blue Designs Deco Lucite Tablet, `p-6199` Red Designs Deco Lucite Tablet Award Trophy |
+| 16 | `CD854` | sin ficha, precio | `p-5485` Blue Deco Lucite Peak on Marble Base Award, `p-6198` Red Deco Lucite Peak On Marble Base Award Trophy |
+| 17 | `CD947` | sin ficha, precio | `p-5574` Circle Cutout Alder Wood and Silver Backer Digi, `p-5575` Circle Cutout Mahogany Wood and Silver Backer Digi |
+| 18 | `CM401` | sin ficha, precio | `p-6246` Silver Metal Trophy Cup, `p-8053` Gold Metal Trophy Cup |
+| 19 | `CM727*` `CM737*` | ficha, precio; ficha, sin precio | `p-8846` Polar Camel stainless steel beverage holder. Small, `p-8847` Polar Camel stainless steel beverage holder. Large |
+| 20 | `GI29` | sin ficha, precio | `p-6143` Optic Crystal Wedge Award Trophy, `p-8123` Optic Crystal Wedge Award Large |
+| 21 | `GI512` | sin ficha, precio | `p-5523` Blue Vibrant Gemstone Award, `p-8769` Green Vibrant Gemstone Award |
+| 22 | `GI583Y` | sin ficha, precio | `p-5544` Carved Clear Crystal on Black Base w/Digi, `p-5545` Carved Clear Crystal Award on Black Base with Logo Medallion |
+| 23 | `GI674` | sin ficha, precio | `p-7976` Diamond Tower, `p-7977` Diamond Tower. Large |
+| 24 | `GM413` | sin ficha, precio | `p-5729` Florence Series Faceted Oval Crystal Small, `p-5730` Florence Series Faceted Oval Crystal Large |
+| 25 | `GM698` | sin ficha, precio | `p-6171` Premium Blue Glass Tablet with Metal Stand, `p-6172` Premium Blue Glass Tablet with Metal Stand Small |
+| 26 | `GM699` | sin ficha, precio | `p-6169` Premium Black Glass Tablet with Metal Stand, `p-6170` Premium Black Glass Tablet with Metal Stand Small |
+| 27 | `GM722` | sin ficha, precio | `p-5635` Crystal Tapered Monolith, `p-5665` Crystal Tapered Monolith |
+| 28 | `GM731` | sin ficha, precio | `p-6189` Rectangle Etched Edge Crystal with Layered Base Large, `p-6190` Rectangle Etched Edge Crystal with Layered Base |
+| 29 | `GM742` | sin ficha, precio | `p-8105` Light & Dark Blue Art Glass on Clear Base Small, `p-8106` Light & Dark Blue Art Glass on Clear Base Large |
+| 30 | `GM755` | sin ficha, precio | `p-7958` Crystal Tablet with Globe Small, `p-7959` Crystal Tablet with Globe Large |
+| 31 | `CD549` | sin ficha, precio | `p-6071` Lucite Square & Rectangular Block Awards |

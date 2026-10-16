@@ -29,6 +29,7 @@ final class VariantOptions {
     static final String COLOR = "Color";
     static final String SIZE = "Size";
     static final String YEAR = "Year";
+    static final String STATE = "State";
     static final String DEFAULT_COLOR = "Default";
     static final String DEFAULT_SIZE = "One Size";
 
@@ -135,6 +136,112 @@ final class VariantOptions {
             years.add(year);
         }
         return years;
+    }
+
+    /** US state (and DC) postal codes, by name — the State option's values. */
+    private static final Map<String, String> STATES = Map.ofEntries(
+            Map.entry("AL", "Alabama"), Map.entry("AK", "Alaska"), Map.entry("AZ", "Arizona"),
+            Map.entry("AR", "Arkansas"), Map.entry("CA", "California"), Map.entry("CO", "Colorado"),
+            Map.entry("CT", "Connecticut"), Map.entry("DE", "Delaware"), Map.entry("DC", "District of Columbia"),
+            Map.entry("FL", "Florida"), Map.entry("GA", "Georgia"), Map.entry("HI", "Hawaii"),
+            Map.entry("ID", "Idaho"), Map.entry("IL", "Illinois"), Map.entry("IN", "Indiana"),
+            Map.entry("IA", "Iowa"), Map.entry("KS", "Kansas"), Map.entry("KY", "Kentucky"),
+            Map.entry("LA", "Louisiana"), Map.entry("ME", "Maine"), Map.entry("MD", "Maryland"),
+            Map.entry("MA", "Massachusetts"), Map.entry("MI", "Michigan"), Map.entry("MN", "Minnesota"),
+            Map.entry("MS", "Mississippi"), Map.entry("MO", "Missouri"), Map.entry("MT", "Montana"),
+            Map.entry("NE", "Nebraska"), Map.entry("NV", "Nevada"), Map.entry("NH", "New Hampshire"),
+            Map.entry("NJ", "New Jersey"), Map.entry("NM", "New Mexico"), Map.entry("NY", "New York"),
+            Map.entry("NC", "North Carolina"), Map.entry("ND", "North Dakota"), Map.entry("OH", "Ohio"),
+            Map.entry("OK", "Oklahoma"), Map.entry("OR", "Oregon"), Map.entry("PA", "Pennsylvania"),
+            Map.entry("RI", "Rhode Island"), Map.entry("SC", "South Carolina"), Map.entry("SD", "South Dakota"),
+            Map.entry("TN", "Tennessee"), Map.entry("TX", "Texas"), Map.entry("UT", "Utah"),
+            Map.entry("VT", "Vermont"), Map.entry("VA", "Virginia"), Map.entry("WA", "Washington"),
+            Map.entry("WV", "West Virginia"), Map.entry("WI", "Wisconsin"), Map.entry("WY", "Wyoming"));
+
+    /** A family needs this many states before its codes are read as states rather than colours. */
+    private static final int MIN_STATES = 10;
+
+    /**
+     * The states of a state-cutout family, or {@code null} when {@code variants} is not one.
+     *
+     * <p>PaceSetter sells a state-shaped award as one part per state — {@code CD900AK}, {@code CD900AL}
+     * … {@code CD900WY}, plus a few stock shapes ({@code CD900OVAL}, {@code CD900STAR},
+     * {@code CD900USA}) — and gives them all one colour, "Clear Black". As Color they read "Clear
+     * Black (AK)", "Clear Black (IN)"…; the state is the only thing the shopper chooses, so the family
+     * gets a single {@code State} option valued with the state's name.
+     *
+     * <p>A family is one stem ending in a digit, the same for every part, followed by letters; at least
+     * {@value #MIN_STATES} parts and four in five must be state codes, so a colour family whose codes
+     * happen to include {@code OR} or {@code IN} is never taken for one. Other tails are stock shapes,
+     * named by their code in title case ({@code OVAL} → "Oval"; {@code US}/{@code USA} → "USA").
+     */
+    static List<String> stateLabels(List<Variant> variants) {
+        if (variants.size() < MIN_STATES) {
+            return null;
+        }
+        Map<String, Integer> stems = new LinkedHashMap<>();
+        for (Variant v : variants) {
+            String id = v.supplierPartId();
+            if (id == null || id.trim().length() < 3) {
+                return null;
+            }
+            id = id.trim().toUpperCase(Locale.ROOT);
+            stems.merge(id.substring(0, id.length() - 2), 1, Integer::sum);
+        }
+        String stem = stems.entrySet().stream().max(Map.Entry.comparingByValue()).orElseThrow().getKey();
+        if (stem.isEmpty() || !Character.isDigit(stem.charAt(stem.length() - 1))) {
+            return null;
+        }
+        List<String> labels = new ArrayList<>(variants.size());
+        Set<String> seen = new LinkedHashSet<>();
+        int states = 0;
+        for (Variant v : variants) {
+            String id = v.supplierPartId().trim().toUpperCase(Locale.ROOT);
+            String tail = id.startsWith(stem) ? id.substring(stem.length()) : "";
+            if (!tail.matches("[A-Z]{2,}")) {
+                return null;
+            }
+            String label = STATES.get(tail);
+            if (label != null) {
+                states++;
+            } else {
+                label = tail.equals("US") || tail.equals("USA") ? "USA"
+                        : tail.charAt(0) + tail.substring(1).toLowerCase(Locale.ROOT);
+            }
+            if (!seen.add(key(label))) {
+                return null;
+            }
+            labels.add(label);
+        }
+        return states >= MIN_STATES && states * 5 >= variants.size() * 4 ? labels : null;
+    }
+
+    /**
+     * The one option a family is chosen by, when it is one: years ({@link #yearLabels}) or states
+     * ({@link #stateLabels}); {@code null} for everything else, which keeps Color/Size.
+     *
+     * @param name   the option's name
+     * @param labels one value per variant, in the order of {@code variants}
+     * @param order  the distinct values in the order the selector should list them
+     */
+    record SingleOption(String name, List<String> labels, List<String> order) {
+    }
+
+    static SingleOption singleOption(List<Variant> variants) {
+        List<String> years = yearLabels(variants);
+        if (years != null) {
+            return new SingleOption(YEAR, years, years.stream().distinct()
+                    .sorted(java.util.Comparator.comparingInt(Integer::parseInt)).toList());
+        }
+        List<String> states = stateLabels(variants);
+        if (states != null) {
+            // States alphabetically, then the stock shapes (Oval, Star, USA).
+            java.util.Comparator<String> byKind = java.util.Comparator.comparing(
+                    l -> !STATES.containsValue(l));
+            return new SingleOption(STATE, states, states.stream().distinct()
+                    .sorted(byKind.thenComparing(java.util.Comparator.naturalOrder())).toList());
+        }
+        return null;
     }
 
     /** Suffixes every label of one ambiguous colour with what its part id adds over the others. */

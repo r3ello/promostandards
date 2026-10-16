@@ -127,6 +127,7 @@ CASES: dict[str, dict] = {
     "PRODUCT_MEDIA_STATUS": {"id": GHOST["product"]},
     "PRODUCT_OPTIONS_DELETE": {"productId": GHOST["product"], "options": [GHOST["option"]],
                                "strategy": "DEFAULT"},
+    "VARIANTS_BULK_DELETE": {"productId": GHOST["product"], "variantsIds": [GHOST["variant"]]},
     "PRODUCT_OPTIONS_REORDER": {"productId": GHOST["product"],
                                 "options": [{"name": "Year", "values": [{"name": "1"}, {"name": "10"}]}]},
     "VARIANT_APPEND_MEDIA": {"productId": GHOST["product"],

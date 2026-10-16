@@ -50,3 +50,10 @@ __pycache__/
 
 # Claude Code: per-machine permissions, not project configuration
 .claude/settings.local.json
+
+### reports/: keep the generators (.py) and the write-ups (.md), not the data they read or write
+### (store and supplier snapshots, CSVs for Matrixify, PDFs for the client, run logs)
+reports/**
+!reports/**/
+!reports/**/*.py
+!reports/**/*.md

@@ -133,6 +133,48 @@ class VariantOptionsTest {
         assertThat(VariantOptions.yearLabels(List.of(variant("CD902Y5", null, null)))).isNull();
     }
 
+    /**
+     * CD900*, as the store holds it after the 2026-10-09 merge: one part per state plus three stock
+     * shapes, every one "Clear Black". STAR and OVAL end in AR and AL, which are states too.
+     */
+    @Test
+    void namesAStateFamilyByTheState() {
+        List<String> codes = List.of("AK", "AL", "AR", "AZ", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "IA",
+                "TX", "WY", "OVAL", "STAR", "USA");
+        List<Variant> variants = codes.stream()
+                .map(c -> variant("CD900" + c, "Clear Black", "8.75 X 8.5 X 2")).toList();
+
+        List<String> labels = VariantOptions.stateLabels(variants);
+        assertThat(labels).hasSize(codes.size());
+        assertThat(labels.subList(0, 3)).containsExactly("Alaska", "Alabama", "Arkansas");
+        assertThat(labels.subList(codes.size() - 3, codes.size())).containsExactly("Oval", "Star", "USA");
+
+        VariantOptions.SingleOption only = VariantOptions.singleOption(variants);
+        assertThat(only.name()).isEqualTo("State");
+        // States by name, then the stock shapes.
+        assertThat(only.order().subList(0, 4)).containsExactly("Alabama", "Alaska", "Arizona", "Arkansas");
+        assertThat(only.order().subList(codes.size() - 3, codes.size())).containsExactly("Oval", "Star", "USA");
+    }
+
+    @Test
+    void aColourFamilyIsNotAStateFamily() {
+        // CM291's colour codes: a few happen to be states (none here), most are not.
+        List<Variant> colours = List.of("BB", "BS", "BV", "DB", "GR", "LB", "PK", "RS", "RW", "TL", "CK", "WM")
+                .stream().map(c -> variant("CM291" + c, null, null)).toList();
+        assertThat(VariantOptions.stateLabels(colours)).isNull();
+        // Codes that are all states but too few to say so (IN, OR, MA could be anything).
+        assertThat(VariantOptions.stateLabels(List.of("IN", "OR", "MA").stream()
+                .map(c -> variant("CM100" + c, null, null)).toList())).isNull();
+        // States, but under two different stems: two products, not one family.
+        List<Variant> mixed = new java.util.ArrayList<>();
+        for (String c : List.of("AK", "AL", "AR", "AZ", "CA", "CO", "CT", "DE", "FL", "GA", "HI")) {
+            mixed.add(variant("CD900" + c, null, null));
+            mixed.add(variant("CD953" + c, null, null));
+        }
+        assertThat(VariantOptions.stateLabels(mixed)).isNull();
+        assertThat(VariantOptions.singleOption(colours)).isNull();
+    }
+
     private static Variant uncoloured(String partId, String label) {
         return new Variant(partId, null, null, partId, null, null, null, List.of(), null, null, label);
     }
