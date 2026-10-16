@@ -19,7 +19,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -40,6 +42,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>Same shape as {@link CatalogTitleIndex}: built on demand (never at startup), the first view may
  * say {@code building}, and a failed call for one id marks that id pending rather than failing the
  * build — which is exactly what the supplier's own "not found" looks like from here.
+ *
+ * <p>The same pass also keeps <b>which parts</b> each id's Inventory answer lists
+ * ({@link #inventoryParts()}): PaceSetter answers for a whole family (CM297LB lists every CM297*
+ * colour), which is the only place some variants show up at all — and so the only way to see that a
+ * sync of one store product would pull in a variant another store product already sells
+ * ({@link CatalogStatusService}). Keeping it here costs no supplier call the index did not make.
  */
 @Service
 public class PendingDataIndex {
@@ -57,6 +65,7 @@ public class PendingDataIndex {
 
     private volatile Snapshot snapshot = Snapshot.EMPTY;
     private final AtomicBoolean building = new AtomicBoolean(false);
+    private volatile CompletableFuture<Void> inFlight = CompletableFuture.completedFuture(null);
 
     public PendingDataIndex(ProductDataService productData, InventoryService inventory,
                             PendingDataProperties props, ObjectMapper objectMapper, SyncProperties sync,
@@ -69,9 +78,15 @@ public class PendingDataIndex {
         this.promoStandards = promoStandards;
     }
 
-    /** Immutable point-in-time index; {@code builtAt == null} means "never built". */
-    record Snapshot(Instant builtAt, List<String> productIds) {
-        static final Snapshot EMPTY = new Snapshot(null, List.of());
+    /**
+     * Immutable point-in-time index; {@code builtAt == null} means "never built".
+     *
+     * @param productIds     the sellable ids with no inventory data, in catalog order
+     * @param inventoryParts per sellable id that has inventory, the part ids its answer lists; null
+     *                       for a snapshot read from a file written before this was kept
+     */
+    record Snapshot(Instant builtAt, List<String> productIds, Map<String, List<String>> inventoryParts) {
+        static final Snapshot EMPTY = new Snapshot(null, List.of(), Map.of());
 
         boolean isEmpty() {
             return builtAt == null;
@@ -79,7 +94,8 @@ public class PendingDataIndex {
     }
 
     /** Persisted cache shape; {@code source} keeps a stub-built file from being served live. */
-    record Persisted(String source, Instant builtAt, List<String> productIds) {
+    record Persisted(String source, Instant builtAt, List<String> productIds,
+                     Map<String, List<String>> inventoryParts) {
     }
 
     private String currentSource() {
@@ -102,7 +118,8 @@ public class PendingDataIndex {
                         file, p.source(), currentSource());
                 return;
             }
-            snapshot = new Snapshot(p.builtAt(), p.productIds() == null ? List.of() : p.productIds());
+            snapshot = new Snapshot(p.builtAt(), p.productIds() == null ? List.of() : p.productIds(),
+                    p.inventoryParts());
             log.info("Loaded pending-data index from {} ({} ids)", file, snapshot.productIds().size());
         } catch (IOException e) {
             log.warn("Could not read pending-data cache {}: {}", file, e.getMessage());
@@ -131,9 +148,24 @@ public class PendingDataIndex {
         return new PendingDataView(status, snap.builtAt(), snap.productIds().size(), snap.productIds());
     }
 
+    /**
+     * Per sellable id with inventory, the part ids its Inventory answer lists. Blocks until the index
+     * is built — joining a build already running rather than starting a second pass — so it is for
+     * background work only ({@link CatalogStatusService}), never a request thread.
+     */
+    public Map<String, List<String>> inventoryParts() {
+        Snapshot snap = snapshot;
+        if (snap.isEmpty() || snap.inventoryParts() == null || isStale(snap)) {
+            triggerBuild();
+            inFlight.join();
+            snap = snapshot;
+        }
+        return snap.inventoryParts() == null ? Map.of() : snap.inventoryParts();
+    }
+
     private void triggerBuild() {
         if (building.compareAndSet(false, true)) {
-            CompletableFuture.runAsync(this::runBuild);
+            inFlight = CompletableFuture.runAsync(this::runBuild);
         }
     }
 
@@ -157,13 +189,17 @@ public class PendingDataIndex {
             }
         }
         Set<String> pending = ConcurrentHashMap.newKeySet();
+        Map<String, List<String>> parts = new ConcurrentHashMap<>();
         ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, Math.min(FETCH_CONCURRENCY, ids.size())));
         try {
             List<CompletableFuture<Void>> calls = new ArrayList<>();
             for (String id : ids) {
                 calls.add(CompletableFuture.runAsync(() -> {
-                    if (!hasInventory(id)) {
+                    List<String> listed = inventoryPartIds(id);
+                    if (listed == null) {
                         pending.add(id);
+                    } else {
+                        parts.put(id, listed);
                     }
                 }, pool));
             }
@@ -173,19 +209,36 @@ public class PendingDataIndex {
         }
         // Catalog order, so the file diffs cleanly between builds.
         List<String> ordered = ids.stream().filter(pending::contains).toList();
+        Map<String, List<String>> orderedParts = new LinkedHashMap<>();
+        for (String id : ids) {
+            if (parts.containsKey(id)) {
+                orderedParts.put(id, parts.get(id));
+            }
+        }
         log.info("Built pending-data index: {} of {} sellable ids have no inventory data",
                 ordered.size(), ids.size());
-        return new Snapshot(Instant.now(), ordered);
+        return new Snapshot(Instant.now(), ordered, Map.copyOf(orderedParts));
     }
 
-    /** A "not found" and an empty answer mean the same thing here: nothing to publish as stock. */
-    private boolean hasInventory(String id) {
+    /**
+     * The part ids an id's Inventory answer lists, or null when it has none: a "not found" and an
+     * empty answer mean the same thing here — nothing to publish as stock.
+     */
+    private List<String> inventoryPartIds(String id) {
         try {
             InventoryLevels levels = inventory.getInventoryLevels(id, null);
-            return levels != null && levels.parts() != null && !levels.parts().isEmpty();
+            if (levels == null || levels.parts() == null || levels.parts().isEmpty()) {
+                return null;
+            }
+            return levels.parts().stream()
+                    .map(InventoryLevels.PartInventory::partId)
+                    .filter(partId -> partId != null && !partId.isBlank())
+                    .map(String::trim)
+                    .distinct()
+                    .toList();
         } catch (RuntimeException e) {
             log.debug("pending-data: inventory for {} unavailable: {}", id, e.getMessage());
-            return false;
+            return null;
         }
     }
 
@@ -210,7 +263,7 @@ public class PendingDataIndex {
                 Files.createDirectories(file.getParent());
             }
             objectMapper.writeValue(file.toFile(),
-                    new Persisted(currentSource(), snap.builtAt(), snap.productIds()));
+                    new Persisted(currentSource(), snap.builtAt(), snap.productIds(), snap.inventoryParts()));
         } catch (IOException e) {
             log.warn("Could not write pending-data cache {}: {}", file, e.getMessage());
         }

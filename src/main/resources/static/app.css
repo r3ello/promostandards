@@ -485,3 +485,23 @@ body {
 }
 .ord-email__field input.input:focus { outline: 2px solid var(--p-color-border-focus, #005bd3); outline-offset: -1px; }
 .ord-email__changed p { margin: var(--p-space-150) 0 0; }
+
+/* Catalog status: one tile per group, the open one outlined; the list below is that group. */
+.status-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: var(--p-space-200); padding: 0 var(--p-space-400) var(--p-space-300); }
+.status-tile {
+	display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; cursor: pointer;
+	padding: var(--p-space-300); border-radius: var(--p-border-radius-200); font: inherit;
+	background: var(--p-color-bg-surface); border: 1px solid var(--p-color-border); color: var(--p-color-text);
+}
+.status-tile:hover { background: var(--p-color-bg-surface-secondary); }
+.status-tile.is-active { outline: 2px solid var(--p-color-border-focus, #005bd3); outline-offset: -1px; }
+.status-tile__n { font-size: var(--p-font-size-600); font-weight: var(--p-font-weight-semibold); font-variant-numeric: tabular-nums; }
+.status-tile__label { font-size: var(--p-font-size-325); color: var(--p-color-text-secondary); }
+.status-tile.tone-success .status-tile__n { color: var(--p-color-text-success); }
+.status-tile.tone-caution .status-tile__n { color: var(--p-color-text-caution); }
+.status-tile.tone-critical .status-tile__n { color: var(--p-color-text-critical); }
+.status-note { padding: 0 var(--p-space-400) var(--p-space-300); color: var(--p-color-text-secondary); font-size: var(--p-font-size-325); }
+#statusWarnings .state { margin: 0 var(--p-space-400) var(--p-space-300); }
+.status-codes .sku { font-family: var(--p-font-family-mono); font-size: var(--p-font-size-300); color: var(--p-color-text-secondary); }
+.status-blocked { margin-top: var(--p-space-100); }
+.status-hint { font-style: italic; }

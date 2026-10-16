@@ -46,6 +46,34 @@ class PendingDataIndexTest {
         assertThat(index.buildNow().productIds()).containsExactly("CD1268", "G0990");
     }
 
+    /**
+     * The same answers say which parts each id's Inventory lists — a whole family, sometimes
+     * (C609LGO also lists C609LBL) — which the catalog status needs and no other answer carries.
+     */
+    @Test
+    void keepsThePartsEachInventoryAnswerLists() {
+        ProductDataService productData = mock(ProductDataService.class);
+        InventoryService inventory = mock(InventoryService.class);
+        List<ProductSellable> catalog = List.of(sellable("C609LGO"), sellable("CD1268"));
+        when(productData.getProductSellable(null, true)).thenReturn(catalog);
+        when(inventory.getInventoryLevels(eq("C609LGO"), any())).thenReturn(new InventoryLevels("C609LGO",
+                List.of(new InventoryLevels.PartInventory("C609LGO", "Tower", null, 21, "Clear Gold",
+                                null, null, null),
+                        new InventoryLevels.PartInventory("C609LBL", "Tower", null, 148, "Clear Blue",
+                                null, null, null))));
+        when(inventory.getInventoryLevels(eq("CD1268"), any()))
+                .thenThrow(new PromoStandardsClientException("ProductID not found"));
+
+        PendingDataIndex index = new PendingDataIndex(productData, inventory,
+                new PendingDataProperties(true, "", Duration.ofHours(6)), new ObjectMapper(),
+                mock(SyncProperties.class), new PromoStandardsProperties());
+
+        assertThat(index.buildNow().inventoryParts())
+                .containsExactly(java.util.Map.entry("C609LGO", List.of("C609LGO", "C609LBL")));
+        // Built on demand, from a background thread, when nothing is cached yet.
+        assertThat(index.inventoryParts()).containsKey("C609LGO");
+    }
+
     private static ProductSellable sellable(String productId) {
         ProductSellable s = mock(ProductSellable.class);
         when(s.productId()).thenReturn(productId);
