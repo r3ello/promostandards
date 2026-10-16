@@ -152,8 +152,13 @@ class CatalogTitleIndexTest {
 
         PromoStandardsProperties soap = new PromoStandardsProperties();
         soap.getProductData().setMode("soap");
+        // Not enabled, so its view() does not start a rebuild: that background build writes the
+        // cache file as 'soap' and, when it wins the race, the stub run below finds a file that is no
+        // longer its own. Loading still checks the source, which is what this half is about.
+        CatalogTitleProperties noRebuild = new CatalogTitleProperties(false, cache.toString(),
+                Duration.ofHours(24));
         CatalogTitleIndex live = new CatalogTitleIndex(new SupplierProductScan(catalogOf("A1"), SYNC),
-                props, mapper, catalogOf("A1"), providerOf(null), SYNC, soap);
+                noRebuild, mapper, catalogOf("A1"), providerOf(null), SYNC, soap);
         live.loadFromDisk();
         assertThat(live.view().titles()).as("stub cache served to a soap run").isEmpty();
 
