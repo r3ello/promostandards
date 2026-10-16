@@ -32,6 +32,7 @@ final class ShopifyGraphQL {
                   title
                   media(first: 100) { nodes { id alt status } }
                   legacySku: metafield(namespace: "migration", key: "legacy_sku") { value }
+                  keepImages: metafield(namespace: "trophy_sync", key: "keep_store_images") { value }
                   options { id name position optionValues { id name } }
                   variants(first: 100) {
                     nodes {
@@ -70,6 +71,7 @@ final class ShopifyGraphQL {
                 title
                 media(first: 100) { nodes { id alt status } }
                 legacySku: metafield(namespace: "migration", key: "legacy_sku") { value }
+                keepImages: metafield(namespace: "trophy_sync", key: "keep_store_images") { value }
                 options { id name position optionValues { id name } }
                 variants(first: 100) {
                   nodes {

@@ -674,6 +674,11 @@ class ShopifySyncServiceTest {
      * single supplier id {@code psId}. Every mutation the foreign sync can send is answered.
      */
     private ShopifyHttp storeWithVariants(String psId, String variantsJson) {
+        return storeWithVariants(psId, variantsJson, "");
+    }
+
+    /** {@link #storeWithVariants(String, String)} with extra product fields, e.g. a metafield. */
+    private ShopifyHttp storeWithVariants(String psId, String variantsJson, String productFields) {
         return (path, body, headers) -> {
             String query = String.valueOf(((Map<?, ?>) body).get("query"));
             Map<?, ?> variables = (Map<?, ?>) ((Map<?, ?>) body).get("variables");
@@ -684,13 +689,13 @@ class ShopifySyncServiceTest {
                 response = String.valueOf(variables.get("query")).contains("p-9000-tower") ? """
                         {"data":{"products":{"nodes":[{
                           "id":"gid://shopify/Product/9000","handle":"p-9000-tower",
-                          "legacySku":{"value":"PS9000"},
+                          "legacySku":{"value":"PS9000"},%2$s
                           "options":[{"id":"gid://shopify/ProductOption/1","name":"Color","position":1,
                               "optionValues":[{"id":"gid://shopify/ProductOptionValue/1","name":"Clear"}]},
                             {"id":"gid://shopify/ProductOption/2","name":"Size","position":2,
                               "optionValues":[{"id":"gid://shopify/ProductOptionValue/2","name":"One Size"}]}],
-                          "variants":{"nodes":%s}
-                        }]}}}""".formatted(variantsJson)
+                          "variants":{"nodes":%1$s}
+                        }]}}}""".formatted(variantsJson, productFields)
                         : "{\"data\":{\"products\":{\"nodes\":[]}}}";
             } else if (query.contains("ImportedProducts")) {
                 operation = "ImportedProducts";
@@ -769,6 +774,39 @@ class ShopifySyncServiceTest {
 
         assertThat(varsOf("VariantsDelete").get("variantsIds"))
                 .isEqualTo(List.of("gid://shopify/ProductVariant/3"));
+    }
+
+    /**
+     * {@code trophy_sync.keep_store_images = true}: the supplier's photos are not published and the
+     * product's own are not deleted. PaceSetter sends one photo for a whole family (the Teal tower for
+     * seven colours), which would otherwise replace every colour's own. The fake store answers no media
+     * call at all, so any image work would fail this test.
+     */
+    @Test
+    void leavesTheImagesAloneWhenTheProductKeepsItsOwn() {
+        ShopifySyncService service = service(storeWithVariants("GI491A", "["
+                + storeVariant(1, "GI491A", "GI491A") + ","
+                + storeVariant(2, "GI491B", "GI491A") + "]",
+                "\"keepImages\":{\"value\":\"true\"},"));
+        SupplierProduct tower = tower(List.of(), "GI491A", "GI491B");
+        when(catalog.aggregate("GI491A")).thenReturn(new SupplierProduct(tower.productId(), tower.title(),
+                null, null, null, List.of(), tower.variants(), List.of("https://pacesetter.test/teal.jpg"),
+                List.of(), List.of()));
+
+        SyncResult result = service.importProduct("GI491A");
+
+        assertThat(result.variantCount()).isEqualTo(2);
+        assertThat(operations).doesNotContain("FileDelete", "ProductAddMedia", "VariantAppendMedia");
+    }
+
+    @Test
+    void onlyAnExplicitTrueKeepsTheStoreImages() throws Exception {
+        assertThat(ForeignProductSync.keepsStoreImages(MAPPER.readTree(
+                "{\"keepImages\":{\"value\":\"true\"}}"))).isTrue();
+        assertThat(ForeignProductSync.keepsStoreImages(MAPPER.readTree(
+                "{\"keepImages\":{\"value\":\"false\"}}"))).isFalse();
+        assertThat(ForeignProductSync.keepsStoreImages(MAPPER.readTree("{\"keepImages\":null}"))).isFalse();
+        assertThat(ForeignProductSync.keepsStoreImages(MAPPER.readTree("{}"))).isFalse();
     }
 
     /** An Inventory call that failed is silence: whatever only an inventory row carried stays. */

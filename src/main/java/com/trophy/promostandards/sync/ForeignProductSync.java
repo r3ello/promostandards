@@ -155,7 +155,8 @@ class ForeignProductSync {
             orderValues(gid, only);
         }
         int inventory = pushInventory(gid, plan, writable);
-        int published = syncMedia(gid, union, storeProduct, plan, createdIds, skuByPart);
+        int published = keepsStoreImages(storeProduct)
+                ? 0 : syncMedia(gid, union, storeProduct, plan, createdIds, skuByPart);
         List<String> added = extendSupplierIds(gid, imported, unioned.discoveredIds());
 
         log.info("Synced foreign product {} -> {}: {} supplier variants ({} created, {} updated, "
@@ -850,6 +851,23 @@ class ForeignProductSync {
                     plan, createdIds, skuByPart);
         }
         return media.size();
+    }
+
+    /**
+     * Whether the store has taken this product's images out of the sync's hands:
+     * {@code trophy_sync.keep_store_images = true}. PaceSetter's Media service can send one photo for
+     * a whole family — the Teal tower for all seven Chisel Carve colours, Arizona for all forty State
+     * Cutouts — and replacing the store's own colour photos with it would publish the wrong colour on
+     * every variant. Set by hand (or Matrixify) per product; nothing here ever writes it.
+     */
+    static boolean keepsStoreImages(JsonNode storeProduct) {
+        boolean keep = "true".equalsIgnoreCase(
+                storeProduct.path("keepImages").path("value").asText("").trim());
+        if (keep) {
+            log.info("Leaving the images of {} alone: trophy_sync.keep_store_images is true",
+                    storeProduct.path("handle").asText(storeProduct.path("id").asText()));
+        }
+        return keep;
     }
 
     /** Removes media from a product; never fatal, since a stale image is not a wrong price. */
