@@ -282,7 +282,10 @@ final class ShopifyGraphQL {
                       lineItemGroup { id customAttributes { key value } }
                       originalUnitPriceSet { shopMoney { amount currencyCode } }
                       variant { vendorSku: metafield(namespace: "trophy_sync", key: "vendor_sku") { value } }
-                      product { psId: metafield(namespace: "custom", key: "ps_product_id") { value } }
+                      product {
+                        psId: metafield(namespace: "custom", key: "ps_product_id") { value }
+                        vendor: metafield(namespace: "trophy_sync", key: "vendor") { value }
+                      }
                     }
                   }
                 }
@@ -311,7 +314,10 @@ final class ShopifyGraphQL {
                       lineItemGroup { id customAttributes { key value } }
                       originalUnitPriceSet { shopMoney { amount currencyCode } }
                       variant { vendorSku: metafield(namespace: "trophy_sync", key: "vendor_sku") { value } }
-                      product { psId: metafield(namespace: "custom", key: "ps_product_id") { value } }
+                      product {
+                        psId: metafield(namespace: "custom", key: "ps_product_id") { value }
+                        vendor: metafield(namespace: "trophy_sync", key: "vendor") { value }
+                      }
                     }
                   }
                 }
@@ -335,7 +341,10 @@ final class ShopifyGraphQL {
                     lineItemGroup { id customAttributes { key value } }
                     originalUnitPriceSet { shopMoney { amount currencyCode } }
                     variant { vendorSku: metafield(namespace: "trophy_sync", key: "vendor_sku") { value } }
-                    product { psId: metafield(namespace: "custom", key: "ps_product_id") { value } }
+                    product {
+                      psId: metafield(namespace: "custom", key: "ps_product_id") { value }
+                      vendor: metafield(namespace: "trophy_sync", key: "vendor") { value }
+                    }
                   }
                 }
               }

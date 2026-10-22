@@ -42,6 +42,8 @@ class SyncSchedulerTest {
     private final OrderSyncService orderSync = mock(OrderSyncService.class);
     private final CatalogSummaryService catalog = mock(CatalogSummaryService.class);
     private final DiscountSyncService discounts = mock(DiscountSyncService.class);
+    /** What the scheduler announced: a {@code SyncPassReport} per finished pass. */
+    private final List<Object> events = new java.util.ArrayList<>();
 
     private SyncScheduler scheduler() {
         SyncProperties props = new SyncProperties("PaceSetter", "USD", "US", "en",
@@ -50,7 +52,7 @@ class SyncSchedulerTest {
                 new SyncProperties.Schedule(true, "-", "-", "-", false), List.of(), null);
         ObjectProvider<com.trophy.promostandards.db.SyncStateStore> states = providerOf(null);
         ObjectProvider<com.trophy.promostandards.db.OrderStore> orders = providerOf(null);
-        return new SyncScheduler(sync, orderSync, catalog, discounts, props, states, orders);
+        return new SyncScheduler(sync, orderSync, catalog, discounts, props, states, orders, events::add);
     }
 
     private static RefreshResult result(String productId, Kind kind, Outcome outcome) {
@@ -79,6 +81,41 @@ class SyncSchedulerTest {
 
         verify(sync).importProduct("CM373BS");
         verify(sync).refresh(eq("CM373BS"), eq(Kind.INVENTORY), eq(false), eq(true));
+    }
+
+    /**
+     * A finished pass is announced with what it did per product — the report email is written from
+     * it, and totals alone cannot say which product to look at.
+     */
+    @Test
+    void aFinishedPassReportsWhatChangedAndWhatFailed() {
+        when(sync.listImportedProductIds()).thenReturn(List.of("GI307", "CM373BS", "CD1268"));
+        when(catalog.sellableProductIds()).thenReturn(Set.of("GI307", "CM373BS", "CD1268"));
+        when(sync.refresh(eq("GI307"), any(), anyBoolean(), anyBoolean()))
+                .thenReturn(new RefreshResult("GI307", Kind.PRICE, Outcome.PUSHED, 3, null));
+        when(sync.refresh(eq("CM373BS"), any(), anyBoolean(), anyBoolean()))
+                .thenReturn(new RefreshResult("CM373BS", Kind.PRICE, Outcome.UNCHANGED, 0, null));
+        when(sync.refresh(eq("CD1268"), any(), anyBoolean(), anyBoolean()))
+                .thenReturn(new RefreshResult("CD1268", Kind.PRICE, Outcome.FAILED, 0, "THROTTLED"));
+        when(discounts.sync("GI307")).thenReturn(new DiscountResult("GI307",
+                DiscountSyncService.Outcome.NOT_WRITTEN, "no variant carries GI307", null, 0, List.of(), null,
+                false, List.of(), List.of()));
+
+        scheduler().refreshPrices();
+
+        assertThat(events).singleElement().isInstanceOfSatisfying(
+                com.trophy.promostandards.sync.model.SyncPassReport.class, r -> {
+                    assertThat(r.job()).isEqualTo("price");
+                    assertThat(r.products()).isEqualTo(3);
+                    assertThat(r.variantsWritten()).isEqualTo(3);
+                    assertThat(r.changed()).extracting(l -> l.productId() + ":" + l.variants())
+                            .containsExactly("GI307:3");
+                    assertThat(r.failed()).extracting(l -> l.productId() + ":" + l.error())
+                            .containsExactly("CD1268:THROTTLED");
+                    assertThat(r.discountProblems()).extracting(l -> l.error())
+                            .containsExactly("no variant carries GI307");
+                    assertThat(r.outcomes()).containsEntry("UNCHANGED", 1);
+                });
     }
 
     /**
@@ -198,7 +235,7 @@ class SyncSchedulerTest {
                 new Pricing(Strategy.SUPPLIER_LIST, new BigDecimal("40"), Rounding.NINETY_NINE, true),
                 new SyncProperties.Schedule(false, "-", "-", "-", false), List.of(), null);
         SyncScheduler scheduler = new SyncScheduler(sync, orderSync, catalog, discounts, off,
-                providerOf(null), providerOf(null));
+                providerOf(null), providerOf(null), events::add);
 
         assertThat(scheduler.runNow(Kind.INVENTORY, true).enabled()).isFalse();
 
@@ -245,7 +282,7 @@ class SyncSchedulerTest {
                 new Pricing(Strategy.SUPPLIER_LIST, new BigDecimal("40"), Rounding.NINETY_NINE, true),
                 new SyncProperties.Schedule(true, "-", "-", "-", true), List.of(), null);
         SyncScheduler scheduler = new SyncScheduler(sync, orderSync, catalog, discounts, dry,
-                providerOf(null), providerOf(null));
+                providerOf(null), providerOf(null), events::add);
 
         scheduler.refreshOrders();
 
@@ -260,7 +297,7 @@ class SyncSchedulerTest {
                 new Pricing(Strategy.SUPPLIER_LIST, new BigDecimal("40"), Rounding.NINETY_NINE, true),
                 new SyncProperties.Schedule(false, "-", "-", "-", false), List.of(), null);
         SyncScheduler scheduler = new SyncScheduler(sync, orderSync, catalog, discounts, off,
-                providerOf(null), providerOf(null));
+                providerOf(null), providerOf(null), events::add);
 
         scheduler.refreshInventory();
         scheduler.refreshPrices();

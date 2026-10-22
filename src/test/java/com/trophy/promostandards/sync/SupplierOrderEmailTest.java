@@ -87,6 +87,19 @@ class SupplierOrderEmailTest {
         });
     }
 
+    /** #1063: the surface named on every text, the proof linked with the preview, a piece's own logo as a link. */
+    @Test
+    void namesEachSurfaceAndLinksAPiecesOwnLogo() {
+        EmailPreview mail = email(props(null)).render(order(List.of(customized("6557", 2,
+                TrophyItem.parse(TrophyItemTest.ORDER_1063))), null, List.of()));
+        String logo = "https://cdn.shopify.com/s/files/1/0655/6231/2798/uploads/6e76ba4bb68b45b13986e4b1d3b91547.svg";
+
+        assertThat(mail.body()).contains("Block 2 - Line 1: 2,000,000", "Proof:</span>", "href=\"" + logo + "\"");
+        assertThat(mail.attachments().get(0).content()).contains(
+                "\"1\",\"Block 5 - Line 1\",\"5,000,000\",\"Great Vibes\"",
+                "\"2\",\"Logo\",\"" + logo + "\",\"\"");
+    }
+
     /**
      * 500 pieces: the body lists none — never the first few, which would be worked from and the rest
      * missed — and says where they are; the sheet has all of them.
