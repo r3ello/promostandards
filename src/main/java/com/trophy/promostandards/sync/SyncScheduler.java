@@ -4,10 +4,12 @@ import com.trophy.promostandards.db.OrderStore;
 import com.trophy.promostandards.db.SyncStateStore;
 import com.trophy.promostandards.discount.DiscountSyncService;
 import com.trophy.promostandards.discount.DiscountSyncService.DiscountResult;
+import com.trophy.promostandards.sync.model.SyncPassReport;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -44,6 +46,8 @@ public class SyncScheduler {
     private final SyncProperties props;
     private final ObjectProvider<SyncStateStore> syncStates;
     private final ObjectProvider<OrderStore> orderStores;
+    /** Where a finished pass is announced ({@link SyncPassReport}) — the sync report email listens. */
+    private final ApplicationEventPublisher events;
 
     /** Job name the order watermark is stored under. */
     private static final String ORDER_JOB = "orders";
@@ -71,7 +75,8 @@ public class SyncScheduler {
     public SyncScheduler(ShopifySyncService sync, OrderSyncService orderSync,
                          CatalogSummaryService catalog, DiscountSyncService discounts,
                          SyncProperties props,
-                         ObjectProvider<SyncStateStore> syncStates, ObjectProvider<OrderStore> orderStores) {
+                         ObjectProvider<SyncStateStore> syncStates, ObjectProvider<OrderStore> orderStores,
+                         ApplicationEventPublisher events) {
         this.sync = sync;
         this.orderSync = orderSync;
         this.catalog = catalog;
@@ -79,6 +84,7 @@ public class SyncScheduler {
         this.props = props;
         this.syncStates = syncStates;
         this.orderStores = orderStores;
+        this.events = events;
     }
 
     /**
@@ -289,6 +295,10 @@ public class SyncScheduler {
         Instant startedAt = Instant.now();
         int variantsWritten = 0;
         int structural = 0;
+        // Per product, for the report: totals alone cannot say which product to look at.
+        List<SyncPassReport.Line> changed = new ArrayList<>();
+        List<SyncPassReport.Line> failed = new ArrayList<>();
+        List<SyncPassReport.Line> discountProblems = new ArrayList<>();
         publish(kind.value(), true, startedAt, productIds.size(), 0, tally);
         for (String productId : productIds) {
             ShopifySyncService.RefreshResult result;
@@ -299,6 +309,7 @@ public class SyncScheduler {
                 // read failure (supplier down, product gone). One bad product never halts the batch.
                 log.warn("Scheduled {} refresh failed for {}: {}", label, productId, e.getMessage());
                 tally.merge(ShopifySyncService.Outcome.FAILED, 1, Integer::sum);
+                failed.add(new SyncPassReport.Line(productId, 0, e.getMessage()));
                 continue;
             }
             if (result.outcome() == ShopifySyncService.Outcome.NEEDS_VARIANTS && !dryRun
@@ -310,9 +321,17 @@ public class SyncScheduler {
             variantsWritten += result.updated();
             if (result.outcome() == ShopifySyncService.Outcome.FAILED) {
                 log.warn("Scheduled {} push failed for {}: {}", label, productId, result.error());
+                failed.add(new SyncPassReport.Line(productId, result.updated(), result.error()));
+            } else if (result.outcome() == ShopifySyncService.Outcome.PUSHED
+                    || result.outcome() == ShopifySyncService.Outcome.WOULD_PUSH
+                    || result.updated() > 0) {
+                changed.add(new SyncPassReport.Line(productId, result.updated(), null));
             }
             if (kind == SyncStateStore.Kind.PRICE && result.outcome() == ShopifySyncService.Outcome.PUSHED) {
-                republishDiscounts(productId);
+                String problem = republishDiscounts(productId);
+                if (problem != null) {
+                    discountProblems.add(new SyncPassReport.Line(productId, 0, problem));
+                }
             }
         }
 
@@ -320,6 +339,27 @@ public class SyncScheduler {
                 label, Duration.between(startedAt, Instant.now()).toSeconds(), tally, variantsWritten);
         publish(kind.value(), false, startedAt, productIds.size(), variantsWritten, tally);
         recordRun(kind.value(), startedAt, productIds.size(), tally);
+        announce(new SyncPassReport(kind.value(), dryRun, startedAt, Instant.now(), productIds.size(),
+                variantsWritten, outcomesOf(tally), List.copyOf(changed), List.copyOf(failed),
+                List.copyOf(discountProblems)));
+    }
+
+    /** Never lets a listener (the report email) fail a pass that has already done its work. */
+    private void announce(SyncPassReport report) {
+        if (events == null) {
+            return;
+        }
+        try {
+            events.publishEvent(report);
+        } catch (RuntimeException e) {
+            log.warn("Could not report the {} pass: {}", report.job(), e.getMessage());
+        }
+    }
+
+    private static Map<String, Integer> outcomesOf(Map<ShopifySyncService.Outcome, Integer> tally) {
+        Map<String, Integer> outcomes = new LinkedHashMap<>();
+        tally.forEach((outcome, count) -> outcomes.put(outcome.name(), count));
+        return outcomes;
     }
 
     /**
@@ -367,14 +407,18 @@ public class SyncScheduler {
      * describing discounts off a price that no longer exists. Only the products that actually pushed
      * pay for this, and a discount failure never fails the pass — the price is already correct.
      */
-    private void republishDiscounts(String productId) {
+    /** @return why the ladder was not republished, or null when it was (or there is none) */
+    private String republishDiscounts(String productId) {
         try {
             DiscountResult result = discounts.sync(productId);
             if (result.outcome() == DiscountSyncService.Outcome.NOT_WRITTEN) {
                 log.warn("Quantity discounts not republished for {}: {}", productId, result.reason());
+                return result.reason();
             }
+            return null;
         } catch (RuntimeException e) {
             log.warn("Could not republish quantity discounts for {}: {}", productId, e.getMessage());
+            return e.getMessage();
         }
     }
 
@@ -384,11 +428,9 @@ public class SyncScheduler {
      */
     private void publish(String job, boolean running, Instant startedAt, int products,
                          int variantsWritten, Map<ShopifySyncService.Outcome, Integer> tally) {
-        Map<String, Integer> outcomes = new LinkedHashMap<>();
-        tally.forEach((outcome, count) -> outcomes.put(outcome.name(), count));
         lastPasses.put(job, new JobStatus(job, running, startedAt,
                 Duration.between(startedAt, Instant.now()).toSeconds(), products, variantsWritten,
-                outcomes));
+                outcomesOf(tally)));
     }
 
     /** Keeps a row per run so the incremental behaviour can be inspected after the fact, not just in logs. */

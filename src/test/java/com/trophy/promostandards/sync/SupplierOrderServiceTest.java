@@ -47,7 +47,7 @@ class SupplierOrderServiceTest {
              "customAttributes":[{"key":"Engraving Style","value":"Text only"},{"key":"Line 1","value":"Coach of the Year"},
                                  {"key":"_tpo_add_by","value":"easify"}],
              "originalUnitPriceSet":{"shopMoney":{"amount":"36.99","currencyCode":"USD"}},
-             "variant":{"vendorSku":{"value":"CB35"}},"product":{"psId":{"value":"CB35"}}}""";
+             "variant":{"vendorSku":{"value":"CB35"}},"product":{"psId":{"value":"CB35"},"vendor":{"value":"PaceSetter"}}}""";
 
     /** Not a PaceSetter product at all. */
     private static final String OTHER_SUPPLIER = """
@@ -74,7 +74,7 @@ class SupplierOrderServiceTest {
             {"name":"Teardrop Lucite w/ Glass Gemstone on Marble","title":"Teardrop Lucite w/ Glass Gemstone on Marble",
              "variantTitle":null,"sku":"PS6990","quantity":1,"unfulfilledQuantity":0,"customAttributes":[],
              "originalUnitPriceSet":{"shopMoney":{"amount":"132.99","currencyCode":"USD"}},
-             "variant":{"vendorSku":{"value":"CD18"}},"product":{"psId":{"value":"CD18"}}}""";
+             "variant":{"vendorSku":{"value":"CD18"}},"product":{"psId":{"value":"CD18"},"vendor":{"value":"PaceSetter"}}}""";
 
     private static String order(String id, String name, String extra, String... lines) {
         return """
@@ -177,7 +177,7 @@ class SupplierOrderServiceTest {
                    {"key":"_trophy_surcharge","value":"0.50"},
                    {"key":"_trophy_items","value":%s}]},
                  "originalUnitPriceSet":{"shopMoney":{"amount":"51.00","currencyCode":"USD"}},
-                 "variant":{"vendorSku":{"value":"GM828"}},"product":{"psId":{"value":"GM828"}}}"""
+                 "variant":{"vendorSku":{"value":"GM828"}},"product":{"psId":{"value":"GM828"},"vendor":{"value":"PaceSetter"}}}"""
                 .formatted(groupId, MAPPER.writeValueAsString(trophyItems));
     }
 
@@ -302,11 +302,43 @@ class SupplierOrderServiceTest {
     /** Ordering the wrong item, or none, is worse than stopping: the line blocks, it is not dropped. */
     @Test
     void blocksAPaceSetterLineThatDoesNotSayWhichPartItIs() {
-        Preview p = preview(order("1", "#1047", "", UNSYNCED_PACESETTER));
+        Preview p = preview(order("1", "#1047", "", UNSYNCED_PACESETTER.replace(
+                "{\"psId\":{\"value\":\"CM754A\"}}", "{\"psId\":{\"value\":\"CM754A\"},\"vendor\":{\"value\":\"PaceSetter\"}}")));
 
         assertThat(p.lines()).singleElement().satisfies(l -> assertThat(l.partId()).isNull());
         assertThat(p.blocking()).singleElement().asString().contains("trophy_sync.vendor_sku");
         assertThat(p.isReady()).isFalse();
+    }
+
+    /** No vendor but PaceSetter's product id: never synced. It blocks, so it is seen — never silently left out. */
+    @Test
+    void blocksAPaceSetterProductWithNoVendor() {
+        Preview p = preview(order("1", "#1047", "", UNSYNCED_PACESETTER.replace(
+                "\"vendorSku\":null", "\"vendorSku\":{\"value\":\"CM754A\"}")));
+
+        assertThat(p.lines()).singleElement().satisfies(l -> assertThat(l.partId()).isEqualTo("CM754A"));
+        assertThat(p.blocking()).singleElement().asString().contains("no trophy_sync.vendor", "never synced");
+    }
+
+    /**
+     * #1063: a Crystal D product whose variant carries Crystal D's own code in vendor_sku. Only the vendor
+     * says whose it is: left out, and an order of nothing else is not one for PaceSetter.
+     */
+    @Test
+    void leavesOutAnotherSuppliersProductEvenWithAVendorSku() {
+        String crystalD = """
+                {"name":"Como Goal-Setter Crystal Awards","title":"Como Goal-Setter Crystal Awards",
+                 "variantTitle":null,"sku":"CD327","quantity":3,"unfulfilledQuantity":3,"customAttributes":[],
+                 "originalUnitPriceSet":{"shopMoney":{"amount":"120.00","currencyCode":"USD"}},
+                 "variant":{"vendorSku":{"value":"6557"}},"product":{"psId":null,"vendor":{"value":"Crystal D"}}}""";
+        Preview p = preview(order("18950119129182", "#1063", "", crystalD, CB35_ENGRAVED));
+
+        assertThat(p.lines()).extracting(SupplierOrderService.Line::partId).containsExactly("CB35");
+        assertThat(p.excluded()).singleElement().satisfies(e -> assertThat(e.reason()).isEqualTo("Crystal D product"));
+        assertThat(p.blocking()).isEmpty();
+
+        assertThat(preview(order("18950119129182", "#1063", "", crystalD)).blocking())
+                .containsExactly("No PaceSetter line left to send.");
     }
 
     @Test
@@ -469,7 +501,7 @@ class SupplierOrderServiceTest {
 
         assertThatThrownBy(() -> service.send(blocked, false, CONFIGURED))
                 .isInstanceOf(SupplierOrderRefusedException.class)
-                .hasMessageContaining("trophy_sync.vendor_sku");
+                .hasMessageContaining("never synced");
         org.mockito.Mockito.verifyNoInteractions(mailer);
     }
 

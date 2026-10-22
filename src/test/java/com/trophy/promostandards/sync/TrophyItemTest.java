@@ -45,6 +45,41 @@ class TrophyItemTest {
         assertThat(item.pieces().get(1).texts()).isEmpty();
     }
 
+    /**
+     * Order #1063 (Como Goal-Setter × 3, 2026-10-19), the customizer's current form: preview and proof for
+     * the line, upcharges, and per piece the product plus five blocks, each with its own Line 1. Piece 1
+     * is as the order has it; piece 2 adds the optional per-piece logo.
+     */
+    static final String ORDER_1063 = """
+            {"preview":"https://cdn.shopify.com/s/files/1/0655/6231/2798/files/trophy-preview-p-3665-como-goal-setter-crystal-awards-1792443002293.jpg?v=1792443004",
+             "proof":"https://cdn.shopify.com/s/files/1/0655/6231/2798/files/trophy-technical-sheet-p-3665-como-goal-setter-crystal-awards-1792443010291.pdf?v=1792443011",
+             "upcharges":[{"label":"Choose Number of Goal-Setter Blocks","amount":92,"once":false,"choice":"5 Blocks"},{"label":"Custom Design","amount":1,"once":false}],
+             "items":[{"item":1,"values":{
+                 "engraving-product":{"line-1":"Winner ","line-1-font":"Great Vibes","line-2":"Mattt","line-2-font":"Cinzel","line-3":"Gunn","line-3-font":"Cinzel","line-4":"2026","line-4-font":"Open Sans"},
+                 "engraving-block":{"line-1":"1,000,000","line-1-font":"Great Vibes"},
+                 "engraving-block-2":{"line-1":"2,000,000","line-1-font":"Great Vibes"},
+                 "engraving-block-5":{"line-1":"5,000,000","line-1-font":"Great Vibes"}}},
+              {"item":2,"logo":"https://cdn.shopify.com/s/files/1/0655/6231/2798/uploads/6e76ba4bb68b45b13986e4b1d3b91547.svg","values":{
+                 "engraving-product":{"line-1":"Runner Up ","line-2":"Ralph","line-1-font":"Great Vibes","line-2-font":"Cinzel"}}}]}""";
+
+    @Test
+    void namesTheSurfaceEachTextGoesOnAndKeepsAPiecesOwnLogo() {
+        TrophyItem item = TrophyItem.parse(ORDER_1063);
+
+        assertThat(item.artwork()).containsOnlyKeys("preview", "proof");   // upcharges is not artwork
+        assertThat(item.pieces().get(0).texts()).extracting(TrophyItem.Text::label, TrophyItem.Text::text)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple("Line 1", "Winner "),
+                        org.assertj.core.groups.Tuple.tuple("Line 2", "Mattt"),
+                        org.assertj.core.groups.Tuple.tuple("Line 3", "Gunn"),
+                        org.assertj.core.groups.Tuple.tuple("Line 4", "2026"),
+                        org.assertj.core.groups.Tuple.tuple("Block 1 - Line 1", "1,000,000"),
+                        org.assertj.core.groups.Tuple.tuple("Block 2 - Line 1", "2,000,000"),
+                        org.assertj.core.groups.Tuple.tuple("Block 5 - Line 1", "5,000,000"));
+        assertThat(item.pieces().get(1).texts().get(0)).isEqualTo(new TrophyItem.Text(TrophyItem.ARTWORK, "Logo",
+                "https://cdn.shopify.com/s/files/1/0655/6231/2798/uploads/6e76ba4bb68b45b13986e4b1d3b91547.svg", null));
+        assertThat(item.fonts()).containsExactly("Great Vibes", "Cinzel", "Open Sans");
+    }
+
     @Test
     void refusesWhatIsNotTheCustomizersJson() {
         assertThatThrownBy(() -> TrophyItem.parse("{\"items\":[")).isInstanceOf(IllegalArgumentException.class);

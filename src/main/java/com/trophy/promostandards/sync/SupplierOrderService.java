@@ -28,11 +28,12 @@ import java.util.regex.Pattern;
  * Reads only: sending needs PaceSetter's order template (PLAN-PEDIDOS-PACESETTER.md §2), so this is
  * phase 1 without its confirm step.
  *
- * <p>A line is PaceSetter's when its variant carries {@code trophy_sync.vendor_sku} — the part id,
- * which is PaceSetter's own item number — or, failing that, when its product carries
- * {@code custom.ps_product_id}. The second kind is a product the sync has never touched: the line is
- * PaceSetter's but nothing says which part to order, so it <b>blocks</b> the order rather than being
- * left out of it (ordering the wrong item, or none, is worse than stopping).
+ * <p>A line is PaceSetter's when its product's {@code trophy_sync.vendor} says PaceSetter; its variant's
+ * {@code trophy_sync.vendor_sku} is then the part id to order. Another vendor there (Crystal D) leaves
+ * the line out: {@code vendor_sku} is every supplier's own code, so it says nothing about whose. A
+ * product with no vendor but with {@code custom.ps_product_id} is one the sync never touched, and a
+ * line with nothing to say which part to order — either way it <b>blocks</b> the order rather than
+ * being left out of it (ordering the wrong item, or none, is worse than stopping).
  *
  * <p>An order counts as sent when it carries the {@code pacesetter-enviado} tag or the
  * {@code trophy_sync.pacesetter_po} metafield. The tag is what the pending search can exclude; the
@@ -47,6 +48,8 @@ public class SupplierOrderService {
 
     /** The searchable half of the "sent" mark. Must match the search in {@link ShopifyGraphQL#SUPPLIER_PENDING_ORDERS}. */
     static final String SENT_TAG = "pacesetter-enviado";
+    /** {@code trophy_sync.vendor} of a PaceSetter product, as the sync writes it ({@code sync.supplier-code}). */
+    static final String SUPPLIER = "PaceSetter";
     static final String ORDER_GID_PREFIX = "gid://shopify/Order/";
     /** The one blocker a deliberate resend is allowed to overrule. */
     static final String ALREADY_SENT = "Already sent to PaceSetter.";
@@ -326,10 +329,17 @@ public class SupplierOrderService {
         for (JsonNode item : order.path("lineItems").path("nodes")) {
             String partId = text(item.path("variant").path("vendorSku").path("value"));
             boolean supplierProduct = text(item.path("product").path("psId").path("value")) != null;
+            String vendor = text(item.path("product").path("vendor").path("value"));
+            boolean paceSetter = vendor != null && SUPPLIER.equalsIgnoreCase(vendor.trim());
             String title = text(item.path("title"));
             int ordered = item.path("quantity").asInt(0);
             int open = item.path("unfulfilledQuantity").asInt(0);
-            if (partId == null && !supplierProduct) {
+            if (vendor != null && !paceSetter) {
+                // vendor_sku is every supplier's own code now, so only the vendor says whose it is (#1063: Crystal D 6557).
+                excluded.add(new ExcludedLine(title, text(item.path("sku")), ordered, vendor.trim() + " product"));
+                continue;
+            }
+            if (!paceSetter && !supplierProduct) {
                 excluded.add(new ExcludedLine(title, text(item.path("sku")), ordered, "not a PaceSetter product"));
                 continue;
             }
@@ -364,7 +374,10 @@ public class SupplierOrderService {
                 notices.add(title + ": " + customization.pieces().size() + " engraved piece(s) for "
                         + ordered + " ordered.");
             }
-            if (partId == null) {
+            if (!paceSetter) {
+                blocking.add(title + ": looks like a PaceSetter product (custom.ps_product_id) but has no "
+                        + "trophy_sync.vendor, so it was never synced. Sync the product, then reload.");
+            } else if (partId == null) {
                 blocking.add(title + ": a PaceSetter product whose variant has no trophy_sync.vendor_sku, so "
                         + "nothing says which part to order. Sync the product, then reload.");
             }

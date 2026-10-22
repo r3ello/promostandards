@@ -27,10 +27,12 @@ import java.util.regex.Pattern;
  *                                            "line-2":"text line2 ","line-2-font":"Bebas Neue"}}}, …]}
  * }</pre>
  *
- * Read generically rather than into fixed names: any top-level text is artwork (the logo is optional),
- * any group under {@code values} is kept (engraving is the one seen so far), and a {@code <name>-<n>}
- * key pairs with its {@code <name>-<n>-font}. A product whose customizer adds a field this code has
- * never seen still gets it into the PO.
+ * Read generically rather than into fixed names: any top-level text is artwork for the whole line
+ * ({@code preview}, {@code proof}), any text on an item is that piece's own artwork (its {@code logo},
+ * optional — each piece may have a different one), any group under {@code values} is kept and names the
+ * surface its texts go on ({@code engraving-product}, {@code engraving-block-2} → "Block 2 - Line 1",
+ * #1063), and a {@code <name>-<n>} key pairs with its {@code <name>-<n>-font}. A product whose
+ * customizer adds a field this code has never seen still gets it into the PO.
  *
  * @param artwork top-level texts — {@code logo}, {@code preview} — in the order they came
  * @param pieces  one per physical piece, in the customizer's numbering
@@ -48,6 +50,9 @@ public record TrophyItem(Map<String, String> artwork, List<Piece> pieces) {
     private static final Pattern FONT = Pattern.compile("(.+?-\\d+)-font");
     private static final Pattern CSV_FONT = Pattern.compile("(?i)(.+?)[\\s_-]*font");
     private static final String CSV = "csv";
+    private static final String ENGRAVING = "engraving";
+    /** The {@link Text#group()} of a piece's own artwork (its logo), which is a link, not something engraved as written. */
+    public static final String ARTWORK = "artwork";
 
     /** @param number the customizer's own piece number ({@code item}), 1-based */
     public record Piece(int number, List<Text> texts) {
@@ -122,19 +127,46 @@ public record TrophyItem(Map<String, String> artwork, List<Piece> pieces) {
             int number = item.path("item").canConvertToInt() && item.path("item").asInt() > 0
                     ? item.path("item").asInt() : i + 1;
             List<Text> texts = new ArrayList<>();
-            for (Iterator<Map.Entry<String, JsonNode>> groups = item.path("values").fields(); groups.hasNext(); ) {
-                Map.Entry<String, JsonNode> group = groups.next();
-                texts.addAll(texts(group.getKey(), group.getValue()));
+            // The piece's own artwork — a logo, optional, since each piece may carry a different one.
+            for (Iterator<Map.Entry<String, JsonNode>> it = item.fields(); it.hasNext(); ) {
+                Map.Entry<String, JsonNode> f = it.next();
+                if (f.getValue().isTextual() && !f.getValue().asText().isBlank()) {
+                    texts.add(new Text(ARTWORK, label(f.getKey()), f.getValue().asText().trim(), null));
+                }
+            }
+            List<String> groups = new ArrayList<>();
+            item.path("values").fieldNames().forEachRemaining(groups::add);
+            for (String group : groups) {
+                texts.addAll(texts(group, surface(group, groups), item.path("values").path(group)));
             }
             pieces.add(new Piece(number, texts));
         }
         return new TrophyItem(artwork, pieces);
     }
 
+    /**
+     * What a group's texts are prefixed with, so the engraver knows which surface each goes on: none for
+     * the product itself ({@code engraving}, {@code engraving-product}), "Block 2 - " for
+     * {@code engraving-block-2}, and "Block 1 - " for {@code engraving-block} when numbered siblings
+     * follow it (#1063: five blocks, each with its own Line 1).
+     */
+    static String surface(String group, List<String> groups) {
+        if (group.equals(ENGRAVING) || group.equals(ENGRAVING + "-product")) {
+            return "";
+        }
+        String name = group.startsWith(ENGRAVING + "-") ? group.substring(ENGRAVING.length() + 1) : group;
+        if (!NUMBERED.matcher(name).matches() && groups.stream().anyMatch(g -> g.matches(Pattern.quote(group) + "-\\d+"))) {
+            name += "-1";
+        }
+        return label(name) + " - ";
+    }
+
     /** {@code line-2} before {@code line-10}; each with its {@code -font}, which is never a text of its own. */
-    private static List<Text> texts(String group, JsonNode values) {
+    private static List<Text> texts(String group, String surface, JsonNode values) {
         if (values.isValueNode()) {
-            return values.asText().isBlank() ? List.of() : List.of(new Text(group, label(group), values.asText(), null));
+            return values.asText().isBlank() ? List.of()
+                    : List.of(new Text(group, surface.isEmpty() ? label(group) : surface.substring(0, surface.length() - 3),
+                    values.asText(), null));
         }
         Map<String, String> fonts = new LinkedHashMap<>();
         List<String> keys = new ArrayList<>();
@@ -159,7 +191,7 @@ public record TrophyItem(Map<String, String> artwork, List<Piece> pieces) {
                 continue;   // an empty line is not something to engrave
             }
             String font = fonts.get(key);
-            texts.add(new Text(group, label(key), text, font == null || font.isBlank() ? null : font));
+            texts.add(new Text(group, surface + label(key), text, font == null || font.isBlank() ? null : font));
         }
         return texts;
     }

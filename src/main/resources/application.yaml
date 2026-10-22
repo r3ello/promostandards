@@ -375,6 +375,18 @@ sync:
     # logic works before it is allowed to write.
     dry-run: ${SYNC_SCHEDULE_DRY_RUN:false}
 
+  # Email what the scheduled syncs did, through the same SMTP mailbox as the PaceSetter orders
+  # (spring.mail.*). Prices: every pass. Inventory runs every 2 h, so a pass is emailed on its own only
+  # when something failed, and all of them go in one daily digest. Off until a recipient is set.
+  report:
+    enabled: ${SYNC_REPORT_ENABLED:false}
+    to: ${SYNC_REPORT_TO:}
+    cc: ${SYNC_REPORT_CC:}
+    from: ${SYNC_REPORT_FROM:}                   # blank = the mailbox's own username
+    inventory-digest-cron: "0 0 7 * * *"         # 07:00 in time-zone below
+    inventory-every-pass: ${SYNC_REPORT_INVENTORY_EVERY_PASS:false}
+    time-zone: ${SYNC_REPORT_TIME_ZONE:America/New_York}
+
   # Catalog read model (the console table). Supplier data barely changes but the console re-reads it
   # constantly (paging, filtering, reloads), so both reads are cached with a TTL; a product then costs
   # its upstream calls once per window no matter how many rows/tabs/users ask. fetch-threads also caps

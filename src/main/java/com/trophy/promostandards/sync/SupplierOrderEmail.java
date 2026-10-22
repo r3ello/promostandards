@@ -253,6 +253,10 @@ public class SupplierOrderEmail {
             }
             out.append("</div>");
             for (TrophyItem.Text t : piece.texts()) {
+                if (TrophyItem.ARTWORK.equals(t.group())) {
+                    out.append(artwork(Map.of(t.label(), t.text())));
+                    continue;
+                }
                 out.append("<div>").append(esc(t.label())).append(": ").append(esc(t.text().strip()));
                 if (t.font() != null) {
                     out.append(" <span style=\"color:#616161;\">(").append(esc(t.font())).append(")</span>");

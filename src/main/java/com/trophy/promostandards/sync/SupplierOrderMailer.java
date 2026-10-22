@@ -101,6 +101,37 @@ public class SupplierOrderMailer {
         }
     }
 
+    /**
+     * Sends a message of the app's own (the sync report) through the same mailbox. {@code from} blank
+     * uses the mailbox's username, which is what most servers require the sender to be anyway.
+     */
+    public void send(String from, String to, String cc, String subject, String text, String html) {
+        String problem = problem();
+        if (problem != null) {
+            throw new IllegalStateException(problem);
+        }
+        JavaMailSender sender = senders.getIfAvailable();
+        try {
+            MimeMessage message = sender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(message, true, StandardCharsets.UTF_8.name());
+            String sentFrom = from != null && !from.isBlank() ? from
+                    : sender instanceof JavaMailSenderImpl impl ? impl.getUsername() : null;
+            if (sentFrom != null && !sentFrom.isBlank()) {
+                helper.setFrom(sentFrom);
+            }
+            helper.setTo(addresses(to));
+            if (cc != null && !cc.isBlank()) {
+                helper.setCc(addresses(cc));
+            }
+            helper.setSubject(subject);
+            helper.setText(text, html);
+            sender.send(message);
+            log.info("Sent email to {} (subject: {})", to, subject);
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not send the email: " + e.getMessage(), e);
+        }
+    }
+
     /** {@code to} and {@code cc} are configured as one comma-separated string, as a mail client writes them. */
     private static String[] addresses(String list) {
         return Arrays.stream(list.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toArray(String[]::new);
