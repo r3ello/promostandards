@@ -366,7 +366,7 @@ sync:
     # sells (~700 of them), which takes longer than 30 minutes — a cron that cannot finish before it
     # fires again is a queue, not a schedule. Stock that moves faster than this is what the manual
     # "Sync" button on a row is for.
-    inventory-cron: "0 0 0/2 * * *"  # every 2 hours
+    inventory-cron: "0 0 0/6 * * *"  # every 2 hours
     price-cron: "0 0 3 * * *"        # daily at 03:00
     order-cron: "0 0/15 * * * *"     # every 15 min
     # Evaluate every product and log what WOULD be pushed, without writing to Shopify. Turn this on
