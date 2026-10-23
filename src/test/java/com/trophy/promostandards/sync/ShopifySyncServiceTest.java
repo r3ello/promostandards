@@ -679,6 +679,11 @@ class ShopifySyncServiceTest {
 
     /** {@link #storeWithVariants(String, String)} with extra product fields, e.g. a metafield. */
     private ShopifyHttp storeWithVariants(String psId, String variantsJson, String productFields) {
+        return storeWithVariants(psId, variantsJson, productFields, "Color");
+    }
+
+    /** ... and its first option named {@code primary} (State, Year) instead of Color. */
+    private ShopifyHttp storeWithVariants(String psId, String variantsJson, String productFields, String primary) {
         return (path, body, headers) -> {
             String query = String.valueOf(((Map<?, ?>) body).get("query"));
             Map<?, ?> variables = (Map<?, ?>) ((Map<?, ?>) body).get("variables");
@@ -690,12 +695,12 @@ class ShopifySyncServiceTest {
                         {"data":{"products":{"nodes":[{
                           "id":"gid://shopify/Product/9000","handle":"p-9000-tower",
                           "legacySku":{"value":"PS9000"},%2$s
-                          "options":[{"id":"gid://shopify/ProductOption/1","name":"Color","position":1,
+                          "options":[{"id":"gid://shopify/ProductOption/1","name":"%3$s","position":1,
                               "optionValues":[{"id":"gid://shopify/ProductOptionValue/1","name":"Clear"}]},
                             {"id":"gid://shopify/ProductOption/2","name":"Size","position":2,
                               "optionValues":[{"id":"gid://shopify/ProductOptionValue/2","name":"One Size"}]}],
                           "variants":{"nodes":%1$s}
-                        }]}}}""".formatted(variantsJson, productFields)
+                        }]}}}""".formatted(variantsJson, productFields, primary)
                         : "{\"data\":{\"products\":{\"nodes\":[]}}}";
             } else if (query.contains("ImportedProducts")) {
                 operation = "ImportedProducts";
@@ -797,6 +802,40 @@ class ShopifySyncServiceTest {
 
         assertThat(result.variantCount()).isEqualTo(2);
         assertThat(operations).doesNotContain("FileDelete", "ProductAddMedia", "VariantAppendMedia");
+    }
+
+    /**
+     * {@code trophy_sync.own_parts_only = true} (the CD900* states, split again 2026-10-23): PaceSetter
+     * answers Inventory for the whole family, but the product is Illinois alone and stays so — no
+     * family variant created, no family id appended, and its one-value State option made a plain
+     * product's Title again.
+     */
+    @Test
+    void keepsAProductToItsOwnPartsWhenItSaysSo() {
+        ShopifySyncService service = service(storeWithVariants("GI491A",
+                "[" + storeVariant(1, "GI491A", "GI491A") + "]", "\"ownParts\":{\"value\":\"true\"},", "State"));
+        when(catalog.aggregate("GI491A")).thenReturn(tower(List.of(), "GI491A", "GI491B"));
+
+        SyncResult result = service.importProduct("GI491A");
+
+        assertThat(result.variantCount()).isEqualTo(1);
+        assertThat(operations).doesNotContain("VariantsCreate", "VariantsDelete");
+        Map<?, ?> renamed = (Map<?, ?>) varsOf("ProductOption").get("option");
+        assertThat(renamed.get("name")).isEqualTo("Title");
+        assertThat(variablesByOperation.values()).noneMatch(v -> String.valueOf(v).contains("ps_product_ids"));
+    }
+
+    /** Without the flag the same answer is a two-part family, as always. */
+    @Test
+    void withoutTheFlagAFamilyAnswerStillAddsItsParts() {
+        ShopifySyncService service = service(storeWithVariants("GI491A",
+                "[" + storeVariant(1, "GI491A", "GI491A") + "]"));
+        when(catalog.aggregate("GI491A")).thenReturn(tower(List.of(), "GI491A", "GI491B"));
+
+        SyncResult result = service.importProduct("GI491A");
+
+        assertThat(result.variantCount()).isEqualTo(2);
+        assertThat(operations).contains("VariantsCreate");
     }
 
     @Test
