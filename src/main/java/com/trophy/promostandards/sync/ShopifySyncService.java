@@ -587,6 +587,11 @@ public class ShopifySyncService {
     private PushResult push(String productId, SupplierProduct product, Kind kind) {
         JsonNode existing = resolveOrThrow(productId);
         String gid = existing.path("id").asText();
+        if (ForeignProductSync.ownPartsOnly(existing)) {
+            // The family answer's other parts are other store products, not variants this one lacks:
+            // counted as missing, the product would never be sealed and be pushed on every pass.
+            product = ForeignProductSync.ownPartsOf(product, productId);
+        }
         Map<String, VariantRef> bySku = parseVariants(existing.path("variants").path("nodes"));
         int updated = kind == Kind.PRICE
                 ? pushPrices(product, gid, bySku)

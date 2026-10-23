@@ -5,6 +5,7 @@ import com.trophy.promostandards.common.PromoStandardsClientException;
 import com.trophy.promostandards.db.SyncStateStore;
 import com.trophy.promostandards.db.SyncStateStore.Kind;
 import com.trophy.promostandards.discount.DiscountProperties;
+import com.trophy.promostandards.pricing.model.Configuration;
 import com.trophy.promostandards.shopify.ShopifyGraphQLClient;
 import com.trophy.promostandards.shopify.ShopifyHttp;
 import com.trophy.promostandards.shopify.ShopifyProperties;
@@ -52,6 +53,8 @@ class IncrementalSyncTest {
     private boolean supplierFails;
     /** Payload of the last productVariantsBulkUpdate, so the pushed price can be asserted. */
     private Object variantsUpdateVariables;
+    /** Extra fields on the store product, e.g. a metafield; empty by default. */
+    private String productFields = "";
 
     @BeforeEach
     void setUp() {
@@ -115,10 +118,10 @@ class IncrementalSyncTest {
                 operations.add("ProductByHandle");
                 response = """
                         {"data":{"products":{"nodes":[{
-                          "id":"gid://shopify/Product/900","handle":"ps-pacesetter-sample-001",
+                          "id":"gid://shopify/Product/900","handle":"ps-pacesetter-sample-001",%s
                           "variants":{"nodes":[{"id":"gid://shopify/ProductVariant/91","sku":"SAMPLE-001-RED-S",
                             "inventoryItem":{"id":"gid://shopify/InventoryItem/191"}}]}
-                        }]}}}""";
+                        }]}}}""".formatted(productFields);
             } else if (query.contains("InventorySet")) {
                 operations.add("InventorySet");
                 if (shopifyFails) {
@@ -170,6 +173,31 @@ class IncrementalSyncTest {
                 policy, shopify, props, new ObjectMapper(), providerOf(state),
                 new DiscountProperties(null, null, null, null),
                 new ImageProperties(null, null, false), new ProductCreationProperties(null, null, null, null, null, null, null));
+    }
+
+    /**
+     * CD900IL as a scheduled pass sees it: PaceSetter answers its Inventory with the whole family, so
+     * the aggregate holds a sibling part the store sells as another product. Kept to its own parts
+     * ({@code trophy_sync.own_parts_only}) the product is pushed and sealed; without the flag the
+     * sibling still reads as a variant it lacks, as before.
+     */
+    @Test
+    void aProductKeptToItsOwnPartsIsSealedDespiteItsFamily() {
+        SupplierProduct family = new SupplierProduct("SAMPLE-001", "Sample Polo", null, null, null, List.of(),
+                List.of(new Variant("SAMPLE-001-RED", "Red", "S", "SAMPLE-001-RED-S",
+                                new BigDecimal("9.50"), new BigDecimal("12.00"), 10, List.of(), null, null),
+                        new Variant("SAMPLE-002", "Blue", "S", "SAMPLE-002-S",
+                                new BigDecimal("9.50"), new BigDecimal("12.00"), 7, List.of(), null, null)),
+                List.of(), List.of(new Configuration.PartPrice("SAMPLE-001-RED", null, List.of())), List.of());
+
+        productFields = "\"ownParts\":{\"value\":\"true\"},";
+        assertThat(service(family).refresh("SAMPLE-001", Kind.INVENTORY, false, false).outcome())
+                .isEqualTo(Outcome.PUSHED);
+
+        productFields = "";
+        state.states.clear();
+        assertThat(service(family).refresh("SAMPLE-001", Kind.INVENTORY, false, false).outcome())
+                .isEqualTo(Outcome.NEEDS_VARIANTS);
     }
 
     private static SupplierProduct product(int onHand) {
