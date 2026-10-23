@@ -327,13 +327,8 @@ class ForeignProductSync {
         List<String> discovered = new ArrayList<>();
         if (ownPartsOnly) {
             // CD900IL answers Inventory for all 53 CD900* parts; a store product that is Illinois alone
-            // keeps Illinois. Its own price table names the parts it really has.
-            Set<String> own = new LinkedHashSet<>(known);
-            seed.priceParts().forEach(p -> {
-                if (p.partId() != null) {
-                    own.add(upper(p.partId()));
-                }
-            });
+            // keeps Illinois.
+            Set<String> own = ownPartIds(seed, known);
             byKey.values().removeIf(v -> !own.contains(upper(v.supplierPartId())));
         }
         for (String partId : ownPartsOnly ? List.<String>of() : List.copyOf(partIds(byKey.values()))) {
@@ -906,6 +901,35 @@ class ForeignProductSync {
                     storeProduct.path("handle").asText(storeProduct.path("id").asText()));
         }
         return own;
+    }
+
+    /**
+     * The parts a product kept to its own ({@link #ownPartsOnly}) really has: its ids, and the parts
+     * its own price table names. Everything else in a family answer belongs to other store products.
+     */
+    private static Set<String> ownPartIds(SupplierProduct aggregate, java.util.Collection<String> ids) {
+        Set<String> own = new LinkedHashSet<>();
+        ids.forEach(id -> own.add(upper(id)));
+        aggregate.priceParts().forEach(p -> {
+            if (p.partId() != null) {
+                own.add(upper(p.partId()));
+            }
+        });
+        return own;
+    }
+
+    /**
+     * {@code aggregate} without the family parts — what a scheduled push of a product kept to its own
+     * parts writes and counts. Same rule as the import's union, so the two cannot disagree.
+     */
+    static SupplierProduct ownPartsOf(SupplierProduct aggregate, String productId) {
+        Set<String> own = ownPartIds(aggregate, List.of(productId));
+        List<Variant> kept = aggregate.variants().stream()
+                .filter(v -> v.supplierPartId() == null || own.contains(upper(v.supplierPartId())))
+                .toList();
+        return new SupplierProduct(aggregate.productId(), aggregate.title(), aggregate.descriptionHtml(),
+                aggregate.vendor(), aggregate.productType(), aggregate.tags(), kept, aggregate.imageUrls(),
+                aggregate.priceParts(), aggregate.warnings());
     }
 
     /** Removes media from a product; never fatal, since a stale image is not a wrong price. */
