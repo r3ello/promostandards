@@ -107,7 +107,7 @@ class ForeignProductSync {
      */
     Result sync(String productId, SupplierProduct seed, JsonNode storeProduct, ImportedProduct imported) {
         String gid = storeProduct.path("id").asText();
-        Union unioned = union(seed, imported);
+        Union unioned = union(seed, imported, ownPartsOnly(storeProduct));
         SupplierProduct union = unioned.product();
         List<StoreVariant> store = storeVariants(storeProduct);
         Map<String, JsonNode> options = optionsByName(storeProduct);
@@ -256,7 +256,7 @@ class ForeignProductSync {
             }
         }
         Union unioned = union(seed, new ImportedProduct(null, null, parentId,
-                List.copyOf(ids.values()), null, null));
+                List.copyOf(ids.values()), null, null), false);
         List<Variant> variants = unioned.product().variants();
         List<String> supplierIds = new ArrayList<>(variants.size());
         for (Variant v : variants) {
@@ -283,8 +283,12 @@ class ForeignProductSync {
      * service answers for a whole family at once ({@code CM297BL} returns all twelve {@code CM297*}
      * rows), so the union also picks up parts nobody asked for — which is the point: they are
      * variants of this product too. A part that its own id also reports wins over the family copy.
+     *
+     * @param ownPartsOnly the store product is one part of the family and must stay so
+     *                     ({@code trophy_sync.own_parts_only}): keep only the parts of the ids it lists
+     *                     and those their own prices name, and turn up no family part
      */
-    private Union union(SupplierProduct seed, ImportedProduct imported) {
+    private Union union(SupplierProduct seed, ImportedProduct imported, boolean ownPartsOnly) {
         Map<String, Variant> byKey = new LinkedHashMap<>();
         Set<String> authoritative = new LinkedHashSet<>();
         Set<String> known = new LinkedHashSet<>();
@@ -321,7 +325,18 @@ class ForeignProductSync {
         // supplier also serves as a product of its own is one of these products' ids: aggregate it
         // for its own prices and record it. One that has no product of its own stays a variant only.
         List<String> discovered = new ArrayList<>();
-        for (String partId : List.copyOf(partIds(byKey.values()))) {
+        if (ownPartsOnly) {
+            // CD900IL answers Inventory for all 53 CD900* parts; a store product that is Illinois alone
+            // keeps Illinois. Its own price table names the parts it really has.
+            Set<String> own = new LinkedHashSet<>(known);
+            seed.priceParts().forEach(p -> {
+                if (p.partId() != null) {
+                    own.add(upper(p.partId()));
+                }
+            });
+            byKey.values().removeIf(v -> !own.contains(upper(v.supplierPartId())));
+        }
+        for (String partId : ownPartsOnly ? List.<String>of() : List.copyOf(partIds(byKey.values()))) {
             if (!known.add(upper(partId))) {
                 continue;
             }
@@ -510,7 +525,8 @@ class ForeignProductSync {
     /**
      * Undoes the options this app gave a product the supplier sells in one variant: {@code Size} is
      * deleted (the {@code DEFAULT} strategy only removes an option with a single value, which is
-     * exactly this case and refuses anything riskier) and {@code Color} is renamed back to
+     * exactly this case and refuses anything riskier) and {@code Color} (or {@code State} /
+     * {@code Year}) is renamed back to
      * {@code Title / Default Title} — the shape Shopify calls "no options", since a product cannot
      * have none at all.
      *
@@ -531,7 +547,13 @@ class ForeignProductSync {
                 return;     // renaming Color while Size survives would leave a worse shape than both
             }
         }
+        // Year and State stand where Color does; a family member split off one keeps it, one value long.
         JsonNode color = options.get("color");
+        for (String name : List.of(VariantOptions.STATE, VariantOptions.YEAR)) {
+            if (color == null) {
+                color = options.get(name.toLowerCase(Locale.ROOT));
+            }
+        }
         if (color == null || color.path("optionValues").size() != 1) {
             return;
         }
@@ -868,6 +890,22 @@ class ForeignProductSync {
                     storeProduct.path("handle").asText(storeProduct.path("id").asText()));
         }
         return keep;
+    }
+
+    /**
+     * Whether the store keeps this product to its own parts: {@code trophy_sync.own_parts_only = true}.
+     * PaceSetter answers Inventory for a whole family, which is what makes a family one product; a
+     * store that sells each member on its own (the 53 CD900* state cutouts, split again 2026-10-23)
+     * says so with this, or every sync of a member would pull the other 52 back in. Set by hand (or
+     * Matrixify) per product; nothing here ever writes it.
+     */
+    static boolean ownPartsOnly(JsonNode storeProduct) {
+        boolean own = "true".equalsIgnoreCase(storeProduct.path("ownParts").path("value").asText("").trim());
+        if (own) {
+            log.info("Keeping {} to its own parts: trophy_sync.own_parts_only is true",
+                    storeProduct.path("handle").asText(storeProduct.path("id").asText()));
+        }
+        return own;
     }
 
     /** Removes media from a product; never fatal, since a stale image is not a wrong price. */
