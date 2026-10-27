@@ -2346,23 +2346,24 @@ function renderSplitCandidates() {
 			<span class="status-tile__n">${n.toLocaleString()}</span><span class="status-tile__label">${esc(g.label)}</span></button>`;
 	}).join('');
 	const g = SPLIT_GROUPS.find((x) => x.key === splitGroup);
-	el('splitNoteText').textContent = g.note(c);
 	const rows = all.filter((p) => p.kind === splitGroup);
+	el('splitNoteText').innerHTML = `${esc(g.note(c))}`;
+	el('splitLegend').hidden = !rows.length;
 	el('splitList').innerHTML = rows.length ? rows.map((p) => {
 		const link = c.adminProducts && p.adminId ? `${c.adminProducts}${p.adminId}` : null;
 		const name = esc(p.title || p.handle);
 		const state = p.status && p.status !== 'ACTIVE' ? ` <span class="badge badge--neutral">${esc(p.status.toLowerCase())}</span>` : '';
 		const codes = (p.ids || []).map((i) => i.archivedHandle
-			? `<span class="split-code is-back" title="Goes back to ${esc(i.archivedHandle)} (${esc((i.archivedStatus || '').toLowerCase())} now)"><span class="sku">${esc(i.productId)}</span><span class="muted">→ ${esc(i.archivedHandle)}</span></span>`
-			: `<span class="split-code is-none" title="No archived product remembers this code"><span class="sku">${esc(i.productId)}</span><span class="muted">no product of its own</span></span>`).join('');
+			? `<span class="split-code is-back" title="Goes back to ${esc(i.archivedHandle)} (${esc((i.archivedStatus || '').toLowerCase())} now)"><span class="split-code__dot"></span><span class="sku">${esc(i.productId)}</span><span class="split-code__to">→ ${esc(i.archivedHandle)}</span></span>`
+			: `<span class="split-code is-none" title="No archived product remembers this code"><span class="split-code__dot"></span><span class="sku">${esc(i.productId)}</span></span>`).join('');
 		const leaving = splitIdsFor(p, c);
 		const action = leaving.length
 			? `<button class="btn btn--sm btn--primary" data-split-open="${esc(p.productId)}">Split…</button>`
 			: '<button class="btn btn--sm" disabled title="No code has a product to go back to, and creating products is off">Split…</button>';
 		return `<tr>
-			<td><div class="prod-name">${link ? `<a href="${esc(link)}" target="_blank" rel="noopener">${name}</a>` : name}${state}</div><div class="muted">${esc(p.handle)}</div></td>
-			<td><span class="sku">${esc(p.productId)}</span></td>
-			<td><div class="split-codes">${codes}</div></td>
+			<td><div class="prod-name">${link ? `<a href="${esc(link)}" target="_blank" rel="noopener" title="Open in Shopify">${name}</a>` : name}${state}</div><div class="split-handle">${esc(p.handle)}</div></td>
+			<td data-label="Keeps"><span class="sku">${esc(p.productId)}</span></td>
+			<td data-label="Codes that would leave"><div class="split-codes">${codes}</div></td>
 			<td class="col-actions">${action}</td>
 		</tr>`;
 	}).join('')
@@ -2381,6 +2382,12 @@ el('splitTiles').addEventListener('click', (e) => {
 	renderSplitCandidates();
 });
 el('splitRefresh').addEventListener('click', loadSplitCandidates);
+try {
+	if (localStorage.getItem('splitGuideClosed') === '1') el('splitGuide').open = false;
+} catch (_) { /* storage blocked: the guide just starts open */ }
+el('splitGuide').addEventListener('toggle', () => {
+	try { localStorage.setItem('splitGuideClosed', el('splitGuide').open ? '0' : '1'); } catch (_) { /* ignore */ }
+});
 el('splitList').addEventListener('click', (e) => {
 	const btn = e.target.closest('[data-split-open]'); if (!btn) return;
 	const p = (splitCandidates.products || []).find((x) => x.productId === btn.dataset.splitOpen);
