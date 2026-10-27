@@ -1380,12 +1380,6 @@ function renderBulkBar() {
 	const group = el('bulkGroup');
 	group.disabled = selected.size < 2;
 	group.title = selected.size < 2 ? 'Select at least two PaceSetter ids' : 'Sell the selected PaceSetter ids as one Shopify product';
-	// A split starts from one id of a product the store sells; the server finds the rest.
-	const split = el('bulkSplit');
-	const one = selected.size === 1 ? entryOf([...selected][0]) : null;
-	split.disabled = !(one && one.imported === true);
-	split.title = split.disabled ? 'Select one PaceSetter id of a product in the store'
-		: 'Sell the PaceSetter ids of this Shopify product as separate products';
 }
 
 function unselect(pid) {
@@ -1632,13 +1626,14 @@ groupModal.querySelectorAll('[data-group-close]').forEach((n) => n.addEventListe
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !groupModal.hidden) closeGroupModal(); });
 
 // --- splitting a grouped product -----------------------------------------
-// The reverse of grouping: the PaceSetter ids of one Shopify product sold separately again. One row is
-// ticked (any id the grouped product carries); POST /api/catalog/ungroup says what would come back from
+// The reverse of grouping: the PaceSetter ids of one Shopify product sold separately again. Opened from
+// the Split tab, which lists what can be split; POST /api/catalog/ungroup says what would come back from
 // the archive, what would be created and which variants leave the grouped product, and writes nothing.
 // POST /api/sync/ungroup applies it and syncs the grouped product; the split ids are then synced here,
 // one at a time, because a split of 50 states is 50 syncs — far longer than one request should wait.
 const splitModal = el('splitModal');
-let splitId = null;           // the ticked id
+let splitId = null;           // the id the grouped product keeps
+let splitInitial = [];        // the ids the first preview asks about: those that have somewhere to go
 let splitAll = [];            // every id the grouped product carries (or did, before a split stopped)
 let splitChosen = new Set();  // the ids to sell on their own
 let splitPreview = null;      // the server's answer, or { error }
@@ -1649,8 +1644,9 @@ let splitBusy = false;        // applying, or syncing the split ids afterwards
 let splitStatus = 'ACTIVE';
 let splitKeepImages = false;
 
-function openSplitModal() {
-	splitId = [...selected][0];
+function openSplitModal(productId, initialIds) {
+	splitId = productId;
+	splitInitial = initialIds || [];
 	splitAll = [];
 	splitChosen = new Set();
 	splitPreview = null;
@@ -1678,8 +1674,8 @@ async function loadSplitPreview(first) {
 	paintSplitPreview();
 	let answer;
 	try {
-		// The first look lets the server pick every id but the product's own; after that, the ticks.
-		answer = await api('/api/catalog/ungroup', 'POST', { productId: splitId, splitIds: first ? [] : [...splitChosen] });
+		// The first look asks about the ids the Split tab says can leave; after that, the ticks.
+		answer = await api('/api/catalog/ungroup', 'POST', { productId: splitId, splitIds: first ? splitInitial : [...splitChosen] });
 	} catch (e) {
 		answer = { error: e.message };
 	}
@@ -1818,7 +1814,8 @@ async function syncSplitIds(r) {
 	}
 	splitBusy = false;
 	updateShopifyStatus();
-	[...selected].forEach(unselect);
+	splitCandidates = null;      // the list changed: read it again when the tab is next shown
+	if (!el('viewSplit').hidden) loadSplitCandidates();
 	el('splitCancel').disabled = false;
 	el('splitCancel').textContent = 'Close';
 	el('splitNote').textContent = failed
@@ -1827,7 +1824,6 @@ async function syncSplitIds(r) {
 	toast(`Split ${ids.length} id(s) off ${r.handle}${failed ? ` · ${failed} sync(s) failed` : ''}`, failed > 0);
 }
 
-el('bulkSplit').addEventListener('click', openSplitModal);
 el('splitApply').addEventListener('click', applySplit);
 el('splitBack').addEventListener('click', () => setSplitConfirming(false));
 el('splitBody').addEventListener('change', (e) => {
@@ -1869,6 +1865,8 @@ function viewFromHash() {
 	if (m) return { view: 'orders', orderId: m[1] || null };
 	const st = /^#status(?:\/([A-Z_]+))?$/.exec(location.hash);
 	if (st) return { view: 'status', orderId: null, group: st[1] || null };
+	const sp = /^#split(?:\/([A-Z_]+))?$/.exec(location.hash);
+	if (sp) return { view: 'split', orderId: null, group: sp[1] || null };
 	return { view: 'products', orderId: null };
 }
 
@@ -1878,7 +1876,9 @@ function routeView() {
 	el('viewProducts').hidden = view !== 'products';
 	el('viewOrders').hidden = view !== 'orders';
 	el('viewStatus').hidden = view !== 'status';
+	el('viewSplit').hidden = view !== 'split';
 	if (view === 'status') { showStatus(group); return; }
+	if (view === 'split') { showSplit(group); return; }
 	if (view !== 'orders') return;
 	if (!ordersLoaded) loadOrders().then(() => focusOrder(orderId));
 	else focusOrder(orderId);
@@ -2288,6 +2288,8 @@ el('viewTabs').addEventListener('click', (e) => {
 		if (location.hash !== '#orders') location.hash = '#orders';
 	} else if (seg.dataset.view === 'status') {
 		if (!location.hash.startsWith('#status')) location.hash = '#status';
+	} else if (seg.dataset.view === 'split') {
+		if (!location.hash.startsWith('#split')) location.hash = '#split';
 	} else if (location.hash) {
 		// Dropping the hash with pushState, not `location.hash = ''`, which would leave a bare "#".
 		history.pushState(null, '', location.pathname + location.search);
@@ -2295,6 +2297,95 @@ el('viewTabs').addEventListener('click', (e) => {
 	}
 });
 window.addEventListener('hashchange', routeView);
+
+// --- split tab ---------------------------------------------------------------
+// The store products that sell several PaceSetter codes, by how much of each a split can take apart.
+// Built from one pass over the store on each visit (GET /api/catalog/ungroup/candidates); the hash
+// keeps the open group (#split/PARTIAL).
+let splitCandidates = null;
+let splitGroup = 'READY';
+const SPLIT_GROUPS = [
+	{ key: 'READY', label: 'Ready to split', tone: 'success',
+		note: () => 'Every code but the product’s own goes back to the product a grouping archived. Splitting restores them all.' },
+	{ key: 'PARTIAL', label: 'Partly', tone: 'caution',
+		note: (c) => 'Only the codes whose product was archived by a grouping can leave; the split offers just those. '
+			+ (c.createProducts ? 'The others can be ticked too: each gets a new draft product.' : 'The others stay on the grouped product (creating products is off).') },
+	{ key: 'NOTHING_TO_RESTORE', label: 'Grouped since the migration', tone: 'neutral',
+		note: (c) => 'None of these codes ever had a product of its own in the store, so there is nothing to bring back. '
+			+ (c.createProducts ? 'Splitting creates a draft product for each code.' : 'Splitting them would mean creating products, which is off — they cannot be split here.') },
+];
+
+function showSplit(group) {
+	if (group && SPLIT_GROUPS.some((g) => g.key === group)) splitGroup = group;
+	if (!splitCandidates) loadSplitCandidates();
+	else renderSplitCandidates();
+}
+
+async function loadSplitCandidates() {
+	const btn = el('splitRefresh');
+	btn.disabled = true;
+	el('splitMeta').innerHTML = '<span class="spinner"></span> Reading the store…';
+	try {
+		splitCandidates = await api('/api/catalog/ungroup/candidates');
+	} catch (e) {
+		el('splitMeta').textContent = `Could not read the store: ${e.message}`;
+		btn.disabled = false;
+		return;
+	}
+	btn.disabled = false;
+	renderSplitCandidates();
+}
+
+function renderSplitCandidates() {
+	const c = splitCandidates;
+	const all = c.products || [];
+	el('splitMeta').textContent = `${all.length.toLocaleString()} Shopify products sell more than one PaceSetter code`;
+	el('splitTiles').innerHTML = SPLIT_GROUPS.map((g) => {
+		const n = all.filter((p) => p.kind === g.key).length;
+		return `<button class="status-tile tone-${g.tone}${g.key === splitGroup ? ' is-active' : ''}" role="tab" aria-selected="${g.key === splitGroup}" data-split-group="${g.key}">
+			<span class="status-tile__n">${n.toLocaleString()}</span><span class="status-tile__label">${esc(g.label)}</span></button>`;
+	}).join('');
+	const g = SPLIT_GROUPS.find((x) => x.key === splitGroup);
+	el('splitNoteText').textContent = g.note(c);
+	const rows = all.filter((p) => p.kind === splitGroup);
+	el('splitList').innerHTML = rows.length ? rows.map((p) => {
+		const link = c.adminProducts && p.adminId ? `${c.adminProducts}${p.adminId}` : null;
+		const name = esc(p.title || p.handle);
+		const state = p.status && p.status !== 'ACTIVE' ? ` <span class="badge badge--neutral">${esc(p.status.toLowerCase())}</span>` : '';
+		const codes = (p.ids || []).map((i) => i.archivedHandle
+			? `<span class="split-code is-back" title="Goes back to ${esc(i.archivedHandle)} (${esc((i.archivedStatus || '').toLowerCase())} now)"><span class="sku">${esc(i.productId)}</span><span class="muted">→ ${esc(i.archivedHandle)}</span></span>`
+			: `<span class="split-code is-none" title="No archived product remembers this code"><span class="sku">${esc(i.productId)}</span><span class="muted">no product of its own</span></span>`).join('');
+		const leaving = splitIdsFor(p, c);
+		const action = leaving.length
+			? `<button class="btn btn--sm btn--primary" data-split-open="${esc(p.productId)}">Split…</button>`
+			: '<button class="btn btn--sm" disabled title="No code has a product to go back to, and creating products is off">Split…</button>';
+		return `<tr>
+			<td><div class="prod-name">${link ? `<a href="${esc(link)}" target="_blank" rel="noopener">${name}</a>` : name}${state}</div><div class="muted">${esc(p.handle)}</div></td>
+			<td><span class="sku">${esc(p.productId)}</span></td>
+			<td><div class="split-codes">${codes}</div></td>
+			<td class="col-actions">${action}</td>
+		</tr>`;
+	}).join('')
+		: `<tr class="row-state"><td colspan="4"><div class="empty"><strong>Nothing here</strong></div></td></tr>`;
+}
+
+/** The codes a split of {@code p} starts with: those with somewhere to go. */
+function splitIdsFor(p, c) {
+	return (p.ids || []).filter((i) => i.archivedHandle || c.createProducts).map((i) => i.productId);
+}
+
+el('splitTiles').addEventListener('click', (e) => {
+	const tile = e.target.closest('[data-split-group]'); if (!tile) return;
+	splitGroup = tile.dataset.splitGroup;
+	history.replaceState(null, '', `#split/${splitGroup}`);
+	renderSplitCandidates();
+});
+el('splitRefresh').addEventListener('click', loadSplitCandidates);
+el('splitList').addEventListener('click', (e) => {
+	const btn = e.target.closest('[data-split-open]'); if (!btn) return;
+	const p = (splitCandidates.products || []).find((x) => x.productId === btn.dataset.splitOpen);
+	if (p) openSplitModal(p.productId, splitIdsFor(p, splitCandidates));
+});
 ordersBody.addEventListener('click', (e) => {
 	if (e.target.closest('[data-order-email], [data-order-send]')) return;  // a button in the preview, not the row
 	const row = e.target.closest('tr.prod-row[data-order]');

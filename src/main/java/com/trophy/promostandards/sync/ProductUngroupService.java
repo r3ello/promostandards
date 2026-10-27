@@ -4,8 +4,10 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.trophy.promostandards.shopify.ShopifyGraphQLClient;
+import com.trophy.promostandards.shopify.ShopifyProperties;
 import com.trophy.promostandards.sync.ShopifySyncService.ImportedProduct;
 import com.trophy.promostandards.sync.ShopifySyncService.SyncResult;
+import com.trophy.promostandards.sync.model.ProductSplitCandidates;
 import com.trophy.promostandards.sync.model.ProductUngroupPreview;
 import com.trophy.promostandards.sync.model.ProductUngroupPreview.Action;
 import com.trophy.promostandards.sync.model.ProductUngroupPreview.Split;
@@ -56,14 +58,17 @@ public class ProductUngroupService {
     private final ShopifySyncService sync;
     private final ShopifyGraphQLClient gql;
     private final ObjectMapper objectMapper;
+    private final ShopifyProperties shopify;
 
     /** Two splits at once could each validate against a store the other is about to change. */
     private final Object applyLock = new Object();
 
-    public ProductUngroupService(ShopifySyncService sync, ShopifyGraphQLClient gql, ObjectMapper objectMapper) {
+    public ProductUngroupService(ShopifySyncService sync, ShopifyGraphQLClient gql, ObjectMapper objectMapper,
+                                 ShopifyProperties shopify) {
         this.sync = sync;
         this.gql = gql;
         this.objectMapper = objectMapper;
+        this.shopify = shopify;
     }
 
     /**
@@ -313,7 +318,12 @@ public class ProductUngroupService {
      * store: nothing searches by metafield value, and a split is rare enough to pay for it.
      */
     private List<Restored> absorbedInto(String handle) {
-        List<Restored> found = new ArrayList<>();
+        return absorbedByParent(groupedListing()).getOrDefault(handle, List.of());
+    }
+
+    /** Every PromoStandards product of the store, with its ids and any grouping note. */
+    private List<JsonNode> groupedListing() {
+        List<JsonNode> nodes = new ArrayList<>();
         String cursor = null;
         do {
             Map<String, Object> vars = new LinkedHashMap<>();
@@ -321,28 +331,94 @@ public class ProductUngroupService {
                 vars.put("cursor", cursor);
             }
             JsonNode page = require(gql.execute(ShopifyGraphQL.GROUPED_PRODUCTS, vars)).path("products");
-            for (JsonNode n : page.path("nodes")) {
-                if (!handle.equals(n.path("groupedInto").path("value").asText(null))) {
-                    continue;
-                }
-                // The ids it had: the note, or — when a split stopped after giving them back — its own.
-                Set<String> ids = new LinkedHashSet<>(parseIds(n.path("groupedIds").path("value").asText(null)));
-                String psId = n.path("psId").path("value").asText(null);
-                if (ids.isEmpty() && psId != null && !psId.isBlank()) {
-                    ids.add(psId);
-                }
-                if (ids.isEmpty()) {
-                    ids.addAll(parseIds(n.path("psIds").path("value").asText(null)));
-                }
-                if (!ids.isEmpty()) {
-                    found.add(new Restored(n.path("id").asText(), n.path("handle").asText(),
-                            n.path("status").asText(null), List.copyOf(ids)));
-                }
-            }
+            page.path("nodes").forEach(nodes::add);
             JsonNode pageInfo = page.path("pageInfo");
             cursor = pageInfo.path("hasNextPage").asBoolean(false) ? pageInfo.path("endCursor").asText(null) : null;
         } while (cursor != null);
-        return found;
+        return nodes;
+    }
+
+    /** Grouped product handle → the products noted as absorbed into it. */
+    private Map<String, List<Restored>> absorbedByParent(List<JsonNode> listing) {
+        Map<String, List<Restored>> byParent = new LinkedHashMap<>();
+        for (JsonNode n : listing) {
+            String into = n.path("groupedInto").path("value").asText(null);
+            if (into == null || into.isBlank()) {
+                continue;
+            }
+            // The ids it had: the note, or — when a split stopped after giving them back — its own.
+            Set<String> ids = new LinkedHashSet<>(parseIds(n.path("groupedIds").path("value").asText(null)));
+            String psId = n.path("psId").path("value").asText(null);
+            if (ids.isEmpty() && psId != null && !psId.isBlank()) {
+                ids.add(psId);
+            }
+            if (ids.isEmpty()) {
+                ids.addAll(parseIds(n.path("psIds").path("value").asText(null)));
+            }
+            if (!ids.isEmpty()) {
+                byParent.computeIfAbsent(into, k -> new ArrayList<>()).add(new Restored(n.path("id").asText(),
+                        n.path("handle").asText(), n.path("status").asText(null), List.copyOf(ids)));
+            }
+        }
+        return byParent;
+    }
+
+    /**
+     * Every store product a split could take apart — those selling more than one supplier id — and
+     * what each of their ids would go back to. One pass over the store; what the console's Split tab
+     * lists, so nobody has to open a product to find out there is nothing to split.
+     */
+    public ProductSplitCandidates candidates() {
+        List<JsonNode> listing = groupedListing();
+        Map<String, List<Restored>> absorbed = absorbedByParent(listing);
+        List<ProductSplitCandidates.Candidate> products = new ArrayList<>();
+        for (JsonNode n : listing) {
+            String status = n.path("status").asText("");
+            if ("ARCHIVED".equals(status)) {
+                continue;
+            }
+            String psId = n.path("psId").path("value").asText(null);
+            List<String> ids = new ArrayList<>(parseIds(n.path("psIds").path("value").asText(null)));
+            if (psId != null && !psId.isBlank() && !containsId(ids, psId)) {
+                ids.add(0, psId);
+            }
+            if (ids.size() < 2) {
+                continue;
+            }
+            // The same "own id" the preview keeps.
+            String own = psId != null && !psId.isBlank() ? psId : ids.get(0);
+            String handle = n.path("handle").asText();
+            List<Restored> mine = absorbed.getOrDefault(handle, List.of());
+            List<ProductSplitCandidates.Id> others = new ArrayList<>();
+            int back = 0;
+            for (String id : ids) {
+                if (key(id).equals(key(own))) {
+                    continue;
+                }
+                Restored r = mine.stream().filter(x -> containsId(x.supplierIds(), id)).findFirst().orElse(null);
+                if (r != null) {
+                    back++;
+                }
+                others.add(new ProductSplitCandidates.Id(id, r == null ? null : r.handle(),
+                        r == null ? null : r.status()));
+            }
+            ProductSplitCandidates.Kind kind = back == others.size() ? ProductSplitCandidates.Kind.READY
+                    : back > 0 ? ProductSplitCandidates.Kind.PARTIAL : ProductSplitCandidates.Kind.NOTHING_TO_RESTORE;
+            String gid = n.path("id").asText("");
+            products.add(new ProductSplitCandidates.Candidate(handle, n.path("title").asText(null), status,
+                    gid.substring(gid.lastIndexOf('/') + 1), own, kind, others));
+        }
+        return new ProductSplitCandidates(adminProducts(), sync.canCreateProducts(), products);
+    }
+
+    /** {@code trophy-partner.myshopify.com} → {@code https://admin.shopify.com/store/trophy-partner/products/}. */
+    private String adminProducts() {
+        String domain = shopify == null ? null : shopify.storeDomain();
+        if (domain == null || domain.isBlank()) {
+            return null;
+        }
+        String store = domain.trim().replaceFirst("^https?://", "").replaceFirst("\\.myshopify\\.com/?$", "");
+        return "https://admin.shopify.com/store/" + store + "/products/";
     }
 
     /** A list metafield is a JSON array; Matrixify sheets wrote some as plain {@code A,B}. */

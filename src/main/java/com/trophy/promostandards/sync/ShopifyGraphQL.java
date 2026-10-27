@@ -431,7 +431,8 @@ final class ShopifyGraphQL {
     /**
      * Every PromoStandards product with the note a grouping leaves on what it absorbed
      * ({@code trophy_sync.grouped_into} / {@code grouped_ids}), whatever its status — what a split
-     * finds the products to bring back by. Nothing searches by metafield value, so it pages them all.
+     * finds the products to bring back by, and what the Split tab lists. Nothing searches by metafield
+     * value, so it pages them all.
      */
     static final String GROUPED_PRODUCTS = """
             query GroupedProducts($cursor: String) {
@@ -440,6 +441,7 @@ final class ShopifyGraphQL {
                 nodes {
                   id
                   handle
+                  title
                   status
                   psId: metafield(namespace: "custom", key: "ps_product_id") { value }
                   psIds: metafield(namespace: "custom", key: "ps_product_ids") { value }

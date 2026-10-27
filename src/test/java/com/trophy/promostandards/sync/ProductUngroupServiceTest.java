@@ -3,6 +3,7 @@ package com.trophy.promostandards.sync;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.trophy.promostandards.shopify.ShopifyGraphQLClient;
+import com.trophy.promostandards.shopify.ShopifyProperties;
 import com.trophy.promostandards.sync.ShopifySyncService.ImportedProduct;
 import com.trophy.promostandards.sync.ShopifySyncService.SyncResult;
 import com.trophy.promostandards.sync.model.ProductUngroupPreview;
@@ -42,7 +43,8 @@ class ProductUngroupServiceTest {
 
     private final ShopifySyncService sync = mock(ShopifySyncService.class);
     private final ShopifyGraphQLClient gql = mock(ShopifyGraphQLClient.class);
-    private final ProductUngroupService ungroups = new ProductUngroupService(sync, gql, MAPPER);
+    private final ProductUngroupService ungroups = new ProductUngroupService(sync, gql, MAPPER,
+            new ShopifyProperties("trophy-partner.myshopify.com", "id", "secret", "whsec", "2026-04", null));
 
     @BeforeEach
     void storeAcceptsEveryWrite() {
@@ -204,6 +206,42 @@ class ProductUngroupServiceTest {
         ProductUngroupPreview preview = ungroups.preview("CD900AK", List.of());
 
         assertThat(preview.conflicts()).anyMatch(c -> c.contains("keep at least the variants of CD900AK"));
+    }
+
+    /**
+     * The Split tab: only products selling several ids, each sorted by how much of it a split can
+     * bring back — every id (Alaska), some (the pen: one colour had a product, two never did), or
+     * none (grouped since the migration).
+     */
+    @Test
+    void listsWhatASplitCouldTakeApart() {
+        when(gql.execute(eq(ShopifyGraphQL.GROUPED_PRODUCTS), any())).thenReturn(json("""
+                {"products":{"pageInfo":{"hasNextPage":false},"nodes":[
+                 {"id":"gid://shopify/Product/1","handle":"p-5805-alaska","title":"Alaska","status":"ACTIVE",
+                  "psId":{"value":"CD900AK"},"psIds":{"value":"[\\"CD900AK\\",\\"CD900AL\\"]"}},
+                 {"id":"gid://shopify/Product/2","handle":"p-5806-alabama","status":"ARCHIVED",
+                  "groupedInto":{"value":"p-5805-alaska"},"groupedIds":{"value":"[\\"CD900AL\\"]"}},
+                 {"id":"gid://shopify/Product/3","handle":"p-8808-pen","title":"Pen","status":"ACTIVE",
+                  "psId":{"value":"CM356BL"},"psIds":{"value":"[\\"CM356BL\\",\\"CM356BB\\",\\"CM356TL\\"]"}},
+                 {"id":"gid://shopify/Product/4","handle":"p-9-pen-bb","status":"ARCHIVED",
+                  "groupedInto":{"value":"p-8808-pen"},"groupedIds":{"value":"CM356BB"}},
+                 {"id":"gid://shopify/Product/5","handle":"p-8905-portfolio","status":"DRAFT",
+                  "psIds":{"value":"[\\"CM297BL\\",\\"CM297BS\\"]"}},
+                 {"id":"gid://shopify/Product/6","handle":"p-7-single","status":"ACTIVE","psId":{"value":"GI638"}}
+                ]}}"""));
+
+        var candidates = ungroups.candidates();
+
+        assertThat(candidates.adminProducts()).isEqualTo("https://admin.shopify.com/store/trophy-partner/products/");
+        assertThat(candidates.products()).extracting(c -> c.handle() + ":" + c.kind())
+                .containsExactly("p-5805-alaska:READY", "p-8808-pen:PARTIAL", "p-8905-portfolio:NOTHING_TO_RESTORE");
+        var pen = candidates.products().get(1);
+        assertThat(pen.productId()).isEqualTo("CM356BL");
+        assertThat(pen.adminId()).isEqualTo("3");
+        assertThat(pen.ids()).extracting(i -> i.productId() + "→" + i.archivedHandle())
+                .containsExactly("CM356BB→p-9-pen-bb", "CM356TL→null");
+        // No ps_product_id: the first listed id is the one it keeps, as the preview would.
+        assertThat(candidates.products().get(2).productId()).isEqualTo("CM297BL");
     }
 
     // ---------------------------------------------------------------- apply
