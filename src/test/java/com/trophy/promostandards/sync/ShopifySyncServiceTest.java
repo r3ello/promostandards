@@ -461,6 +461,61 @@ class ShopifySyncServiceTest {
     }
 
     /**
+     * The live store defines {@code trophy_sync.last_sync_at} as text (2026-10-13), and one
+     * {@code metafieldsSet} is all or nothing: stamping it as {@code date_time} refused the whole
+     * call, so no product synced since got {@code trophy_sync.vendor} — and a product without it
+     * blocks its PaceSetter orders (C1407LR/LB, split 2026-10-27). The refusal names the type; the
+     * stamp is written again with it, and every later sync uses it straight away.
+     */
+    @Test
+    void aLastSyncAtDefinedAsTextNoLongerTakesTheVendorDownWithIt() {
+        List<List<?>> stamps = new ArrayList<>();
+        ShopifyHttp store = migratedStoreHttp();
+        ShopifyHttp textDefinition = (path, body, headers) -> {
+            String query = String.valueOf(((Map<?, ?>) body).get("query"));
+            if (query.contains("MetafieldsSet")) {
+                List<?> metafields = (List<?>) ((Map<?, ?>) ((Map<?, ?>) body).get("variables")).get("metafields");
+                Map<?, ?> first = (Map<?, ?>) metafields.get(0);
+                if ("last_sync_at".equals(first.get("key"))) {
+                    stamps.add(metafields);
+                    if ("date_time".equals(first.get("type"))) {
+                        try {
+                            return MAPPER.readTree("""
+                                    {"data":{"metafieldsSet":{"metafields":null,"userErrors":[{"field":["metafields","0","type"],
+                                     "message":"Type 'date_time' must be consistent with the definition's type: 'single_line_text_field'."}]}}}""");
+                        } catch (Exception e) {
+                            throw new IllegalStateException(e);
+                        }
+                    }
+                }
+            }
+            return store.postJson(path, body, headers);
+        };
+        ShopifySyncService service = service(textDefinition);
+
+        service.importProduct("SAMPLE-001");
+        service.importProduct("SAMPLE-001");
+
+        assertThat(stamps.stream().map(s -> String.valueOf(((Map<?, ?>) s.get(0)).get("type"))).toList())
+                .containsExactly("date_time", "single_line_text_field", "single_line_text_field");
+        assertThat(stamps.get(1)).anySatisfy(m -> {
+            assertThat(((Map<?, ?>) m).get("key")).isEqualTo("vendor");
+            assertThat(((Map<?, ?>) m).get("value")).isEqualTo("PaceSetter");
+        });
+    }
+
+    @Test
+    void readsTheDefinedTypeOnlyFromARefusalOfTheFirstField() {
+        assertThat(ShopifySyncService.definedTypeOfFirst("metafieldsSet userErrors: [{\"field\":[\"metafields\",\"0\",\"type\"],"
+                + "\"message\":\"Type 'date_time' must be consistent with the definition's type: 'single_line_text_field'.\"}]"))
+                .isEqualTo("single_line_text_field");
+        assertThat(ShopifySyncService.definedTypeOfFirst("metafieldsSet userErrors: [{\"field\":[\"metafields\",\"1\",\"type\"],"
+                + "\"message\":\"Type 'date_time' must be consistent with the definition's type: 'single_line_text_field'.\"}]"))
+                .isNull();
+        assertThat(ShopifySyncService.definedTypeOfFirst(null)).isNull();
+    }
+
+    /**
      * A migrated product carries none of the supplier's variants, so syncing one used to match
      * nothing and do nothing. It now adopts the legacy variant and creates the rest — never with
      * {@code productSet}, which is declarative and would delete the sibling ids' variants along with

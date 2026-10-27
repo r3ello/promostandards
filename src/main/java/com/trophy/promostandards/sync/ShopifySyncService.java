@@ -25,6 +25,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Orchestrates supplier → Shopify sync: imports/updates products ({@code productSet}), pushes
@@ -77,6 +79,13 @@ public class ShopifySyncService {
 
     /** GID of the configured supplier metaobject; resolved once (it never changes for a store). */
     private volatile String supplierMetaobjectGid;
+
+    /**
+     * The type {@code trophy_sync.last_sync_at} is written as: {@code date_time}, unless the store's
+     * own definition says otherwise — the live store defines it as {@code single_line_text_field}
+     * (2026-10-13), and a mismatch refuses the whole stamp, {@code vendor} included.
+     */
+    private volatile String lastSyncAtType = "date_time";
 
     /** UPPER-cased supplier id → tagged store product; rebuilt lazily after {@link #INDEX_TTL}. */
     private volatile Map<String, ImportedProduct> supplierIdIndex;
@@ -868,14 +877,54 @@ public class ShopifySyncService {
      * app-created products only,
      * {@code custom.ps_source=app}. Never called with {@code appOwned} for foreign/migrated products
      * — their {@code ps_source=migration} is immutable. Failures warn, never fail the sync.
+     *
+     * <p>One {@code metafieldsSet} is all or nothing, so a {@code last_sync_at} of the wrong type for
+     * the store's definition used to take {@code vendor} down with it — and a product without
+     * {@code trophy_sync.vendor} blocks its PaceSetter orders. That refusal names the definition's
+     * type; the stamp is written again with it, and the type kept for every later sync.
      */
     private void stampSyncMetafields(String productGid, boolean appOwned) {
+        try {
+            writeSyncStamp(productGid, appOwned);
+        } catch (RuntimeException e) {
+            String defined = definedTypeOfFirst(e.getMessage());
+            if (defined == null || defined.equals(lastSyncAtType)) {
+                log.warn("Could not stamp sync metafields on {}: {}", productGid, e.getMessage());
+                return;
+            }
+            log.info("trophy_sync.{} is defined as {} in this store; stamping it as that",
+                    ShopifyProductMapper.MF_LAST_SYNC_AT_NEW, defined);
+            lastSyncAtType = defined;
+            try {
+                writeSyncStamp(productGid, appOwned);
+            } catch (RuntimeException again) {
+                log.warn("Could not stamp sync metafields on {}: {}", productGid, again.getMessage());
+            }
+        }
+    }
+
+    /** {@code "field":["metafields","0","type"] … definition's type: 'single_line_text_field'} */
+    private static final Pattern FIRST_FIELD_DEFINED_TYPE = Pattern.compile(
+            "\\[\"metafields\",\"0\",\"type\"],\"message\":\"Type '[^']+' must be consistent with the "
+                    + "definition's type: '([^']+)'");
+
+    /** @return the type the store defines the stamp's first metafield ({@code last_sync_at}) as, if that was the refusal */
+    static String definedTypeOfFirst(String error) {
+        if (error == null) {
+            return null;
+        }
+        Matcher m = FIRST_FIELD_DEFINED_TYPE.matcher(error);
+        return m.find() ? m.group(1) : null;
+    }
+
+    private void writeSyncStamp(String productGid, boolean appOwned) {
         List<Map<String, Object>> metafields = new ArrayList<>();
+        // First: definedTypeOfFirst reads a type refusal for index 0 as this one's.
         metafields.add(Map.of(
                 "ownerId", productGid,
                 "namespace", ShopifyProductMapper.SYNC_NAMESPACE,
                 "key", ShopifyProductMapper.MF_LAST_SYNC_AT_NEW,
-                "type", "date_time",
+                "type", lastSyncAtType,
                 "value", Instant.now().truncatedTo(ChronoUnit.SECONDS).toString()));
         // Stamped on both paths, because both are true of a synced product: which supplier the data
         // came from, and who created the product. A migrated product only ever got these from the
@@ -894,12 +943,8 @@ public class ShopifySyncService {
                 "type", "single_line_text_field",
                 "value", appOwned ? ShopifyProductMapper.SOURCE_APP
                         : ShopifyProductMapper.SOURCE_MIGRATION));
-        try {
-            JsonNode data = gql.execute(ShopifyGraphQL.METAFIELDS_SET, Map.of("metafields", metafields));
-            checkUserErrors(require(data).path("metafieldsSet"), "metafieldsSet");
-        } catch (RuntimeException e) {
-            log.warn("Could not stamp sync metafields on {}: {}", productGid, e.getMessage());
-        }
+        JsonNode data = gql.execute(ShopifyGraphQL.METAFIELDS_SET, Map.of("metafields", metafields));
+        checkUserErrors(require(data).path("metafieldsSet"), "metafieldsSet");
     }
 
     /** @return the product node by id, or {@code null} when there is none. */
