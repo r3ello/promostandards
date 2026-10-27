@@ -10,6 +10,7 @@ import com.trophy.promostandards.sync.ProductGroupService;
 import com.trophy.promostandards.sync.ProductUngroupService;
 import com.trophy.promostandards.sync.model.PendingDataView;
 import com.trophy.promostandards.sync.model.ProductGroupPreview;
+import com.trophy.promostandards.sync.model.ProductSplitCandidates;
 import com.trophy.promostandards.sync.model.ProductUngroupPreview;
 import com.trophy.promostandards.sync.model.CatalogEntry;
 import com.trophy.promostandards.sync.model.CatalogGroupView;
@@ -123,6 +124,15 @@ public class CatalogController {
      * What splitting a grouped store product back into one product per supplier id would do. Answers
      * only; {@code POST /api/sync/ungroup} applies it, after running these same checks again.
      */
+    /**
+     * The store products a split could take apart — every one selling several supplier ids — and,
+     * for each id, the archived product it would go back to. One pass over the store, nothing written.
+     */
+    @GetMapping("/ungroup/candidates")
+    public ProductSplitCandidates ungroupCandidates() {
+        return ungroups.candidates();
+    }
+
     @PostMapping("/ungroup")
     public ProductUngroupPreview previewUngroup(@RequestBody UngroupRequest request) {
         return ungroups.preview(request.productId(), request.splitIds());
