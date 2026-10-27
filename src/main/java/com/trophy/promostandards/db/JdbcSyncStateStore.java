@@ -100,6 +100,22 @@ public class JdbcSyncStateStore implements SyncStateStore {
 				.update();
 	}
 
+	@Override
+	public Optional<Run> lastRun(String job) {
+		return jdbc.sql("""
+						select job, started_at, finished_at, processed, succeeded, failed, skipped
+						from sync_run
+						where job = ? and finished_at is not null
+						order by started_at desc
+						limit 1
+						""")
+				.param(job)
+				.query((rs, rowNum) -> new Run(rs.getString("job"), rs.getTimestamp("started_at").toInstant(),
+						rs.getTimestamp("finished_at").toInstant(), rs.getInt("processed"),
+						rs.getInt("succeeded"), rs.getInt("failed"), rs.getInt("skipped")))
+				.optional();
+	}
+
 	/** 5 min, 10, 20, 40 … capped, so a permanently broken product stops crowding out the rest. */
 	static Duration backoff(int consecutiveFailures) {
 		if (consecutiveFailures <= 0) {

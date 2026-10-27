@@ -1230,6 +1230,8 @@ function cronText(expr) {
 const SCHED_OUTCOME_TONE = {
 	PUSHED: 'success', UNCHANGED: 'neutral', WOULD_PUSH: 'caution',
 	BACKING_OFF: 'caution', FAILED: 'critical', STATE_UNAVAILABLE: 'critical',
+	// Read back from sync_run after a restart, and the order job's own.
+	SKIPPED: 'neutral', FULFILLED: 'success', MATCHED: 'neutral', DRY_RUN_SKIPPED: 'caution',
 };
 
 function schedAgo(iso) {
@@ -1256,7 +1258,7 @@ function schedResultHtml(job) {
 	const badges = entries
 		.sort((a, b) => b[1] - a[1])
 		.map(([outcome, count]) =>
-			`<span class="badge badge--${SCHED_OUTCOME_TONE[outcome] || 'neutral'}">${count} ${esc(outcome.toLowerCase().replace('_', ' '))}</span>`)
+			`<span class="badge badge--${SCHED_OUTCOME_TONE[outcome] || 'neutral'}">${count} ${esc(outcome.toLowerCase().replaceAll('_', ' '))}</span>`)
 		.join(' ');
 	const written = job.variantsWritten ? ` <span class="muted">· ${job.variantsWritten} variants written</span>` : '';
 	return badges + written;
@@ -1267,7 +1269,8 @@ function schedRowHtml(name, status, job) {
 	const cron = cronText((status.crons || {})[name]);
 	const last = !job ? '<span class="muted">—</span>'
 		: job.running ? `<span class="sched-running"><span class="spinner"></span> running · ${esc(schedDuration(Math.round((Date.now() - Date.parse(job.startedAt)) / 1000)))}</span>`
-			: `${esc(schedAgo(job.startedAt))} <span class="muted">· ${esc(schedDuration(job.seconds))} · ${job.products} products</span>`;
+			: `<span title="${esc(new Date(job.startedAt).toLocaleString())}">${esc(schedAgo(job.startedAt))}</span> <span class="muted">· ${esc(schedDuration(job.seconds))} · ${job.products} ${name === 'orders' ? 'POs' : 'products'}</span>`
+				+ (job.fromHistory ? '<div class="muted" title="This server has restarted since; only the totals of that pass were kept">from the run history</div>' : '');
 	const actions = meta.runnable
 		? `<div class="row-actions">
 			<button class="btn btn--sm" data-sched-run="${esc(name)}" data-sched-dry="true"${job && job.running ? ' disabled' : ''}>Dry run</button>
