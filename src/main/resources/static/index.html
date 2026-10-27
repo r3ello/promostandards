@@ -280,30 +280,44 @@
 						<button class="btn" id="splitRefresh">↻ Reload</button>
 					</div>
 				</div>
-				<div class="split-explain">
-					<div>
-						<div class="sub-title">What can be split</div>
-						<p>A Shopify product that sells several PaceSetter codes. A code can only go back to a product of its own when a grouping archived that product and left a note on it saying where its codes went. Codes grouped since the migration never had a product of their own, so there is nothing to bring back for them.</p>
+				<details class="split-guide" id="splitGuide" open>
+					<summary>How splitting works</summary>
+					<div class="split-guide__cols">
+						<section class="split-guide__col">
+							<h3>Which products can be split</h3>
+							<ul class="split-guide__checks">
+								<li>The Shopify product sells <strong>several PaceSetter codes</strong>.</li>
+								<li>Each code that leaves goes back to <strong>the product a grouping archived</strong> for it.</li>
+								<li>Codes grouped since the migration never had a product of their own: there is nothing to bring back.</li>
+							</ul>
+						</section>
+						<section class="split-guide__col">
+							<h3>What a split does</h3>
+							<ol class="split-guide__steps">
+								<li>Deletes those codes’ variants from the grouped product. Orders keep their lines.</li>
+								<li>Brings the archived products back, as Active or Draft.</li>
+								<li>Keeps every product to its own parts, so no sync pulls the family back in.</li>
+								<li>Syncs each one: price, stock, photo and discounts.</li>
+							</ol>
+						</section>
+						<section class="split-guide__col">
+							<h3>After the split</h3>
+							<ul class="split-guide__checks">
+								<li>Each product is synced on its own, by hand and by the scheduled jobs.</li>
+								<li>Not changed: the grouped product’s title and the old grouping’s redirects.</li>
+								<li>To undo it, group the codes again from the Products tab.</li>
+							</ul>
+						</section>
 					</div>
-					<div>
-						<div class="sub-title">What splitting does</div>
-						<ol>
-							<li>Deletes the grouped product’s variants of the codes that leave. Orders that bought one keep their lines.</li>
-							<li>Brings the archived products back, Active or Draft, with their codes.</li>
-							<li>Marks every product involved to keep to its own parts, so no later sync pulls the family back in.</li>
-							<li>Syncs each product: price, stock, photo and quantity discounts.</li>
-						</ol>
-						<p class="muted">Not done for you: the grouped product’s title (it keeps the one the grouping gave it) and the old grouping’s redirects.</p>
-					</div>
-					<div>
-						<div class="sub-title">Afterwards</div>
-						<p>Each product is its own again: synced on its own, by hand and by the scheduled jobs. Grouping them again from the Products tab undoes the split.</p>
-					</div>
-				</div>
+				</details>
 				<div class="status-tiles" id="splitTiles" role="tablist" aria-label="Groups"></div>
 				<p class="status-note" id="splitNoteText"></p>
+				<div class="split-legend" id="splitLegend" hidden>
+					<span><span class="split-code__dot"></span> goes back to the archived product shown</span>
+					<span><span class="split-code__dot is-hollow"></span> no product of its own to go back to</span>
+				</div>
 				<div class="table-wrap">
-					<table class="index-table">
+					<table class="index-table split-table">
 						<thead><tr><th>Shopify product</th><th>Keeps</th><th>Codes that would leave</th><th class="col-actions" aria-label="Action"></th></tr></thead>
 						<tbody id="splitList"></tbody>
 					</table>
