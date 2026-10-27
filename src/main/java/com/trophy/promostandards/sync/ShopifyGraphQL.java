@@ -416,6 +416,41 @@ final class ShopifyGraphQL {
             """;
 
     /**
+     * Set a product's status. Splitting a grouped product brings the products the grouping archived
+     * back, as ACTIVE or DRAFT.
+     */
+    static final String PRODUCT_STATUS = """
+            mutation ProductStatus($id: ID!, $status: ProductStatus!) {
+              productUpdate(product: {id: $id, status: $status}) {
+                product { id status }
+                userErrors { field message }
+              }
+            }
+            """;
+
+    /**
+     * Every PromoStandards product with the note a grouping leaves on what it absorbed
+     * ({@code trophy_sync.grouped_into} / {@code grouped_ids}), whatever its status — what a split
+     * finds the products to bring back by. Nothing searches by metafield value, so it pages them all.
+     */
+    static final String GROUPED_PRODUCTS = """
+            query GroupedProducts($cursor: String) {
+              products(first: 250, after: $cursor, query: "tag:promostandards") {
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  id
+                  handle
+                  status
+                  psId: metafield(namespace: "custom", key: "ps_product_id") { value }
+                  psIds: metafield(namespace: "custom", key: "ps_product_ids") { value }
+                  groupedInto: metafield(namespace: "trophy_sync", key: "grouped_into") { value }
+                  groupedIds: metafield(namespace: "trophy_sync", key: "grouped_ids") { value }
+                }
+              }
+            }
+            """;
+
+    /**
      * Page through every PromoStandards-tagged product: those imported by this app AND those the
      * one-shot trophypartner migration created (which carry the same tag + metafield contract).
      * {@code ps_product_ids} is the full list of supplier ids a migrated product covers (canonical

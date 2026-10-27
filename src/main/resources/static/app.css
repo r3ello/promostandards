@@ -439,6 +439,10 @@ body {
 .grp-parent__text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .grp-summary { font-size: var(--p-font-size-325); margin-bottom: var(--p-space-200); }
 .grp-absorbed { list-style: none; display: grid; gap: var(--p-space-150); font-size: var(--p-font-size-325); }
+.grp-options { display: flex; flex-wrap: wrap; gap: var(--p-space-200) var(--p-space-500); font-size: var(--p-font-size-325); }
+.grp-options label { display: inline-flex; align-items: center; gap: var(--p-space-150); cursor: pointer; }
+.grp-progress li { display: flex; gap: var(--p-space-200); align-items: baseline; }
+.grp-progress .is-err { color: var(--p-color-text-critical); }
 .state--crit {
 	color: var(--p-color-text-critical); background: var(--p-color-bg-fill-critical-secondary);
 	border-radius: var(--p-border-radius-200); padding: var(--p-space-300) var(--p-space-400);

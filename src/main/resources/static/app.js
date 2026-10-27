@@ -1380,6 +1380,12 @@ function renderBulkBar() {
 	const group = el('bulkGroup');
 	group.disabled = selected.size < 2;
 	group.title = selected.size < 2 ? 'Select at least two PaceSetter ids' : 'Sell the selected PaceSetter ids as one Shopify product';
+	// A split starts from one id of a product the store sells; the server finds the rest.
+	const split = el('bulkSplit');
+	const one = selected.size === 1 ? entryOf([...selected][0]) : null;
+	split.disabled = !(one && one.imported === true);
+	split.title = split.disabled ? 'Select one PaceSetter id of a product in the store'
+		: 'Sell the PaceSetter ids of this Shopify product as separate products';
 }
 
 function unselect(pid) {
@@ -1624,6 +1630,221 @@ el('groupBody').addEventListener('change', (e) => {
 });
 groupModal.querySelectorAll('[data-group-close]').forEach((n) => n.addEventListener('click', closeGroupModal));
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !groupModal.hidden) closeGroupModal(); });
+
+// --- splitting a grouped product -----------------------------------------
+// The reverse of grouping: the PaceSetter ids of one Shopify product sold separately again. One row is
+// ticked (any id the grouped product carries); POST /api/catalog/ungroup says what would come back from
+// the archive, what would be created and which variants leave the grouped product, and writes nothing.
+// POST /api/sync/ungroup applies it and syncs the grouped product; the split ids are then synced here,
+// one at a time, because a split of 50 states is 50 syncs — far longer than one request should wait.
+const splitModal = el('splitModal');
+let splitId = null;           // the ticked id
+let splitAll = [];            // every id the grouped product carries (or did, before a split stopped)
+let splitChosen = new Set();  // the ids to sell on their own
+let splitPreview = null;      // the server's answer, or { error }
+let splitError = null;        // why the last apply failed; shown above a fresh preview
+let splitSeq = 0;
+let splitConfirming = false;
+let splitBusy = false;        // applying, or syncing the split ids afterwards
+let splitStatus = 'ACTIVE';
+let splitKeepImages = false;
+
+function openSplitModal() {
+	splitId = [...selected][0];
+	splitAll = [];
+	splitChosen = new Set();
+	splitPreview = null;
+	splitError = null;
+	splitStatus = 'ACTIVE';
+	splitKeepImages = false;
+	el('splitBody').innerHTML = '<div id="splitPreview"></div>';
+	el('splitApply').hidden = false;
+	el('splitCancel').textContent = 'Cancel';
+	splitModal.hidden = false;
+	setSplitConfirming(false);
+	loadSplitPreview(true);
+}
+
+function closeSplitModal() {
+	if (splitBusy) return;
+	splitModal.hidden = true;
+	splitSeq++;
+}
+
+async function loadSplitPreview(first) {
+	const seq = ++splitSeq;
+	splitPreview = null;
+	setSplitConfirming(false);
+	paintSplitPreview();
+	let answer;
+	try {
+		// The first look lets the server pick every id but the product's own; after that, the ticks.
+		answer = await api('/api/catalog/ungroup', 'POST', { productId: splitId, splitIds: first ? [] : [...splitChosen] });
+	} catch (e) {
+		answer = { error: e.message };
+	}
+	if (seq !== splitSeq) return;
+	splitPreview = answer;
+	if (first && !answer.error) {
+		const ids = [...(answer.keptIds || [])];
+		for (const s of answer.split || []) for (const id of s.supplierIds || []) if (!ids.includes(id)) ids.push(id);
+		splitAll = ids;
+		splitChosen = new Set((answer.split || []).flatMap((s) => s.supplierIds || []));
+	}
+	paintSplitPreview();
+}
+
+function splitPreviewHtml() {
+	const failed = splitError ? `<div class="state state--crit"><strong>The split did not finish</strong><p>${esc(splitError)}</p></div>` : '';
+	if (!splitPreview) return `${failed}<div class="state"><span class="spinner"></span> Reading the store for ${esc(splitId)}…</div>`;
+	if (splitPreview.error) return `${failed}<div class="state state--err">⚠ ${esc(splitPreview.error)}</div>`;
+
+	const p = splitPreview;
+	const list = (items) => `<ul>${items.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`;
+	const conflicts = (p.conflicts || []).length
+		? `<div class="state state--crit"><strong>Can't split this as selected</strong>${list(p.conflicts)}</div>` : '';
+	const warnings = (p.warnings || []).length
+		? `<div class="state state--warn"><strong>Worth knowing</strong>${list(p.warnings)}</div>` : '';
+	if (!p.handle) return `${failed}${conflicts}`;
+
+	const ids = splitAll.map((id) => {
+		const own = id === p.productId;
+		const e = entryOf(id);
+		return `<label class="grp-parent${own ? ' is-disabled' : ''}">
+			<input type="checkbox" data-split-id="${esc(id)}"${splitChosen.has(id) ? ' checked' : ''}${own ? ' disabled' : ''}>
+			<span class="grp-parent__text"><span class="prod-name">${esc(e ? titleOf(e) : id)}</span><span class="prod-id">${esc(id)}</span></span>
+			${own ? '<span class="badge badge--neutral" title="The grouped product&#39;s own id: it stays">Stays</span>' : ''}
+		</label>`;
+	}).join('');
+	const products = (p.split || []).map((s) => `<li><strong>${s.handle ? esc(s.handle) : 'New draft product'}</strong>
+		<span class="prod-id">${(s.supplierIds || []).map(esc).join(', ')}</span>
+		<span class="muted">${s.action === 'CREATE' ? 'created by the sync' : `${esc((s.status || '').toLowerCase())} → ${splitStatus.toLowerCase()}`}</span></li>`).join('');
+	const removed = p.removedVariants || [];
+	const kept = p.keptIds || [];
+
+	return `${failed}${conflicts}${warnings}
+		<div class="grp-section">
+			<div class="sub-title">Sell on their own</div>
+			<p class="muted grp-help"><strong>${esc(p.handle)}</strong> keeps ${esc(p.productId)}${kept.length > 1 ? ` and ${kept.length - 1} more` : ''}. Ticked ids leave it.</p>
+			<div class="grp-parents">${ids}</div>
+		</div>
+		<div class="grp-section">
+			<div class="sub-title">Products afterwards</div>
+			<div class="grp-options">
+				<label><input type="radio" name="splitStatus" value="ACTIVE"${splitStatus === 'ACTIVE' ? ' checked' : ''}> Restore as Active</label>
+				<label><input type="radio" name="splitStatus" value="DRAFT"${splitStatus === 'DRAFT' ? ' checked' : ''}> Restore as Draft</label>
+				<label title="For families PaceSetter serves one photo for (CD953*: Arizona for every state)"><input type="checkbox" id="splitKeepImages"${splitKeepImages ? ' checked' : ''}> Keep their store photos</label>
+			</div>
+			${products ? `<ul class="grp-absorbed">${products}</ul>` : '<p class="muted grp-help">Nothing ticked.</p>'}
+		</div>
+		<div class="grp-section">
+			<div class="sub-title">Deleted from ${esc(p.handle)}</div>
+			<p class="muted grp-help">${removed.length ? removed.map(esc).join(', ') : 'No variant: none carries a split id.'}</p>
+		</div>`;
+}
+
+function paintSplitPreview() {
+	const node = el('splitPreview');
+	if (node) node.innerHTML = splitPreviewHtml();
+	el('splitSub').textContent = splitPreview && splitPreview.handle
+		? `${splitPreview.handle} · ${splitAll.length} PaceSetter ids` : 'Sell the PaceSetter ids of one Shopify product separately again.';
+	el('splitApply').disabled = !(splitPreview && splitPreview.applicable) || splitBusy;
+}
+
+function setSplitConfirming(on) {
+	splitConfirming = on;
+	el('splitBack').hidden = !on;
+	el('splitCancel').hidden = on;
+	el('splitFoot').classList.toggle('is-confirming', on);
+	const apply = el('splitApply');
+	apply.classList.toggle('btn--critical', on);
+	apply.textContent = on ? 'Yes, split them' : 'Split products';
+	const note = el('splitNote');
+	if (!on) {
+		note.textContent = 'The variants of the split ids are deleted from the grouped product.';
+		return;
+	}
+	const p = splitPreview;
+	note.innerHTML = `<strong>Write this to the live store?</strong> ${(p.removedVariants || []).length} variant(s) leave ${esc(p.handle)}, and ${(p.split || []).length} product(s) are restored or created.`;
+}
+
+async function applySplit() {
+	if (!splitPreview || !splitPreview.applicable) return;
+	if (!splitConfirming) { setSplitConfirming(true); return; }
+	const btn = el('splitApply');
+	splitBusy = true;
+	btn.disabled = true; el('splitBack').disabled = true;
+	btn.innerHTML = `<span class="spinner"></span> Splitting…`;
+	let r;
+	try {
+		r = await api('/api/sync/ungroup', 'POST', { productId: splitId, splitIds: [...splitChosen], status: splitStatus, keepStoreImages: splitKeepImages });
+	} catch (e) {
+		// Refused (the store changed since the preview) or stopped part-way: applying again finishes it.
+		splitBusy = false;
+		splitError = e.message;
+		el('splitBack').disabled = false;
+		loadSplitPreview(false);
+		return;
+	}
+	await syncSplitIds(r);
+}
+
+/** Syncs each split id in turn, in the modal, so a long split shows where it is. */
+async function syncSplitIds(r) {
+	setSplitConfirming(false);
+	el('splitApply').hidden = true;
+	el('splitCancel').hidden = false;
+	el('splitCancel').disabled = true;
+	el('splitNote').textContent = 'Written to the store. Syncing the split ids — keep this open until it ends.';
+	const head = r.syncError
+		? `<div class="state state--warn">Split, but syncing ${esc(r.productId)} failed: ${esc(r.syncError)} — syncing it again finishes it.</div>`
+		: `<div class="state">${esc(r.handle)} now carries ${(r.keptIds || []).map(esc).join(', ')}${r.sync ? ` · ${r.sync.variantCount} variant(s)` : ''}.</div>`;
+	const ids = r.toSync || [];
+	el('splitBody').innerHTML = `${head}<div class="grp-section"><div class="sub-title">Syncing ${ids.length} product(s)</div>
+		<ul class="grp-absorbed grp-progress">${ids.map((id) => `<li data-split-row="${esc(id)}"><span class="spinner"></span> ${esc(id)}</li>`).join('')}</ul></div>`;
+	let failed = 0;
+	for (const id of ids) {
+		const row = el('splitBody').querySelector(`[data-split-row="${cssAttr(id)}"]`);
+		try {
+			const s = await api(`/api/sync/products/${encodeURIComponent(id)}`, 'POST', r.syncMetafields);
+			const discounts = s.discountError ? ` · discounts: ${s.discountError}` : '';
+			row.innerHTML = `✓ <strong>${esc(id)}</strong> <span class="muted">${esc(s.handle || '')} · ${s.variantCount} variant(s)${esc(discounts)}</span>`;
+			const e = entryOf(id);
+			if (e) { e.imported = true; refreshRow(e); }
+		} catch (e) {
+			failed++;
+			row.innerHTML = `<span class="is-err">✗ <strong>${esc(id)}</strong> ${esc(e.message)}</span>`;
+		}
+	}
+	splitBusy = false;
+	updateShopifyStatus();
+	[...selected].forEach(unselect);
+	el('splitCancel').disabled = false;
+	el('splitCancel').textContent = 'Close';
+	el('splitNote').textContent = failed
+		? `${failed} sync(s) failed. The split stands; syncing those ids again finishes them.`
+		: 'Done.';
+	toast(`Split ${ids.length} id(s) off ${r.handle}${failed ? ` · ${failed} sync(s) failed` : ''}`, failed > 0);
+}
+
+el('bulkSplit').addEventListener('click', openSplitModal);
+el('splitApply').addEventListener('click', applySplit);
+el('splitBack').addEventListener('click', () => setSplitConfirming(false));
+el('splitBody').addEventListener('change', (e) => {
+	const t = e.target;
+	if (t.dataset.splitId) {
+		if (t.checked) splitChosen.add(t.dataset.splitId); else splitChosen.delete(t.dataset.splitId);
+		splitError = null;
+		loadSplitPreview(false);
+	} else if (t.name === 'splitStatus') {
+		splitStatus = t.value;
+		paintSplitPreview();
+	} else if (t.id === 'splitKeepImages') {
+		splitKeepImages = t.checked;
+	}
+});
+splitModal.querySelectorAll('[data-split-close]').forEach((n) => n.addEventListener('click', closeSplitModal));
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !splitModal.hidden) closeSplitModal(); });
 
 // --- views + PaceSetter orders ------------------------------------------
 // Two views share the page: the catalog and the orders on their way to PaceSetter. The hash holds the
