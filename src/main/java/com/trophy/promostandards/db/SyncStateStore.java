@@ -59,4 +59,18 @@ public interface SyncStateStore {
 	 * only the logs can answer, and only until they rotate.
 	 */
 	void recordRun(String job, Instant startedAt, int processed, int pushed, int failed, int skipped);
+
+	/** One row of {@code sync_run}: a pass that finished. */
+	record Run(String job, Instant startedAt, Instant finishedAt, int processed, int pushed, int failed,
+	           int skipped) {
+	}
+
+	/**
+	 * The last pass of {@code job} that finished, as {@link #recordRun} left it. What the console's
+	 * schedule panel falls back on after a restart, which empties the scheduler's in-memory record:
+	 * without it a deploy makes the automation look as if it had never run.
+	 */
+	default Optional<Run> lastRun(String job) {
+		return Optional.empty();
+	}
 }

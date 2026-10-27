@@ -96,9 +96,12 @@ public class SyncScheduler {
      *                   long enough for the pass to finish before it fires again
      * @param products   ids the pass walked, after dropping what the supplier no longer sells
      * @param outcomes   how those ids ended up (PUSHED, UNCHANGED, WOULD_PUSH, FAILED, …)
+     * @param fromHistory read back from {@code sync_run} because this process has not run the job
+     *                    since it started: only totals survive there (PUSHED, FAILED, SKIPPED)
      */
     public record JobStatus(String job, boolean running, Instant startedAt, long seconds,
-                            int products, int variantsWritten, Map<String, Integer> outcomes) {
+                            int products, int variantsWritten, Map<String, Integer> outcomes,
+                            boolean fromHistory) {
     }
 
     /**
@@ -128,11 +131,46 @@ public class SyncScheduler {
         List<JobStatus> jobs = new ArrayList<>();
         for (String job : crons.keySet()) {
             JobStatus status = lastPasses.get(job);
+            if (status == null) {
+                status = fromHistory(job);
+            }
             if (status != null) {
                 jobs.add(status);
             }
         }
         return new ScheduleStatus(enabled(), dryRun(), crons, jobs);
+    }
+
+    /**
+     * The last finished pass of {@code job} as {@code sync_run} recorded it. A restart — every
+     * deploy is one — empties {@link #lastPasses}, and the daily price pass would then show as
+     * never run for up to a day although it ran last night.
+     */
+    private JobStatus fromHistory(String job) {
+        SyncStateStore store = syncStates.getIfAvailable();
+        if (store == null) {
+            return null;
+        }
+        try {
+            return store.lastRun(job).map(run -> {
+                Map<String, Integer> outcomes = new LinkedHashMap<>();
+                if (run.pushed() > 0) {
+                    outcomes.put(ORDER_JOB.equals(job) ? "FULFILLED" : "PUSHED", run.pushed());
+                }
+                if (run.failed() > 0) {
+                    outcomes.put("FAILED", run.failed());
+                }
+                if (run.skipped() > 0) {
+                    outcomes.put("SKIPPED", run.skipped());
+                }
+                return new JobStatus(job, false, run.startedAt(),
+                        Duration.between(run.startedAt(), run.finishedAt()).toSeconds(), run.processed(), 0,
+                        outcomes, true);
+            }).orElse(null);
+        } catch (RuntimeException e) {
+            log.debug("Could not read the last {} pass: {}", job, e.getMessage());
+            return null;
+        }
     }
 
     @Scheduled(cron = "${sync.schedule.inventory-cron}")
@@ -190,18 +228,48 @@ public class SyncScheduler {
         if (!enabled()) {
             return;
         }
+        Instant runAt = Instant.now();
         if (dryRun()) {
             log.info("Scheduled order sync (dry run): skipped, it would fulfil orders since {}",
                     orderWindowStart());
+            publishOrders(runAt, 0, Map.of("DRY_RUN_SKIPPED", 1));
             return;
         }
         Instant since = orderWindowStart();
-        Instant runAt = Instant.now();
+        lastPasses.put(ORDER_JOB, new JobStatus(ORDER_JOB, true, runAt, 0, 0, 0, Map.of(), false));
         try {
-            orderSync.syncOrders(since);
+            OrderSyncService.OrderSyncResult result = orderSync.syncOrders(since);
             advanceOrderCursor(runAt); // only on success, so a failure re-tries the same window
+            Map<String, Integer> outcomes = new LinkedHashMap<>();
+            outcomes.put("FULFILLED", result.fulfillmentsCreated());
+            outcomes.put("MATCHED", result.ordersMatched());
+            outcomes.put("SKIPPED", result.shipmentsSkipped());
+            outcomes.values().removeIf(n -> n == 0);
+            publishOrders(runAt, result.posProcessed(), outcomes);
+            recordOrderRun(runAt, result.posProcessed(), result.fulfillmentsCreated(), 0,
+                    result.shipmentsSkipped());
         } catch (RuntimeException e) {
             log.warn("Scheduled order sync failed for window since {}: {}", since, e.getMessage());
+            publishOrders(runAt, 0, Map.of("FAILED", 1));
+            recordOrderRun(runAt, 0, 0, 1, 0);
+        }
+    }
+
+    /** The order job's line in {@link #status()}: like the refresh passes', with its own outcomes. */
+    private void publishOrders(Instant startedAt, int purchaseOrders, Map<String, Integer> outcomes) {
+        lastPasses.put(ORDER_JOB, new JobStatus(ORDER_JOB, false, startedAt,
+                Duration.between(startedAt, Instant.now()).toSeconds(), purchaseOrders, 0, outcomes, false));
+    }
+
+    private void recordOrderRun(Instant startedAt, int processed, int fulfilled, int failed, int skipped) {
+        SyncStateStore store = syncStates.getIfAvailable();
+        if (store == null) {
+            return;
+        }
+        try {
+            store.recordRun(ORDER_JOB, startedAt, processed, fulfilled, failed, skipped);
+        } catch (RuntimeException e) {
+            log.debug("Could not record the order run: {}", e.getMessage());
         }
     }
 
@@ -430,7 +498,7 @@ public class SyncScheduler {
                          int variantsWritten, Map<ShopifySyncService.Outcome, Integer> tally) {
         lastPasses.put(job, new JobStatus(job, running, startedAt,
                 Duration.between(startedAt, Instant.now()).toSeconds(), products, variantsWritten,
-                outcomesOf(tally)));
+                outcomesOf(tally), false));
     }
 
     /** Keeps a row per run so the incremental behaviour can be inspected after the fact, not just in logs. */

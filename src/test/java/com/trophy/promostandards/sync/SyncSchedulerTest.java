@@ -289,6 +289,60 @@ class SyncSchedulerTest {
         verify(orderSync, never()).syncOrders(any());
     }
 
+    /**
+     * A deploy restarts the server and empties the scheduler's memory: the console then showed every
+     * job as never run, the daily price pass for up to a day. The last finished pass of each job is
+     * read back from {@code sync_run} instead, and said to come from there.
+     */
+    @Test
+    void afterARestartTheLastPassComesFromTheRunHistory() {
+        com.trophy.promostandards.db.SyncStateStore store = mock(com.trophy.promostandards.db.SyncStateStore.class);
+        java.time.Instant at = java.time.Instant.parse("2026-10-27T07:00:00Z");
+        when(store.lastRun(anyString())).thenReturn(java.util.Optional.empty());
+        when(store.lastRun("price")).thenReturn(java.util.Optional.of(new com.trophy.promostandards.db.SyncStateStore.Run(
+                "price", at, at.plusSeconds(900), 972, 12, 1, 959)));
+        SyncScheduler scheduler = new SyncScheduler(sync, orderSync, catalog, discounts, enabledProps(),
+                providerOf(store), providerOf(null), events::add);
+
+        assertThat(scheduler.status().jobs()).singleElement().satisfies(job -> {
+            assertThat(job.job()).isEqualTo("price");
+            assertThat(job.fromHistory()).isTrue();
+            assertThat(job.startedAt()).isEqualTo(at);
+            assertThat(job.seconds()).isEqualTo(900);
+            assertThat(job.products()).isEqualTo(972);
+            assertThat(job.outcomes()).containsExactly(java.util.Map.entry("PUSHED", 12),
+                    java.util.Map.entry("FAILED", 1), java.util.Map.entry("SKIPPED", 959));
+        });
+    }
+
+    /** The order job used to leave no trace in the panel at all: it now reports like the others. */
+    @Test
+    void theOrderJobReportsItsPassAndRecordsIt() {
+        com.trophy.promostandards.db.SyncStateStore store = mock(com.trophy.promostandards.db.SyncStateStore.class);
+        when(orderSync.syncOrders(any())).thenReturn(new OrderSyncService.OrderSyncResult(5, 3, 2, 1));
+        SyncScheduler scheduler = new SyncScheduler(sync, orderSync, catalog, discounts, enabledProps(),
+                providerOf(store), providerOf(null), events::add);
+
+        scheduler.refreshOrders();
+
+        assertThat(scheduler.status().jobs()).singleElement().satisfies(job -> {
+            assertThat(job.job()).isEqualTo("orders");
+            assertThat(job.running()).isFalse();
+            assertThat(job.fromHistory()).isFalse();
+            assertThat(job.products()).isEqualTo(5);
+            assertThat(job.outcomes()).containsEntry("FULFILLED", 2).containsEntry("MATCHED", 3)
+                    .containsEntry("SKIPPED", 1);
+        });
+        verify(store).recordRun(eq("orders"), any(), eq(5), eq(2), eq(0), eq(1));
+    }
+
+    private static SyncProperties enabledProps() {
+        return new SyncProperties("PaceSetter", "USD", "US", "en",
+                SyncProperties.SkuStrategy.PART_SIZE,
+                new Pricing(Strategy.SUPPLIER_LIST, new BigDecimal("40"), Rounding.NINETY_NINE, true),
+                new SyncProperties.Schedule(true, "-", "-", "-", false), List.of(), null);
+    }
+
     /** With the master switch off nothing runs — not even the supplier read that picks the ids. */
     @Test
     void doesNothingWhileTheMasterSwitchIsOff() {
