@@ -7,6 +7,7 @@ import com.trophy.promostandards.sync.MetafieldCatalogService;
 import com.trophy.promostandards.sync.OrderSyncService;
 import com.trophy.promostandards.sync.OrderSyncService.OrderSyncResult;
 import com.trophy.promostandards.sync.ProductGroupService;
+import com.trophy.promostandards.sync.ProductUngroupService;
 import com.trophy.promostandards.sync.ShopifySyncService;
 import com.trophy.promostandards.sync.ShopifySyncService.SyncResult;
 import com.trophy.promostandards.sync.SyncProperties;
@@ -46,11 +47,13 @@ public class SyncController {
     private final DiscountSyncService discounts;
     private final SyncScheduler scheduler;
     private final ProductGroupService groups;
+    private final ProductUngroupService ungroups;
 
     public SyncController(ShopifySyncService sync, OrderSyncService orderSync,
                           MetafieldCatalogService metafieldCatalog, DiscountSyncService discounts,
-                          SyncScheduler scheduler, ProductGroupService groups) {
+                          SyncScheduler scheduler, ProductGroupService groups, ProductUngroupService ungroups) {
         this.groups = groups;
+        this.ungroups = ungroups;
         this.sync = sync;
         this.orderSync = orderSync;
         this.metafieldCatalog = metafieldCatalog;
@@ -189,6 +192,35 @@ public class SyncController {
      */
     public record GroupResponse(String parentProductId, String parentHandle, List<String> supplierIds,
                                 List<String> archived, ImportResponse sync, String syncError) {
+    }
+
+    /**
+     * Sells the supplier ids of a grouped store product as separate products again: deletes their
+     * variants from it, brings back the products the grouping archived, marks every one of them
+     * {@code own_parts_only}, and syncs the grouped product (discounts included).
+     *
+     * <p>The split ids themselves are <b>not</b> synced here — {@code toSync} lists them, and each
+     * goes through {@code POST /products/{id}} with {@code syncMetafields} as its body, so an id that
+     * has to be created is marked before its first sync. Answers 409, having written nothing, for any
+     * split its preview ({@code POST /api/catalog/ungroup}) refuses.
+     */
+    @PostMapping("/ungroup")
+    public UngroupResponse applyUngroup(@RequestBody CatalogController.UngroupRequest request) {
+        ProductUngroupService.Applied applied = ungroups.apply(request.productId(), request.splitIds(),
+                request.status(), request.keepStoreImages());
+        return new UngroupResponse(applied.productId(), applied.handle(), applied.keptIds(),
+                applied.removedVariants(), applied.restored(), applied.toSync(),
+                new ImportRequest(ProductUngroupService.syncMetafields(request.keepStoreImages())),
+                applied.sync() == null ? null : withDiscounts(applied.sync()), applied.syncError());
+    }
+
+    /**
+     * @param toSync         the split ids, to sync one by one with {@code syncMetafields} as the body
+     * @param sync           the grouped product's own import, discounts included; null when it failed
+     */
+    public record UngroupResponse(String productId, String handle, List<String> keptIds,
+                                  List<String> removedVariants, List<String> restored, List<String> toSync,
+                                  ImportRequest syncMetafields, ImportResponse sync, String syncError) {
     }
 
     /** Refresh inventory for an already-imported product. */

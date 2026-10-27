@@ -120,6 +120,9 @@ CASES: dict[str, dict] = {
     "METAFIELDS_DELETE": {"metafields": [{"ownerId": GHOST["product"], "namespace": "custom",
                                           "key": "ps_product_ids"}]},
     "PRODUCT_ARCHIVE": {"id": GHOST["product"]},
+    # Splitting a grouped product: the same ghost product, so nothing is restored for real.
+    "PRODUCT_STATUS": {"id": GHOST["product"], "status": "ACTIVE"},
+    "GROUPED_PRODUCTS": {},
     # Media: all three run against ids that cannot exist, so nothing is added or deleted for real.
     "PRODUCT_ADD_MEDIA": {"id": GHOST["product"],
                           "media": [{"originalSource": "https://example.invalid/probe.jpg",

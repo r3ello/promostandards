@@ -7,8 +7,10 @@ import com.trophy.promostandards.sync.CatalogSummaryService;
 import com.trophy.promostandards.sync.CatalogTitleIndex;
 import com.trophy.promostandards.sync.PendingDataIndex;
 import com.trophy.promostandards.sync.ProductGroupService;
+import com.trophy.promostandards.sync.ProductUngroupService;
 import com.trophy.promostandards.sync.model.PendingDataView;
 import com.trophy.promostandards.sync.model.ProductGroupPreview;
+import com.trophy.promostandards.sync.model.ProductUngroupPreview;
 import com.trophy.promostandards.sync.model.CatalogEntry;
 import com.trophy.promostandards.sync.model.CatalogGroupView;
 import com.trophy.promostandards.sync.model.CatalogStatusView;
@@ -39,16 +41,19 @@ public class CatalogController {
     private final CatalogTitleIndex titleIndex;
     private final PendingDataIndex pendingData;
     private final ProductGroupService groups;
+    private final ProductUngroupService ungroups;
     private final CatalogStatusService status;
 
     public CatalogController(CatalogSummaryService summaries, CatalogGroupIndex groupIndex,
                              CatalogTitleIndex titleIndex, PendingDataIndex pendingData,
-                             ProductGroupService groups, CatalogStatusService status) {
+                             ProductGroupService groups, ProductUngroupService ungroups,
+                             CatalogStatusService status) {
         this.summaries = summaries;
         this.groupIndex = groupIndex;
         this.titleIndex = titleIndex;
         this.pendingData = pendingData;
         this.groups = groups;
+        this.ungroups = ungroups;
         this.status = status;
     }
 
@@ -112,6 +117,25 @@ public class CatalogController {
 
     /** @param memberProductIds the supplier ids to sell under {@code parentProductId} */
     public record GroupRequest(String parentProductId, List<String> memberProductIds) {
+    }
+
+    /**
+     * What splitting a grouped store product back into one product per supplier id would do. Answers
+     * only; {@code POST /api/sync/ungroup} applies it, after running these same checks again.
+     */
+    @PostMapping("/ungroup")
+    public ProductUngroupPreview previewUngroup(@RequestBody UngroupRequest request) {
+        return ungroups.preview(request.productId(), request.splitIds());
+    }
+
+    /**
+     * @param productId       any supplier id the grouped product carries
+     * @param splitIds        the ids to sell on their own; empty = every id but the product's own
+     * @param status          ACTIVE (default) or DRAFT, for the products brought back from the archive
+     * @param keepStoreImages also mark the split products {@code trophy_sync.keep_store_images}
+     */
+    public record UngroupRequest(String productId, List<String> splitIds, String status,
+                                 boolean keepStoreImages) {
     }
 
     /**
