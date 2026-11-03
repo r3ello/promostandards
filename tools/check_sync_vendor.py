@@ -9,14 +9,17 @@ Shopify refused the whole call, so no product first synced since then got its ve
 what it left behind.
 
 Every tagged product carrying a supplier id is sorted into:
-  OK           has trophy_sync.vendor
+  OK           has trophy_sync.vendor and trophy_sync.last_sync_at
+  NO_STAMP     has the vendor but no last_sync_at - repaired by an earlier --apply, which wrote only
+               the vendor; the console's Status tab reads last_sync_at, so it lists these as never synced
   MISSING      synced by this app (a variant carries trophy_sync.vendor_sku) but no vendor - the bug
   NEVER_SYNCED no vendor and no synced variant: blocks by design until its first sync
 
 Usage:
     python tools/check_sync_vendor.py                       # report (reads application-local.yaml)
     python tools/check_sync_vendor.py --csv out.csv         # plus every MISSING / NEVER_SYNCED row
-    python tools/check_sync_vendor.py --apply               # write vendor=PaceSetter on MISSING (not archived)
+    python tools/check_sync_vendor.py --apply               # MISSING: vendor + last_sync_at; NO_STAMP: last_sync_at
+                                                            # (not archived; last_sync_at = now, as text)
 
 Requires: standard library only.
 Origin: 2026-10-27, splitting C1407LG showed the restored products had no vendor.
@@ -31,6 +34,7 @@ import os
 import re
 import sys
 import urllib.error
+from datetime import datetime, timezone
 import urllib.request
 from pathlib import Path
 
@@ -113,7 +117,7 @@ def classify(node: dict) -> str | None:
     if not (value(node, "psId") or value(node, "psIds")):
         return None
     if value(node, "vendor"):
-        return "OK"
+        return "OK" if value(node, "lastSync") else "NO_STAMP"
     synced = any(value(v, "vendorSku") for v in node["variants"]["nodes"])
     return "MISSING" if synced else "NEVER_SYNCED"
 
@@ -146,7 +150,7 @@ def main() -> int:
         cursor = page["pageInfo"]["endCursor"]
 
     print(f"{store}: {len(rows)} products carrying a supplier id")
-    for verdict in ("OK", "MISSING", "NEVER_SYNCED"):
+    for verdict in ("OK", "NO_STAMP", "MISSING", "NEVER_SYNCED"):
         mine = [r for r in rows if r["verdict"] == verdict]
         by_status = {}
         for r in mine:
@@ -167,17 +171,26 @@ def main() -> int:
 
     if not args.apply:
         return 0
+    # The store defines last_sync_at as text (that refusal is the bug), so it is written as text.
+    stamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    metafields = []
+    for r in rows:
+        if r["status"] == "ARCHIVED" or r["verdict"] not in ("MISSING", "NO_STAMP"):
+            continue
+        if r["verdict"] == "MISSING":
+            metafields.append({"ownerId": r["id"], "namespace": "trophy_sync", "key": "vendor",
+                               "type": "single_line_text_field", "value": args.vendor})
+        if not r["last_sync_at"]:
+            metafields.append({"ownerId": r["id"], "namespace": "trophy_sync", "key": "last_sync_at",
+                               "type": "single_line_text_field", "value": stamp})
     failed = 0
-    for i in range(0, len(missing), 25):
-        batch = missing[i:i + 25]
-        data = graphql(store, version, token, METAFIELDS_SET, {"metafields": [
-            {"ownerId": r["id"], "namespace": "trophy_sync", "key": "vendor",
-             "type": "single_line_text_field", "value": args.vendor} for r in batch]})
-        errors = data["metafieldsSet"]["userErrors"]
+    for i in range(0, len(metafields), 25):
+        batch = metafields[i:i + 25]
+        errors = graphql(store, version, token, METAFIELDS_SET, {"metafields": batch})["metafieldsSet"]["userErrors"]
         if errors:
             failed += len(batch)
             print(f"  ! batch {i // 25 + 1}: {errors}")
-    print(f"vendor={args.vendor} written on {len(missing) - failed} of {len(missing)}")
+    print(f"{len(metafields) - failed} of {len(metafields)} metafields written (vendor={args.vendor}, last_sync_at={stamp})")
     return 1 if failed else 0
 
 

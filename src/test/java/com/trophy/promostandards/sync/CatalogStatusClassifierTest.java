@@ -57,6 +57,18 @@ class CatalogStatusClassifierTest {
         assertThat(e.syncable()).isFalse();
     }
 
+    /** 2026-11-03: 101 synced products (91 states) had their vendor back but no last_sync_at. */
+    @Test
+    void theVendorStampAloneMeansSynced() {
+        product("CD900IL", "Illinois", "CD900IL");
+        var stamped = new StoreProduct("gid://shopify/Product/9", "p-9-illinois", "Illinois", "ACTIVE",
+                List.of("promostandards"), List.of("CD900IL"), null, null, null, "PaceSetter");
+
+        Entry e = of(classify(stamped), "p-9-illinois");
+        assertThat(e.category()).isEqualTo(Category.SYNCED);
+        assertThat(e.syncable()).isFalse();
+    }
+
     /**
      * Freestanding Lucite Block lists C0813A (a product) and CD549B, a size of CD549 — which PaceSetter
      * sells without product data. That code is left out of a sync, but it is not gone.

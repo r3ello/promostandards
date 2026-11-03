@@ -498,6 +498,7 @@ final class ShopifyGraphQL {
                   psId: metafield(namespace: "custom", key: "ps_product_id") { value }
                   psIds: metafield(namespace: "custom", key: "ps_product_ids") { value }
                   lastSync: metafield(namespace: "trophy_sync", key: "last_sync_at") { value }
+                  vendor: metafield(namespace: "trophy_sync", key: "vendor") { value }
                   groupedInto: metafield(namespace: "trophy_sync", key: "grouped_into") { value }
                 }
               }
