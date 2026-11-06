@@ -274,7 +274,8 @@ public class CatalogStatusService {
                 n.path("tags").forEach(t -> tags.add(t.asText()));
                 out.add(new StoreProduct(n.path("id").asText(null), n.path("handle").asText(null),
                         n.path("title").asText(null), n.path("status").asText(null), tags,
-                        supplierIds(n), text(n.path("lastSync")), imageUrl(n), text(n.path("groupedInto"))));
+                        supplierIds(n), text(n.path("lastSync")), imageUrl(n), text(n.path("groupedInto")),
+                        text(n.path("vendor"))));
             }
             JsonNode info = page.path("pageInfo");
             cursor = info.path("hasNextPage").asBoolean(false) ? info.path("endCursor").asText(null) : null;

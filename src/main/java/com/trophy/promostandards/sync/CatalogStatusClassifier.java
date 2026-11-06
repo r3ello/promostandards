@@ -38,9 +38,24 @@ final class CatalogStatusClassifier {
 
     static final String DISCONTINUED_TAG = "pacesetter-discontinued";
 
-    /** A store product as the classifier needs it. {@code supplierIds} are as the store lists them. */
+    /**
+     * A store product as the classifier needs it. {@code supplierIds} are as the store lists them.
+     * {@code vendor} is {@code trophy_sync.vendor}: written by the same sync stamp as
+     * {@code last_sync_at}, so either one proves a sync ran. Both are read because the stamp once
+     * failed whole on {@code last_sync_at} (defined as text in the live store) and 101 synced
+     * products got their vendor back by hand but no date — the Status listed them as never synced.
+     */
     record StoreProduct(String gid, String handle, String title, String status, List<String> tags,
-                        List<String> supplierIds, String lastSyncAt, String imageUrl, String groupedInto) {
+                        List<String> supplierIds, String lastSyncAt, String imageUrl, String groupedInto,
+                        String vendor) {
+        StoreProduct(String gid, String handle, String title, String status, List<String> tags,
+                     List<String> supplierIds, String lastSyncAt, String imageUrl, String groupedInto) {
+            this(gid, handle, title, status, tags, supplierIds, lastSyncAt, imageUrl, groupedInto, null);
+        }
+
+        boolean synced() {
+            return (lastSyncAt != null && !lastSyncAt.isBlank()) || (vendor != null && !vendor.isBlank());
+        }
     }
 
     /**
@@ -176,7 +191,7 @@ final class CatalogStatusClassifier {
                         Map<StoreProduct, Set<String>> variantsOf, Map<String, Set<String>> variantHolders,
                         Map<String, Set<String>> partHolders) {
         List<String> ids = p.supplierIds();
-        boolean synced = p.lastSyncAt() != null && !p.lastSyncAt().isBlank();
+        boolean synced = p.synced();
         if (isArchived(p)) {
             String why = p.groupedInto() != null && !p.groupedInto().isBlank()
                     ? "Merged into " + p.groupedInto() : "Archived in the store";
