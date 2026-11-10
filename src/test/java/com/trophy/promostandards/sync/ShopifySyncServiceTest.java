@@ -311,6 +311,59 @@ class ShopifySyncServiceTest {
     }
 
     /**
+     * Every complete listing of the store is recorded as (supplier id → product GID) pairs, so the
+     * relation can be looked up later by GID — even after a handle rename or a metafield edited away.
+     * Recording is a side effect only: a database that refuses it must not cost the index.
+     */
+    @Test
+    void recordsWhichProductCarriesEachIdWhenTheStoreIsListed() {
+        ShopifySyncService service = service(emptyStoreHttp("""
+                {"id":"gid://shopify/Product/700","handle":"p-8123-sample-polo",
+                 "psId":{"value":"OTHER-2"},"psIds":{"value":"[\\"OTHER-2\\",\\"OTHER-3\\"]"},
+                 "psSource":{"value":"migration"}}"""));
+        List<List<com.trophy.promostandards.db.ProductLinkStore.Link>> recorded = new ArrayList<>();
+        service.setProductLinks(new com.trophy.promostandards.db.ProductLinkStore() {
+            @Override
+            public int recordListing(List<Link> links, java.time.Instant seenAt) {
+                recorded.add(links);
+                return 0;
+            }
+
+            @Override
+            public List<LinkRow> history(String productId) {
+                return List.of();
+            }
+        });
+
+        assertThat(service.isImported("OTHER-3")).isTrue();
+
+        assertThat(recorded).hasSize(1);
+        assertThat(recorded.get(0)).containsExactly(
+                new com.trophy.promostandards.db.ProductLinkStore.Link("OTHER-2", "gid://shopify/Product/700",
+                        "p-8123-sample-polo", "migration", true),
+                new com.trophy.promostandards.db.ProductLinkStore.Link("OTHER-3", "gid://shopify/Product/700",
+                        "p-8123-sample-polo", "migration", false));
+    }
+
+    @Test
+    void aLinkStoreThatFailsDoesNotCostTheIndex() {
+        ShopifySyncService service = service(emptyStoreHttp(STORE_WITH_A_CREATED_PRODUCT));
+        service.setProductLinks(new com.trophy.promostandards.db.ProductLinkStore() {
+            @Override
+            public int recordListing(List<Link> links, java.time.Instant seenAt) {
+                throw new IllegalStateException("database down");
+            }
+
+            @Override
+            public List<LinkRow> history(String productId) {
+                return List.of();
+            }
+        });
+
+        assertThat(service.isImported("OTHER-1")).isTrue();
+    }
+
+    /**
      * What follows a creation — the discount publish, the next import — asks the store index, and a
      * product created seconds ago is not in it yet. It answered "has not been imported yet" for 80 of
      * the 132 products created on 2026-09-16; the product is now found by the id the creation returned.

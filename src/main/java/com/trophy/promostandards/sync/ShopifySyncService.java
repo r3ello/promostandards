@@ -2,6 +2,7 @@ package com.trophy.promostandards.sync;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.trophy.promostandards.db.ProductLinkStore;
 import com.trophy.promostandards.db.SyncStateStore;
 import com.trophy.promostandards.db.SyncStateStore.Kind;
 import com.trophy.promostandards.discount.DiscountProperties;
@@ -12,6 +13,7 @@ import com.trophy.promostandards.sync.model.SupplierProduct.Variant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -128,6 +130,24 @@ public class ShopifySyncService {
     private final Map<String, RecentlyCreated> recentlyCreated = new ConcurrentHashMap<>();
 
     private record RecentlyCreated(ImportedProduct product, Instant createdAt) {
+    }
+
+    /**
+     * Where each listing of the store is recorded (id → product GID), or null without persistence.
+     * A record only: nothing here reads it back.
+     */
+    private volatile ProductLinkStore productLinks;
+
+    /** Fingerprint of the last listing recorded, and when: an unchanged store is rewritten hourly. */
+    private volatile int recordedLinksHash;
+    private volatile Instant recordedLinksAt;
+
+    /** How often an unchanged listing is written again, so {@code last_seen_at} stays meaningful. */
+    private static final Duration LINKS_REFRESH = Duration.ofHours(1);
+
+    @Autowired(required = false)
+    void setProductLinks(ProductLinkStore productLinks) {
+        this.productLinks = productLinks;
     }
 
     public ShopifySyncService(ShopifyGraphQLClient gql, CatalogService catalog, ShopifyProductMapper mapper,
@@ -796,7 +816,45 @@ public class ShopifySyncService {
         indexBuiltAt = Instant.now();
         // Listed now: the store's answer takes over from what was remembered at creation.
         recentlyCreated.keySet().removeIf(index::containsKey);
+        recordLinks(products);
         return products;
+    }
+
+    /**
+     * Writes this listing to {@code shopify_product_link}: which product GID carries which supplier
+     * id. Only a complete listing gets here (a failed page throws before), which is what lets the
+     * store mark a pair missing from it as unlinked. Skipped when nothing changed since the last write
+     * less than an hour ago; a database failure is logged, never thrown — the index is what callers
+     * came for.
+     */
+    private void recordLinks(List<ImportedProduct> products) {
+        ProductLinkStore store = productLinks;
+        if (store == null || products.isEmpty()) {
+            return;
+        }
+        List<ProductLinkStore.Link> links = new ArrayList<>();
+        for (ImportedProduct p : products) {
+            if (p.gid() == null) {
+                continue;
+            }
+            for (String id : p.supplierIds()) {
+                links.add(new ProductLinkStore.Link(id, p.gid(), p.handle(), p.source(),
+                        id.equalsIgnoreCase(p.canonicalId())));
+            }
+        }
+        int hash = links.hashCode();
+        Instant last = recordedLinksAt;
+        Instant now = Instant.now();
+        if (last != null && hash == recordedLinksHash && last.plus(LINKS_REFRESH).isAfter(now)) {
+            return;
+        }
+        try {
+            store.recordListing(links, now);
+            recordedLinksHash = hash;
+            recordedLinksAt = now;
+        } catch (RuntimeException e) {
+            log.warn("Could not record the store's product links: {}", e.getMessage());
+        }
     }
 
     /** A list metafield value is a JSON array ({@code ["A","B"]}); tolerate a plain CSV string too. */
