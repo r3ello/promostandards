@@ -12,6 +12,7 @@ import com.trophy.promostandards.sync.CatalogStatusClassifier.StoreProduct;
 import com.trophy.promostandards.sync.model.CatalogStatusView;
 import com.trophy.promostandards.sync.model.CatalogStatusView.Category;
 import com.trophy.promostandards.sync.model.CatalogStatusView.Entry;
+import com.trophy.promostandards.vendorbridge.VendorWebIndex;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,10 +24,12 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -44,12 +47,22 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * id (the only calls this adds, at the scan's own concurrency of 5), and ~12 pages of the store. So it
  * is built in the background, at most once per {@link CatalogStatusProperties#ttl()}, and kept on disk
  * — same shape as the other catalog indexes: the first view may say {@code building}.
+ *
+ * <p>When VendorBridge is configured, the products PromoStandards no longer describes also say
+ * whether PaceSetter's <em>website</em> still lists them ({@link VendorWebIndex}). That check runs
+ * after the report is published — it is slow and one code at a time — so the report shows first and
+ * the website answers arrive on it while {@code building} is still true.
  */
 @Service
 public class CatalogStatusService {
 
     private static final Logger log = LoggerFactory.getLogger(CatalogStatusService.class);
     private static final int FETCH_CONCURRENCY = 5;
+    /** Where "is it still on the website?" changes what to do; the rest PromoStandards answers. */
+    private static final Set<Category> WEB_CHECKED =
+            EnumSet.of(Category.WAITING, Category.SYNCED_NO_DATA, Category.DISCONTINUED);
+    /** Codes asked per product: the first one found answers for it. */
+    private static final int WEB_CODES_PER_PRODUCT = 3;
 
     private final SupplierProductScan scan;
     private final PricingService pricing;
@@ -60,6 +73,7 @@ public class CatalogStatusService {
     private final ObjectMapper objectMapper;
     private final PromoStandardsProperties promoStandards;
     private final ShopifyProperties shopify;
+    private final VendorWebIndex web;
 
     private volatile CatalogStatusView report;
     private final AtomicBoolean building = new AtomicBoolean(false);
@@ -67,7 +81,7 @@ public class CatalogStatusService {
     public CatalogStatusService(SupplierProductScan scan, PricingService pricing, PendingDataIndex pendingData,
                                 ShopifyGraphQLClient gql, SyncProperties sync, CatalogStatusProperties props,
                                 ObjectMapper objectMapper, PromoStandardsProperties promoStandards,
-                                ShopifyProperties shopify) {
+                                ShopifyProperties shopify, VendorWebIndex web) {
         this.scan = scan;
         this.pricing = pricing;
         this.pendingData = pendingData;
@@ -77,6 +91,7 @@ public class CatalogStatusService {
         this.objectMapper = objectMapper;
         this.promoStandards = promoStandards;
         this.shopify = shopify;
+        this.web = web;
     }
 
     /** {@code trophy-partner.myshopify.com} -> {@code https://admin.shopify.com/store/trophy-partner/products/}. */
@@ -141,11 +156,11 @@ public class CatalogStatusService {
         boolean running = building.get();
         if (current == null) {
             return new CatalogStatusView(running ? "building" : "empty", running, null, Map.of(), List.of(),
-                    List.of(), List.of(), 0, List.of(), adminProducts());
+                    List.of(), List.of(), 0, List.of(), adminProducts(), Map.of());
         }
         return new CatalogStatusView("ready", running, current.builtAt(), current.counts(), current.products(),
                 current.newAtSupplier(), current.related(), current.notImportable(), current.warnings(),
-                adminProducts());
+                adminProducts(), current.web());
     }
 
     private void triggerBuild() {
@@ -154,6 +169,10 @@ public class CatalogStatusService {
                 try {
                     report = buildNow();
                     persist(report);
+                    if (web.enabled()) {
+                        report = withWeb(report, true);
+                        persist(report);
+                    }
                 } catch (RuntimeException e) {
                     log.warn("Catalog status build failed: {}", e.getMessage());
                 } finally {
@@ -207,8 +226,32 @@ public class CatalogStatusService {
         log.info("Built catalog status in {}s: {} store products {}, {} new at the supplier",
                 Duration.between(started, Instant.now()).toSeconds(), store.size(), counts,
                 result.newAtSupplier().size());
-        return new CatalogStatusView("ready", false, Instant.now(), counts, result.products(),
-                result.newAtSupplier(), result.related(), result.notImportable(), warnings, adminProducts());
+        return withWeb(new CatalogStatusView("ready", false, Instant.now(), counts, result.products(),
+                result.newAtSupplier(), result.related(), result.notImportable(), warnings, adminProducts(),
+                Map.of()), false);
+    }
+
+    /**
+     * The report with what PaceSetter's website says about the products PromoStandards no longer
+     * describes. {@code ask} false attaches only the answers already known, which costs nothing.
+     */
+    CatalogStatusView withWeb(CatalogStatusView r, boolean ask) {
+        if (!web.enabled()) {
+            return r;
+        }
+        List<List<String>> products = r.products().stream().filter(e -> WEB_CHECKED.contains(e.category()))
+                .map(e -> e.supplierIds().stream().limit(WEB_CODES_PER_PRODUCT).toList())
+                .filter(codes -> !codes.isEmpty()).toList();
+        List<String> warnings = new ArrayList<>(r.warnings());
+        if (ask) {
+            String stopped = web.check(products);
+            if (stopped != null) {
+                warnings.add(stopped);
+            }
+        }
+        return new CatalogStatusView(r.status(), r.building(), r.builtAt(), r.counts(), r.products(),
+                r.newAtSupplier(), r.related(), r.notImportable(), warnings, r.adminProducts(),
+                web.known(products.stream().flatMap(List::stream).toList()));
     }
 
     private static List<String> partIds(Product product) {
