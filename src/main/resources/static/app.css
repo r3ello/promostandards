@@ -560,4 +560,5 @@ body {
 #statusWarnings .state { margin: 0 var(--p-space-400) var(--p-space-300); }
 .status-codes .sku { font-family: var(--p-font-family-mono); font-size: var(--p-font-size-300); color: var(--p-color-text-secondary); }
 .status-blocked { margin-top: var(--p-space-100); }
+.status-web { margin-top: var(--p-space-100); }
 .status-hint { font-style: italic; }

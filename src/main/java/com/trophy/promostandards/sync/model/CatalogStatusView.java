@@ -22,11 +22,31 @@ import java.util.Map;
  * @param warnings      what the report could not check (e.g. Inventory unavailable)
  * @param adminProducts the store admin's products URL, to which an entry's {@code adminId} is
  *                      appended; null when the store is not configured
+ * @param web           what PaceSetter's <em>website</em> says about the codes PromoStandards no
+ *                      longer describes (VendorBridge), keyed by upper-cased code without a family's
+ *                      {@code *}; empty when the bridge is not configured. A code that is absent has
+ *                      not been asked
  */
 public record CatalogStatusView(String status, boolean building, Instant builtAt, Map<String, Integer> counts,
                                 List<Entry> products, List<SupplierEntry> newAtSupplier,
                                 List<SupplierEntry> related, int notImportable, List<String> warnings,
-                                String adminProducts) {
+                                String adminProducts, Map<String, Web> web) {
+
+    public CatalogStatusView {
+        web = web == null ? Map.of() : web;
+    }
+
+    /**
+     * One code on PaceSetter's public website.
+     *
+     * @param found       the site has a page for it
+     * @param matchedSku  the site's SKU the code resolved to
+     * @param matchedBy   how VendorBridge found it ({@code exact}, {@code recoded}, {@code prefix}…)
+     * @param needsReview a prefix match: it may be a neighbouring model, not this one
+     */
+    public record Web(boolean found, String url, String title, String matchedSku, String matchedBy,
+                      boolean needsReview, Instant checkedAt) {
+    }
 
     /** Where a store product stands; the order is the console's. */
     public enum Category {

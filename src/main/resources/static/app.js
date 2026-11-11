@@ -2213,6 +2213,23 @@ function renderStatus() {
 	else renderStatusEntries(r, (r.products || []).filter((e) => e.category === statusGroup));
 }
 
+// What PaceSetter's website says about a product PromoStandards no longer describes (r.web, from
+// VendorBridge): the first of its codes the site has, else "not there either" once every code asked
+// came back empty. Nothing when the bridge is off or the code has not been asked yet.
+const WEB_CHECKED = new Set(['WAITING', 'SYNCED_NO_DATA', 'DISCONTINUED']);
+function webLine(r, e) {
+	if (!WEB_CHECKED.has(e.category) || !r.web) return '';
+	const answers = (e.supplierIds || []).slice(0, 3)
+		.map((c) => r.web[String(c).trim().toUpperCase().replace(/\*+$/, '')]).filter(Boolean);
+	if (!answers.length) return '';
+	const hit = answers.find((w) => w.found);
+	if (!hit) return '<div class="muted status-web">Not on PaceSetter’s website either</div>';
+	const page = hit.url ? `<a href="${esc(hit.url)}" target="_blank" rel="noopener">${esc(hit.title || 'its page')}</a>` : esc(hit.title || '');
+	return hit.needsReview
+		? `<div class="muted status-web">Website: closest match is ${esc(hit.matchedSku || '')} — ${page}. May be a neighbouring model.</div>`
+		: `<div class="status-web"><span class="badge badge--success">Still on PaceSetter’s website</span> ${page}</div>`;
+}
+
 function renderStatusEntries(r, entries) {
 	el('statusHead').innerHTML = `<tr><th class="col-thumb" aria-label="Image"></th><th>Product</th><th>PaceSetter codes</th><th>Why</th><th class="col-actions" aria-label="Action"></th></tr>`;
 	if (!entries.length) {
@@ -2230,7 +2247,8 @@ function renderStatusEntries(r, entries) {
 		const codes = e.supplierIds || [];
 		const codeHtml = codes.slice(0, 4).map((c) => `<span class="sku">${esc(c)}</span>`).join(' ')
 			+ (codes.length > 4 ? ` <span class="muted" title="${esc(codes.join(', '))}">+${codes.length - 4}</span>` : '');
-		const why = esc(e.reason || '') + (e.syncBlockedReason ? `<div class="muted status-blocked">${esc(e.syncBlockedReason)}</div>` : '');
+		const why = esc(e.reason || '') + (e.syncBlockedReason ? `<div class="muted status-blocked">${esc(e.syncBlockedReason)}</div>` : '')
+			+ webLine(r, e);
 		let action = '';
 		if (e.category === 'READY') {
 			action = e.syncable

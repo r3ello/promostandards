@@ -442,3 +442,14 @@ sync:
   #  - { namespace: custom, key: country_of_origin, type: single_line_text_field, value: "China" }
   #  - { namespace: custom, key: supplier_brand,    type: single_line_text_field, source: vendor }
   #  - { namespace: custom, key: ps_categories,     type: list.single_line_text_field, source: tags }
+
+# VendorBridge: the team's own service reading the vendors' PUBLIC WEBSITES (util/VendorBridge.md) —
+# a second source next to PromoStandards. Used only by the console's Status view, to say whether a
+# product PromoStandards no longer describes is still on PaceSetter's site. Read-only, never on a
+# sync's path. No key = off, and nothing calls it.
+vendor-bridge:
+  base-url: ${VENDORBRIDGE_URL:https://vendorbridge.yoordy.com}
+  key: ${VENDORBRIDGE_KEY:}
+  vendor: pacesetter
+  cache-file: data/vendor-bridge-listings.json   # answers kept across restarts
+  ttl: 7d                                        # the bridge re-crawls weekly
