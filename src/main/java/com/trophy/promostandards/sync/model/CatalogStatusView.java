@@ -54,6 +54,11 @@ public record CatalogStatusView(String status, boolean building, Instant builtAt
         SYNCED,
         /** The sync ran on it once, but PaceSetter no longer has product data or a price for it. */
         SYNCED_NO_DATA,
+        /**
+         * PromoStandards no longer lists it, and it is kept up to date from PaceSetter's website
+         * instead (VendorBridge): {@code trophy_sync.source = vendorbridge}.
+         */
+        FROM_WEBSITE,
         /** PaceSetter has everything; it has never been synced. */
         READY,
         /** Its codes are variants of a PaceSetter product (merge), or not codes PaceSetter uses. */

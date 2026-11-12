@@ -37,6 +37,8 @@ import java.util.stream.Collectors;
 final class CatalogStatusClassifier {
 
     static final String DISCONTINUED_TAG = "pacesetter-discontinued";
+    /** {@code trophy_sync.source} of a product the website sync keeps (VendorBridge). */
+    static final String WEBSITE_SOURCE = "vendorbridge";
 
     /**
      * A store product as the classifier needs it. {@code supplierIds} are as the store lists them.
@@ -47,10 +49,21 @@ final class CatalogStatusClassifier {
      */
     record StoreProduct(String gid, String handle, String title, String status, List<String> tags,
                         List<String> supplierIds, String lastSyncAt, String imageUrl, String groupedInto,
-                        String vendor) {
+                        String vendor, String source) {
         StoreProduct(String gid, String handle, String title, String status, List<String> tags,
                      List<String> supplierIds, String lastSyncAt, String imageUrl, String groupedInto) {
-            this(gid, handle, title, status, tags, supplierIds, lastSyncAt, imageUrl, groupedInto, null);
+            this(gid, handle, title, status, tags, supplierIds, lastSyncAt, imageUrl, groupedInto, null, null);
+        }
+
+        StoreProduct(String gid, String handle, String title, String status, List<String> tags,
+                     List<String> supplierIds, String lastSyncAt, String imageUrl, String groupedInto,
+                     String vendor) {
+            this(gid, handle, title, status, tags, supplierIds, lastSyncAt, imageUrl, groupedInto, vendor, null);
+        }
+
+        /** Kept up to date from PaceSetter's website, not PromoStandards ({@code trophy_sync.source}). */
+        boolean fromWebsite() {
+            return WEBSITE_SOURCE.equalsIgnoreCase(source == null ? "" : source.trim());
         }
 
         boolean synced() {
@@ -191,7 +204,10 @@ final class CatalogStatusClassifier {
                         Map<StoreProduct, Set<String>> variantsOf, Map<String, Set<String>> variantHolders,
                         Map<String, Set<String>> partHolders) {
         List<String> ids = p.supplierIds();
-        boolean synced = p.synced();
+        // A website sync stamps the product too, but that is not a PromoStandards sync: while
+        // PromoStandards has nothing for it the product is the website's, and the day it lists the
+        // product again it is one PromoStandards has never synced.
+        boolean synced = p.synced() && !p.fromWebsite();
         if (isArchived(p)) {
             String why = p.groupedInto() != null && !p.groupedInto().isBlank()
                     ? "Merged into " + p.groupedInto() : "Archived in the store";
@@ -207,6 +223,10 @@ final class CatalogStatusClassifier {
         List<String> live = ids.stream().filter(id -> kinds.get(id) == Kind.PRODUCT).toList();
         List<String> dead = ids.stream().filter(id -> kinds.get(id) != Kind.PRODUCT).toList();
 
+        if (p.fromWebsite() && live.isEmpty()) {
+            return entry(p, Category.FROM_WEBSITE, "Kept up to date from PaceSetter's website; PromoStandards "
+                    + describeMissing(kinds), false, null);
+        }
         if (synced && !live.isEmpty()) {
             String why = dead.isEmpty() ? "Synced" : "Synced; " + others(kinds, dead);
             return entry(p, Category.SYNCED, why, false, null);
@@ -218,7 +238,8 @@ final class CatalogStatusClassifier {
         }
         if (!live.isEmpty()) {
             String blocked = sharedWith(p, claims, variantsOf, variantHolders);
-            String why = "PaceSetter has everything; never synced"
+            String why = (p.fromWebsite() ? "PromoStandards lists it again; it was kept from the website until now"
+                    : "PaceSetter has everything; never synced")
                     + (dead.isEmpty() ? "" : ". Not synced with it: " + others(kinds, dead));
             return entry(p, Category.READY, why, blocked == null, blocked);
         }

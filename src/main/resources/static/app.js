@@ -1870,6 +1870,7 @@ function viewFromHash() {
 	if (st) return { view: 'status', orderId: null, group: st[1] || null };
 	const sp = /^#split(?:\/([A-Z_]+))?$/.exec(location.hash);
 	if (sp) return { view: 'split', orderId: null, group: sp[1] || null };
+	if (location.hash === '#vendorbridge') return { view: 'vendorbridge', orderId: null };
 	return { view: 'products', orderId: null };
 }
 
@@ -1881,7 +1882,9 @@ function routeView() {
 	el('viewStatus').hidden = view !== 'status';
 	el('viewSplit').hidden = view !== 'split';
 	if (view === 'status') { showStatus(group); return; }
+	el('viewVendorBridge').hidden = view !== 'vendorbridge';
 	if (view === 'split') { showSplit(group); return; }
+	if (view === 'vendorbridge') { showVendorBridge(); return; }
 	if (view !== 'orders') return;
 	if (!ordersLoaded) loadOrders().then(() => focusOrder(orderId));
 	else focusOrder(orderId);
@@ -2141,6 +2144,7 @@ const STATUS_GROUPS = [
 	{ key: 'NEEDS_FIX', label: 'Needs merge or code fix', tone: 'caution', note: 'Their codes are colours or sizes of a PaceSetter product: list the product code, or merge the store products it is split across.' },
 	{ key: 'WAITING', label: 'Waiting on PaceSetter', tone: 'caution', note: 'PaceSetter lists these codes but has no product data or no price for them. Nothing to do in the store until it does.' },
 	{ key: 'SYNCED_NO_DATA', label: 'Lost PaceSetter data', tone: 'critical', note: 'Synced once, but PaceSetter no longer describes them, so they are no longer updated. Ask PaceSetter, or set them to draft.' },
+	{ key: 'FROM_WEBSITE', label: 'From the website', tone: 'success', note: 'PromoStandards no longer lists these, so they are kept up to date from PaceSetter’s website instead — prices and quantity discounts. They are managed in the From VendorBridge tab.' },
 	{ key: 'DISCONTINUED', label: 'Discontinued', tone: 'neutral', note: 'PaceSetter has none of their codes any more. Those set to draft carry the pacesetter-discontinued tag.' },
 	{ key: 'NEW_AT_SUPPLIER', label: 'New at PaceSetter', tone: 'neutral', note: 'PaceSetter products the store does not carry in any form. Creating them is a reviewed batch, not a click.' },
 	{ key: 'ARCHIVED', label: 'Archived', tone: 'neutral', note: 'Archived in the store — most were merged into another product.' },
@@ -2311,6 +2315,8 @@ el('viewTabs').addEventListener('click', (e) => {
 		if (!location.hash.startsWith('#status')) location.hash = '#status';
 	} else if (seg.dataset.view === 'split') {
 		if (!location.hash.startsWith('#split')) location.hash = '#split';
+	} else if (seg.dataset.view === 'vendorbridge') {
+		if (location.hash !== '#vendorbridge') location.hash = '#vendorbridge';
 	} else if (location.hash) {
 		// Dropping the hash with pushState, not `location.hash = ''`, which would leave a bare "#".
 		history.pushState(null, '', location.pathname + location.search);
@@ -2318,6 +2324,154 @@ el('viewTabs').addEventListener('click', (e) => {
 	}
 });
 window.addEventListener('hashchange', routeView);
+
+// --- from VendorBridge --------------------------------------------------------
+// The store products PromoStandards no longer lists that PaceSetter's website still sells
+// (GET /api/catalog/vendorbridge — read off the Status report, so it costs nothing). A row is
+// previewed first (GET …/{id}: what a sync would write, nothing written) and synced from inside that
+// preview (POST /api/sync/vendorbridge/{id}), so nobody syncs a product without seeing its new price.
+let vbView = null;
+const vbBody = el('vbBody');
+const vbOpen = new Set();
+
+function showVendorBridge() {
+	if (!vbView) loadVendorBridge();
+	else renderVendorBridge();
+}
+
+async function loadVendorBridge() {
+	const btn = el('vbRefresh');
+	btn.disabled = true;
+	el('vbMeta').innerHTML = '<span class="spinner"></span> Reading the list…';
+	try {
+		vbView = await api('/api/catalog/vendorbridge');
+	} catch (e) {
+		el('vbMeta').textContent = `Could not read the list: ${e.message}`;
+		btn.disabled = false;
+		return;
+	}
+	btn.disabled = false;
+	vbOpen.clear();
+	renderVendorBridge();
+}
+
+function renderVendorBridge() {
+	const v = vbView;
+	const rows = v.products || [];
+	const warn = [];
+	if (!v.enabled) warn.push('VendorBridge is not configured on this server (VENDORBRIDGE_KEY), so nothing here can be previewed or synced.');
+	if (v.status !== 'ready') warn.push('This list comes from the Status report, which has not been built yet. Open the Status tab and wait for it — or press Rebuild there — then reload this one.');
+	else if (v.building) warn.push('The Status report is being rebuilt; the website answers arrive last, so this list may still grow. Reload in a few minutes.');
+	if (v.needReview) warn.push(`${v.needReview} more product${v.needReview === 1 ? ' is' : 's are'} on the website only under a similar code (a Digi-Color prefix, a dropped colour suffix). Those are not listed: they need a review by hand before anything is synced from a page that may be another model.`);
+	el('vbWarnings').innerHTML = warn.map((w) => `<div class="state state--warn">${esc(w)}</div>`).join('');
+	const synced = rows.filter((p) => p.syncedAt).length;
+	el('vbMeta').textContent = `${rows.length.toLocaleString()} product${rows.length === 1 ? '' : 's'} · ${synced} synced from the website`
+		+ (v.builtAt ? ` · Status report built ${ago(v.builtAt)}` : '');
+	if (!rows.length) {
+		vbBody.innerHTML = `<tr class="row-state"><td colspan="6"><div class="empty"><strong>Nothing here</strong></div></td></tr>`;
+		return;
+	}
+	vbBody.innerHTML = rows.map((p) => {
+		const link = v.adminProducts && p.adminId ? `${v.adminProducts}${p.adminId}` : null;
+		const name = esc(p.title || p.handle || '');
+		const state = p.status && p.status !== 'ACTIVE' ? ` <span class="badge badge--neutral">${esc(p.status.toLowerCase())}</span>` : '';
+		const codes = p.codes || [];
+		const codeHtml = codes.slice(0, 4).map((c) => `<span class="sku">${esc(c)}</span>`).join(' ')
+			+ (codes.length > 4 ? ` <span class="muted" title="${esc(codes.join(', '))}">+${codes.length - 4}</span>` : '');
+		const page = p.webUrl ? `<a href="${esc(p.webUrl)}" target="_blank" rel="noopener">${esc(p.webTitle || 'its page')}</a>` : esc(p.webTitle || '');
+		const shared = p.sharedWith ? `<div class="muted">page shared with ${p.sharedWith} other product${p.sharedWith === 1 ? '' : 's'}</div>` : '';
+		const sync = p.syncedAt
+			? `<span class="badge badge--success" title="${esc(p.syncedAt)}">Synced · ${esc(ago(p.syncedAt))}</span>`
+			: '<span class="badge badge--caution">Not synced</span>';
+		return `<tr data-vb-row="${esc(p.adminId)}">
+			<td class="col-thumb"><span class="thumb-cell ${p.imageUrl ? '' : 'is-empty'}">${p.imageUrl ? `<img src="${esc(p.imageUrl)}" alt="" loading="lazy" onerror="this.closest('.thumb-cell').classList.add('is-empty');this.remove()">` : ''}</span></td>
+			<td><div class="prod-name">${link ? `<a href="${esc(link)}" target="_blank" rel="noopener">${name}</a>` : name}${state}</div><div class="muted">${esc(p.handle || '')}</div></td>
+			<td class="status-codes">${codeHtml}</td>
+			<td>${page}${shared}</td>
+			<td data-vb-state>${sync}</td>
+			<td class="col-actions"><button class="btn btn--sm" data-vb-preview="${esc(p.adminId)}"${v.enabled ? '' : ' disabled'}>Preview</button></td>
+		</tr>`;
+	}).join('');
+}
+
+/** What a sync would write, as the person deciding reads it: the price move first. */
+function vbPlanHtml(plan, result) {
+	const money = currency('USD');
+	const blocking = (plan.blocking || []).length
+		? `<div class="state--crit"><strong>Cannot be synced from here</strong><ul>${plan.blocking.map((b) => `<li>${esc(b)}</li>`).join('')}</ul></div>` : '';
+	const notices = (plan.notices || []).length
+		? `<div class="state--warn"><ul>${plan.notices.map((n) => `<li>${esc(n)}</li>`).join('')}</ul></div>` : '';
+	const variants = (plan.variants || []).map((x) => {
+		const moved = x.currentPrice != null && Number(x.currentPrice) !== Number(x.newPrice);
+		const ladder = (x.tiers || []).length
+			? x.tiers.map((t) => `${t.quantity}+ · ${money(t.unitPrice)}`).join(' &nbsp;|&nbsp; ')
+			: '<span class="muted">no quantity discount</span>';
+		return `<tr>
+			<td><span class="sku">${esc(x.code)}</span></td>
+			<td>${esc(x.sku || '')}${x.title && x.title !== 'Default Title' ? ` <span class="muted">${esc(x.title)}</span>` : ''}</td>
+			<td class="num">${money(x.currentPrice)}</td>
+			<td class="num">${moved ? `<strong>${money(x.newPrice)}</strong>` : money(x.newPrice)}${x.minimumQuantity > 1 ? ` <span class="muted">from ${x.minimumQuantity}</span>` : ''}</td>
+			<td>${ladder}</td>
+		</tr>`;
+	}).join('');
+	const table = variants ? `<div class="sub-title">Prices from the website</div>
+		<table class="index-table vb-plan"><thead><tr><th>Code</th><th>Variant</th><th class="num">Now</th><th class="num">After</th><th>Quantity discounts</th></tr></thead><tbody>${variants}</tbody></table>` : '';
+	const content = plan.newTitle
+		? `<div class="sub-title">Title and description (first sync)</div>
+			<p><span class="muted">${esc(plan.currentTitle || '')}</span> → <strong>${esc(plan.newTitle)}</strong></p>
+			<div class="vb-desc">${esc((plan.newDescriptionHtml || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim())}</div>` : '';
+	const image = plan.imageToAdd ? `<div class="sub-title">Photo to add</div><p><a href="${esc(plan.imageToAdd)}" target="_blank" rel="noopener">${esc(plan.imageToAdd.split('/').pop())}</a></p>` : '';
+	let foot;
+	if (result) {
+		const did = [`${result.variantsUpdated} variant${result.variantsUpdated === 1 ? '' : 's'} priced`];
+		if (result.contentUpdated) did.push('title and description updated');
+		if (result.imageAdded) did.push('photo added');
+		foot = `<div class="state vb-done">Synced from the website: ${esc(did.join(', '))}. The product stays ${esc((plan.status || '').toLowerCase())}.</div>`
+			+ ((result.warnings || []).length ? `<div class="state--warn"><ul>${result.warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul></div>` : '');
+	} else {
+		foot = `<div class="vb-actions"><button class="btn btn--primary" data-vb-sync="${esc(plan.adminId)}"${plan.ready ? '' : ' disabled'}>Sync from the website</button>
+			<span class="muted">Writes the prices and discounts above${plan.newTitle ? ', the title and description' : ''}${plan.imageToAdd ? ', the photo' : ''}. The product stays ${esc((plan.status || '').toLowerCase())}.</span></div>`;
+	}
+	return `<div class="detail vb-detail">${blocking}${notices}${table}${content}${image}${foot}</div>`;
+}
+
+async function toggleVbPreview(id, btn) {
+	const row = btn.closest('tr');
+	const next = row.nextElementSibling;
+	if (next && next.dataset.vbDetail === id) { next.remove(); vbOpen.delete(id); btn.textContent = 'Preview'; return; }
+	vbOpen.add(id);
+	btn.textContent = 'Hide';
+	row.insertAdjacentHTML('afterend', `<tr class="detail-row" data-vb-detail="${esc(id)}"><td colspan="6"><div class="detail"><div class="state"><span class="spinner"></span> Reading the store and PaceSetter’s website…</div></div></td></tr>`);
+	const cell = row.nextElementSibling.firstElementChild;
+	try {
+		cell.innerHTML = vbPlanHtml(await api(`/api/catalog/vendorbridge/${encodeURIComponent(id)}`));
+	} catch (e) {
+		cell.innerHTML = `<div class="detail"><div class="state state--err">${esc(e.message)}</div></div>`;
+	}
+}
+
+vbBody.addEventListener('click', async (e) => {
+	const preview = e.target.closest('[data-vb-preview]');
+	if (preview) { toggleVbPreview(preview.dataset.vbPreview, preview); return; }
+	const btn = e.target.closest('[data-vb-sync]'); if (!btn) return;
+	const id = btn.dataset.vbSync;
+	const cell = btn.closest('td');
+	btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Syncing…';
+	try {
+		const res = await api(`/api/sync/vendorbridge/${encodeURIComponent(id)}`, 'POST', null);
+		cell.innerHTML = vbPlanHtml(res.plan, res);
+		const p = (vbView.products || []).find((x) => x.adminId === id);
+		if (p) p.syncedAt = new Date().toISOString();
+		const state = vbBody.querySelector(`[data-vb-row="${cssId(id)}"] [data-vb-state]`);
+		if (state) state.innerHTML = '<span class="badge badge--success">Synced · just now</span>';
+		toast(`Synced ${res.plan.handle} from the website`);
+		for (const w of res.warnings || []) toast(w, true);
+	} catch (err) {
+		toast(err.message, true);
+		btn.disabled = false; btn.textContent = 'Sync from the website';
+	}
+});
+el('vbRefresh').addEventListener('click', loadVendorBridge);
 
 // --- split tab ---------------------------------------------------------------
 // The store products that sell several PaceSetter codes, by how much of each a split can take apart.

@@ -70,6 +70,35 @@ class CatalogStatusClassifierTest {
     }
 
     /**
+     * A product the website sync keeps is stamped like a synced one, but PromoStandards has nothing for
+     * it: it is the website's, not one that "lost PaceSetter data".
+     */
+    @Test
+    void aProductKeptFromTheWebsiteIsItsOwnGroup() {
+        var fromWeb = new StoreProduct("gid://shopify/Product/7", "dynasty-blue", "Dynasty Blue", "DRAFT",
+                List.of("promostandards"), List.of("C0610"), "2026-11-12T10:00:00Z", null, null, "PaceSetter",
+                "vendorbridge");
+
+        Entry e = of(classify(fromWeb), "dynasty-blue");
+        assertThat(e.category()).isEqualTo(Category.FROM_WEBSITE);
+        assertThat(e.reason()).contains("PaceSetter's website", "no longer lists C0610");
+    }
+
+    /** The day PromoStandards lists it again it goes back to the normal sync — which has never run on it. */
+    @Test
+    void aWebsiteProductPromoStandardsListsAgainIsReadyForTheNormalSync() {
+        product("C0610", "Small Blue Dynasty Award", "C0610");
+        var fromWeb = new StoreProduct("gid://shopify/Product/7", "dynasty-blue", "Dynasty Blue", "DRAFT",
+                List.of("promostandards"), List.of("C0610"), "2026-11-12T10:00:00Z", null, null, "PaceSetter",
+                "vendorbridge");
+
+        Entry e = of(classify(fromWeb), "dynasty-blue");
+        assertThat(e.category()).isEqualTo(Category.READY);
+        assertThat(e.reason()).contains("PromoStandards lists it again");
+        assertThat(e.syncable()).isTrue();
+    }
+
+    /**
      * Freestanding Lucite Block lists C0813A (a product) and CD549B, a size of CD549 — which PaceSetter
      * sells without product data. That code is left out of a sync, but it is not gone.
      */

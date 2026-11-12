@@ -84,6 +84,7 @@
 			<button class="seg" data-view="orders" role="tab">Orders</button>
 			<button class="seg" data-view="status" role="tab">Status</button>
 			<button class="seg" data-view="split" role="tab">Split</button>
+			<button class="seg" data-view="vendorbridge" role="tab">From VendorBridge</button>
 		</nav>
 
 		<div id="viewProducts">
@@ -320,6 +321,31 @@
 					<table class="index-table split-table">
 						<thead><tr><th>Shopify product</th><th>Keeps</th><th>Codes that would leave</th><th class="col-actions" aria-label="Action"></th></tr></thead>
 						<tbody id="splitList"></tbody>
+					</table>
+				</div>
+			</section>
+		</div>
+
+		<!-- From VendorBridge: the store products PromoStandards no longer lists that PaceSetter's
+		     website still sells (GET /api/catalog/vendorbridge, read off the Status report). Each is
+		     previewed, then synced from the website: prices, discounts and the PaceSetter code. -->
+		<div id="viewVendorBridge" hidden>
+			<section class="card">
+				<div class="card__head">
+					<div>
+						<h1 class="card__title">From PaceSetter's website</h1>
+						<p class="card__sub" id="vbMeta">Products PromoStandards no longer lists that the website still sells.</p>
+						<p class="card__sub status-hint">These cannot be synced the normal way: PaceSetter's PromoStandards service has nothing for them. Its website still has them, so a sync here takes the price, the quantity discounts and the PaceSetter code from the page — and, the first time, the title, the description and a photo if the product has none. It adds no variant, touches no stock and leaves the product in the status it has.</p>
+					</div>
+					<div class="card__actions">
+						<button class="btn" id="vbRefresh" title="Reads the list again from the Status report">↻ Reload</button>
+					</div>
+				</div>
+				<div id="vbWarnings"></div>
+				<div class="table-wrap">
+					<table class="index-table" id="vbTable">
+						<thead><tr><th class="col-thumb" aria-label="Image"></th><th>Product</th><th>PaceSetter codes</th><th>On PaceSetter's website</th><th>State</th><th class="col-actions" aria-label="Action"></th></tr></thead>
+						<tbody id="vbBody"></tbody>
 					</table>
 				</div>
 			</section>

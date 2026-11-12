@@ -518,8 +518,42 @@ final class ShopifyGraphQL {
                   psIds: metafield(namespace: "custom", key: "ps_product_ids") { value }
                   lastSync: metafield(namespace: "trophy_sync", key: "last_sync_at") { value }
                   vendor: metafield(namespace: "trophy_sync", key: "vendor") { value }
+                  source: metafield(namespace: "trophy_sync", key: "source") { value }
                   groupedInto: metafield(namespace: "trophy_sync", key: "grouped_into") { value }
                 }
+              }
+            }
+            """;
+
+    /**
+     * One store product as the website sync needs it: its codes, what it holds now, and each
+     * variant's marks — which is how a code finds its variant.
+     */
+    static final String VENDOR_BRIDGE_PRODUCT = """
+            query VendorBridgeProduct($id: ID!) {
+              product(id: $id) {
+                id handle title status tags descriptionHtml
+                psId: metafield(namespace: "custom", key: "ps_product_id") { value }
+                psIds: metafield(namespace: "custom", key: "ps_product_ids") { value }
+                source: metafield(namespace: "trophy_sync", key: "source") { value }
+                media(first: 1) { nodes { id } }
+                variants(first: 100) {
+                  nodes {
+                    id sku title price
+                    vendorSku: metafield(namespace: "trophy_sync", key: "vendor_sku") { value }
+                    psVariantId: metafield(namespace: "custom", key: "promo_standard_id") { value }
+                  }
+                }
+              }
+            }
+            """;
+
+    /** Title and description only: status, tags, images and everything else stay as they are. */
+    static final String PRODUCT_CONTENT = """
+            mutation ProductContent($id: ID!, $title: String!, $descriptionHtml: String!) {
+              productUpdate(product: {id: $id, title: $title, descriptionHtml: $descriptionHtml}) {
+                product { id title }
+                userErrors { field message }
               }
             }
             """;
