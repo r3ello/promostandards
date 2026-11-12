@@ -561,4 +561,11 @@ body {
 .status-codes .sku { font-family: var(--p-font-family-mono); font-size: var(--p-font-size-300); color: var(--p-color-text-secondary); }
 .status-blocked { margin-top: var(--p-space-100); }
 .status-web { margin-top: var(--p-space-100); }
+/* From VendorBridge: the preview of one product's website sync, under its row. */
+.vb-detail { display: grid; gap: var(--p-space-300); }
+.vb-detail .sub-title { margin-bottom: 0; }
+.vb-plan { background: var(--p-color-bg-surface); border: 1px solid var(--p-color-border); border-radius: var(--p-border-radius-200); }
+.vb-desc { color: var(--p-color-text-secondary); max-width: 80ch; }
+.vb-actions { display: flex; align-items: center; gap: var(--p-space-300); flex-wrap: wrap; }
+.vb-done { color: var(--p-color-text-success); font-weight: var(--p-font-weight-semibold); }
 .status-hint { font-style: italic; }

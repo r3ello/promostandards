@@ -109,6 +109,8 @@ CASES: dict[str, dict] = {
     "SUPPLIER_SENT_ORDERS": {},
     "SUPPLIER_ORDER_BY_ID": {"id": GHOST["order"]},
     "SUPPLIER_PRODUCTS_BY_SKU": {"query": "sku:PROBE-DOES-NOT-EXIST*"},
+    "VENDOR_BRIDGE_PRODUCT": {"id": GHOST["product"]},
+    "PRODUCT_CONTENT": {"id": GHOST["product"], "title": "probe", "descriptionHtml": ""},
     "TAGS_ADD": {"id": GHOST["order"], "tags": ["probe-does-not-stick"]},
     "FULFILLMENT_CREATE": {"fulfillment": {"lineItemsByFulfillmentOrder": [
         {"fulfillmentOrderId": "gid://shopify/FulfillmentOrder/999999999999"}]}},

@@ -5,21 +5,24 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 /**
  * Reads VendorBridge ({@code util/VendorBridge.md}): what a vendor's public website says about a part.
  * JDK {@link HttpClient}, like the Shopify client, so it adds no dependency.
  *
- * <p>Read-only and never on a sync's path: the bridge's catalog is a weekly crawl, its prices are list
- * prices and a code it has not seen is searched live on the vendor's small site. Callers ask one code
- * at a time and keep the answer.
+ * <p>Read-only and never on a PromoStandards sync's path: the bridge's catalog is a weekly crawl and a
+ * code it has not seen is searched live on the vendor's small site. Callers ask one code at a time and
+ * keep the answer.
  */
 @Component
 public class VendorBridgeClient {
@@ -38,6 +41,23 @@ public class VendorBridgeClient {
         public boolean needsReview() {
             return matchedBy != null && matchedBy.startsWith("prefix");
         }
+
+        /** The vendor lists this very code (punctuation aside): the only match a sync acts on. */
+        public boolean exact() {
+            return "exact".equals(matchedBy) || "no-punct".equals(matchedBy);
+        }
+    }
+
+    /** A part's page with its wording: what a first sync takes the title and description from. */
+    public record Page(Listing listing, String descriptionHtml) {
+    }
+
+    /**
+     * One row of a page's quantity pricing: {@code unitPrice} per piece from {@code minQuantity} up.
+     * The vendor's published (list) price. {@code sku} is the row's own, which can be shorter than the
+     * part asked about — PaceSetter prices CD929AY1G on the row of its size, CD929A.
+     */
+    public record PriceTier(String sku, int minQuantity, BigDecimal unitPrice, String currency) {
     }
 
     private final VendorBridgeProperties props;
@@ -61,11 +81,54 @@ public class VendorBridgeClient {
      * @throws VendorBridgeException anything else: no key, a refused key, the vendor failing or throttling
      */
     public Optional<Listing> product(String part) {
+        return page(part).map(Page::listing);
+    }
+
+    /** {@link #product} with the page's description. */
+    public Optional<Page> page(String part) {
+        return get(part, "").map(body -> new Page(listing(part, body), text(body.path("description_html"))));
+    }
+
+    /** The page's quantity pricing, every SKU's rows; empty when the part or its pricing is not there. */
+    public List<PriceTier> discounts(String part) {
+        List<PriceTier> tiers = new ArrayList<>();
+        get(part, "/discounts").ifPresent(body -> body.path("tiers").forEach(t -> {
+            if (t.hasNonNull("unit_price") && t.hasNonNull("sku")) {
+                tiers.add(new PriceTier(t.path("sku").asText().trim(), t.path("min_quantity").asInt(1),
+                        t.path("unit_price").decimalValue(), text(t.path("currency"))));
+            }
+        }));
+        return tiers;
+    }
+
+    /** The page's photo URLs, in the vendor's order; empty when there are none. */
+    public List<String> images(String part) {
+        List<String> urls = new ArrayList<>();
+        get(part, "/images").ifPresent(body -> body.path("images").forEach(i -> {
+            String url = text(i.path("url"));
+            if (url != null) {
+                urls.add(url);
+            }
+        }));
+        return urls;
+    }
+
+    private static Listing listing(String part, JsonNode body) {
+        JsonNode resolution = body.path("resolution");
+        return new Listing(part, text(resolution.path("vendor_product")), text(resolution.path("matched_sku")),
+                text(resolution.path("matched_by")), text(body.path("source").path("url")), text(body.path("title")));
+    }
+
+    /**
+     * One GET under the part. Empty for the two answers that mean "the vendor has nothing here":
+     * {@code PartNotFound}, and {@code NotSupported} (a vendor that publishes no such thing).
+     */
+    private Optional<JsonNode> get(String part, String suffix) {
         if (!configured()) {
             throw new VendorBridgeException("VendorBridge is not configured (vendor-bridge.key)", false);
         }
         String base = props.baseUrl().replaceFirst("/+$", "");
-        URI uri = URI.create(base + "/vendors/" + encode(props.vendor()) + "/products/" + encode(part));
+        URI uri = URI.create(base + "/vendors/" + encode(props.vendor()) + "/products/" + encode(part) + suffix);
         HttpRequest request = HttpRequest.newBuilder(uri).timeout(props.requestTimeout())
                 .header("Authorization", "Bearer " + props.key().trim())
                 .header("Accept", "application/json").GET().build();
@@ -81,17 +144,14 @@ public class VendorBridgeClient {
         JsonNode body = parse(response.body());
         int status = response.statusCode();
         if (status == 200) {
-            JsonNode resolution = body.path("resolution");
-            return Optional.of(new Listing(part, text(resolution.path("vendor_product")),
-                    text(resolution.path("matched_sku")), text(resolution.path("matched_by")),
-                    text(body.path("source").path("url")), text(body.path("title"))));
+            return Optional.of(body);
         }
-        if (status == 404 && "PartNotFound".equals(body.path("error").asText())) {
+        String error = body.path("error").asText("");
+        if ((status == 404 && "PartNotFound".equals(error)) || (status == 501 && "NotSupported".equals(error))) {
             return Optional.empty();
         }
         String detail = body.path("detail").isValueNode() ? body.path("detail").asText() : body.path("detail").toString();
-        throw new VendorBridgeException("VendorBridge answered " + status
-                + (body.hasNonNull("error") ? " " + body.path("error").asText() : "")
+        throw new VendorBridgeException("VendorBridge answered " + status + (error.isEmpty() ? "" : " " + error)
                 + (detail.isBlank() ? "" : ": " + detail) + " for " + part, status == 503 || status == 429);
     }
 

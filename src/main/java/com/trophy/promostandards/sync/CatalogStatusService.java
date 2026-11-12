@@ -60,7 +60,7 @@ public class CatalogStatusService {
     private static final int FETCH_CONCURRENCY = 5;
     /** Where "is it still on the website?" changes what to do; the rest PromoStandards answers. */
     private static final Set<Category> WEB_CHECKED =
-            EnumSet.of(Category.WAITING, Category.SYNCED_NO_DATA, Category.DISCONTINUED);
+            EnumSet.of(Category.WAITING, Category.SYNCED_NO_DATA, Category.DISCONTINUED, Category.FROM_WEBSITE);
     /** Codes asked per product: the first one found answers for it. */
     private static final int WEB_CODES_PER_PRODUCT = 3;
 
@@ -318,7 +318,7 @@ public class CatalogStatusService {
                 out.add(new StoreProduct(n.path("id").asText(null), n.path("handle").asText(null),
                         n.path("title").asText(null), n.path("status").asText(null), tags,
                         supplierIds(n), text(n.path("lastSync")), imageUrl(n), text(n.path("groupedInto")),
-                        text(n.path("vendor"))));
+                        text(n.path("vendor")), text(n.path("source"))));
             }
             JsonNode info = page.path("pageInfo");
             cursor = info.path("hasNextPage").asBoolean(false) ? info.path("endCursor").asText(null) : null;
