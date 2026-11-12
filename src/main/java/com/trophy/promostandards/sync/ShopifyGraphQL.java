@@ -327,6 +327,25 @@ final class ShopifyGraphQL {
             }
             """;
 
+    /**
+     * The store products a SKU could belong to — for an order line that is linked to no product (a
+     * migrated order's), which therefore carries no vendor to say whose it is. A prefix search, so the
+     * caller checks each answer: {@code PS9311} must match {@code PS9311-A}, not {@code PS93110}.
+     */
+    static final String SUPPLIER_PRODUCTS_BY_SKU = """
+            query SupplierProductsBySku($query: String!) {
+              products(first: 10, query: $query) {
+                nodes {
+                  handle title status
+                  psId: metafield(namespace: "custom", key: "ps_product_id") { value }
+                  vendor: metafield(namespace: "trophy_sync", key: "vendor") { value }
+                  legacySku: metafield(namespace: "migration", key: "legacy_sku") { value }
+                  variants(first: 100) { nodes { sku } }
+                }
+              }
+            }
+            """;
+
     /** One order, read the same way as {@link #SUPPLIER_PENDING_ORDERS}: the preview of what would be sent. */
     static final String SUPPLIER_ORDER_BY_ID = """
             query SupplierOrderById($id: ID!) {
