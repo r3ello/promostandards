@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -55,6 +56,10 @@ public class SupplierOrderService {
     static final String ALREADY_SENT = "Already sent to PaceSetter.";
     /** Pages of 50 open orders read before giving up; a store is not expected to have more unsent ones. */
     private static final int MAX_PAGES = 10;
+    /** Why an {@link ExcludedLine} that is PaceSetter's after all was left out; keeps its order listed. */
+    static final String UNLINKED_REASON = "PaceSetter SKU on a line linked to no product";
+    /** A SKU safe to put in a search: anything else is not a store SKU anyway. */
+    private static final Pattern SEARCHABLE_SKU = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{1,39}");
 
     private static final Logger log = LoggerFactory.getLogger(SupplierOrderService.class);
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -64,6 +69,8 @@ public class SupplierOrderService {
     private final SupplierOrderMailer mailer;
     private final SupplierOrderProperties props;
     private final TrophyCsv trophyCsv;
+    /** Whose an unlinked SKU is, per SKU: the pending list would otherwise ask once per order. */
+    private final TtlCache<String, Optional<String>> unlinkedSkus = new TtlCache<>(Duration.ofMinutes(10), 500);
 
     public SupplierOrderService(ShopifyGraphQLClient gql, SupplierOrderEmail email,
                                 SupplierOrderMailer mailer, SupplierOrderProperties props, TrophyCsv trophyCsv) {
@@ -152,7 +159,10 @@ public class SupplierOrderService {
             for (JsonNode order : orders.path("nodes")) {
                 Preview p = toPreview(order);
                 // The search cannot see the metafield, and a cancelled order can still be "open".
-                if (p.sent() != null || isCancelled(order) || p.lines().isEmpty()) {
+                // An order whose only PaceSetter lines are unlinked ones has no line to send, yet it is
+                // exactly the order nobody would otherwise hear about: it stays, needing attention.
+                boolean unlinked = p.excluded().stream().anyMatch(e -> UNLINKED_REASON.equals(e.reason()));
+                if (p.sent() != null || isCancelled(order) || (p.lines().isEmpty() && !unlinked)) {
                     continue;
                 }
                 pending.add(row(p, null, null));
@@ -340,6 +350,15 @@ public class SupplierOrderService {
                 continue;
             }
             if (!paceSetter && !supplierProduct) {
+                // A line linked to no product carries no vendor, which proves nothing about whose it is:
+                // a migrated order links one line of a product and leaves its siblings as bare SKUs
+                // (#178845: PS9311-A linked, the B and C pieces of the same puzzle as "PS9311").
+                String unlinked = open > 0 && !item.hasNonNull("product") ? unlinkedSupplierLine(item) : null;
+                if (unlinked != null) {
+                    excluded.add(new ExcludedLine(title, text(item.path("sku")), ordered, UNLINKED_REASON));
+                    blocking.add(title + " (SKU " + text(item.path("sku")) + ", " + open + " to send): " + unlinked);
+                    continue;
+                }
                 excluded.add(new ExcludedLine(title, text(item.path("sku")), ordered, "not a PaceSetter product"));
                 continue;
             }
@@ -422,6 +441,62 @@ public class SupplierOrderService {
                 order.path("test").asBoolean(false), financial, text(order.path("displayFulfillmentStatus")),
                 note, dateNeeded, shipTo, text(order.path("shippingLine").path("title")),
                 lines, excluded, blocking, notices, sent);
+    }
+
+    /**
+     * Why a line with no product behind it must stop the order, or null when its SKU is nobody's we
+     * know. The SKU is looked up in the store: a PaceSetter product whose legacy SKU it is, or whose
+     * variants are numbered from it, means the line is PaceSetter's and the PO would leave it out —
+     * with nothing on the line to say which variant was meant. A lookup that fails blocks too: an
+     * order held back is seen, a line left out is not.
+     */
+    private String unlinkedSupplierLine(JsonNode item) {
+        String sku = text(item.path("sku"));
+        if (sku == null || !SEARCHABLE_SKU.matcher(sku.trim()).matches()) {
+            return null;
+        }
+        return unlinkedSkus.get(sku.trim().toUpperCase(Locale.ROOT), this::lookUpUnlinkedSku).orElse(null);
+    }
+
+    private Optional<String> lookUpUnlinkedSku(String sku) {
+        JsonNode products;
+        try {
+            products = gql.execute(ShopifyGraphQL.SUPPLIER_PRODUCTS_BY_SKU, Map.of("query", "sku:" + sku + "*"))
+                    .path("products").path("nodes");
+        } catch (RuntimeException e) {
+            log.warn("Could not check whose the unlinked SKU {} is: {}", sku, e.getMessage());
+            return Optional.of("the line is linked to no store product and the store could not be asked whose "
+                    + "that SKU is (" + e.getMessage() + "). Reload; if it stays, check the line by hand.");
+        }
+        for (JsonNode product : products) {
+            String vendor = text(product.path("vendor").path("value"));
+            boolean supplier = vendor != null ? SUPPLIER.equalsIgnoreCase(vendor.trim())
+                    : text(product.path("psId").path("value")) != null;
+            if (!supplier) {
+                continue;
+            }
+            List<String> variants = new ArrayList<>();
+            product.path("variants").path("nodes").forEach(v -> {
+                String variantSku = text(v.path("sku"));
+                if (variantSku != null) {
+                    variants.add(variantSku.trim());
+                }
+            });
+            String legacySku = text(product.path("legacySku").path("value"));
+            boolean legacy = legacySku != null && sku.equalsIgnoreCase(legacySku.trim());
+            boolean numbered = variants.stream().anyMatch(v -> v.equalsIgnoreCase(sku)
+                    || v.toUpperCase(Locale.ROOT).startsWith(sku + "-"));
+            if (legacy || numbered) {
+                String title = text(product.path("title"));
+                String listed = variants.isEmpty() ? "" : " (variants "
+                        + String.join(", ", variants.stream().limit(8).toList()) + (variants.size() > 8 ? ", …" : "") + ")";
+                return Optional.of("the line is linked to no store product, but that SKU is the PaceSetter product '"
+                        + (title != null ? title : text(product.path("handle"))) + "'" + listed
+                        + ". The PO would leave it out, and nothing on the line says which variant was meant. "
+                        + "Fix the line in Shopify, or order it by hand.");
+            }
+        }
+        return Optional.empty();
     }
 
     /**

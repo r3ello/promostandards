@@ -310,6 +310,102 @@ class SupplierOrderServiceTest {
         assertThat(p.isReady()).isFalse();
     }
 
+    /** A migrated order's line that lost its product: only the SKU is left to say what it was. */
+    private static String unlinked(String sku) {
+        return """
+                {"name":"Puzzle Piece Awards","title":"Puzzle Piece Awards","variantTitle":null,"sku":"%s",
+                 "quantity":4,"unfulfilledQuantity":4,"customAttributes":[],
+                 "originalUnitPriceSet":{"shopMoney":{"amount":"45.0","currencyCode":"USD"}},
+                 "variant":null,"product":null}""".formatted(sku);
+    }
+
+    private static final String PUZZLE_PRODUCT = """
+            {"handle":"puzzle-piece-awards","title":"Puzzle Piece Awards","status":"ACTIVE","psId":{"value":"CD1050A"},
+             "vendor":{"value":"PaceSetter"},"legacySku":{"value":"PS9311"},
+             "variants":{"nodes":[{"sku":"PS9311-A"},{"sku":"PS9311-B"},{"sku":"PS9311-C"}]}}""";
+
+    private static String products(String... nodes) {
+        return "{\"data\":{\"products\":{\"nodes\":[" + String.join(",", nodes) + "]}}}";
+    }
+
+    /**
+     * #178845: the migration linked one piece of a three-piece puzzle and left the other two as bare
+     * "PS9311" lines. With no product they carry no vendor, so they were left out as someone else's and
+     * the order was offered as ready — a PO for 4 pieces of 12.
+     */
+    @Test
+    void aLineWithNoProductWhoseSkuIsAPaceSetterProductBlocksTheOrder() {
+        SupplierOrderService service = service(http(Map.of(
+                "SupplierOrderById", "{\"data\":{\"order\":"
+                        + order("1", "#178845", "", CB35_ENGRAVED, unlinked("PS9311"), unlinked("PS9311")) + "}}",
+                "SupplierProductsBySku", products(PUZZLE_PRODUCT))));
+
+        Preview p = service.preview("1").orElseThrow();
+
+        assertThat(p.lines()).singleElement().satisfies(l -> assertThat(l.partId()).isEqualTo("CB35"));
+        assertThat(p.excluded()).extracting(SupplierOrderService.ExcludedLine::reason)
+                .containsExactly(SupplierOrderService.UNLINKED_REASON, SupplierOrderService.UNLINKED_REASON);
+        assertThat(p.blocking()).hasSize(2).allSatisfy(b -> assertThat(b)
+                .contains("SKU PS9311", "4 to send", "Puzzle Piece Awards", "PS9311-A, PS9311-B, PS9311-C"));
+        assertThat(p.isReady()).isFalse();
+        // Two lines, one SKU: the store is asked once.
+        assertThat(operations).filteredOn("SupplierProductsBySku"::equals).hasSize(1);
+        assertThat(variables).anySatisfy(v -> assertThat(String.valueOf(v.get("query"))).isEqualTo("sku:PS9311*"));
+    }
+
+    /** A prefix search answers neighbours too, and other suppliers' products: neither makes the line PaceSetter's. */
+    @Test
+    void aLineWithNoProductWhoseSkuIsNobodysIsStillJustLeftOut() {
+        String neighbour = PUZZLE_PRODUCT.replace("\"PS9311\"", "\"PS93110\"").replace("PS9311-", "PS93110-");
+        String crystalD = PUZZLE_PRODUCT.replace("PaceSetter", "Crystal D");
+        SupplierOrderService service = service(http(Map.of(
+                "SupplierOrderById", "{\"data\":{\"order\":"
+                        + order("1", "#1", "", CB35_ENGRAVED, unlinked("PS9311")) + "}}",
+                "SupplierProductsBySku", products(neighbour, crystalD))));
+
+        Preview p = service.preview("1").orElseThrow();
+
+        assertThat(p.excluded()).singleElement()
+                .satisfies(e -> assertThat(e.reason()).isEqualTo("not a PaceSetter product"));
+        assertThat(p.blocking()).isEmpty();
+        assertThat(p.isReady()).isTrue();
+    }
+
+    /** A fulfilled leftover needs no PO, so nothing is asked about it. */
+    @Test
+    void anUnlinkedLineAlreadyFulfilledIsNotLookedUp() {
+        Preview p = preview(order("1", "#1", "", CB35_ENGRAVED,
+                unlinked("PS9311").replace("\"unfulfilledQuantity\":4", "\"unfulfilledQuantity\":0")));
+
+        assertThat(p.blocking()).isEmpty();
+        assertThat(operations).containsExactly("SupplierOrderById");
+    }
+
+    /** Not knowing is not "someone else's": a store that cannot be asked holds the order back. */
+    @Test
+    void anUnlinkedLineThatCannotBeCheckedBlocks() {
+        Preview p = preview(order("1", "#1", "", CB35_ENGRAVED, unlinked("PS9311")));
+
+        assertThat(p.blocking()).singleElement().asString().contains("SKU PS9311", "could not be asked");
+    }
+
+    /** With every PaceSetter line unlinked there is nothing to send — and nobody would hear of the order. */
+    @Test
+    void anOrderWhoseOnlyPaceSetterLinesAreUnlinkedStaysInThePendingList() {
+        String orders = "{\"data\":{\"orders\":{\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null},\"nodes\":["
+                + order("1", "#1001", "", unlinked("PS9311")) + "," + order("2", "#1002", "", OTHER_SUPPLIER) + "]}}}";
+        SupplierOrderService service = service(http(Map.of(
+                "SupplierPendingOrders", orders, "SupplierProductsBySku", products(PUZZLE_PRODUCT))));
+
+        List<PendingOrder> pending = service.pending();
+
+        assertThat(pending).singleElement().satisfies(o -> {
+            assertThat(o.orderName()).isEqualTo("#1001");
+            assertThat(o.lines()).isEmpty();
+            assertThat(o.blocking()).anySatisfy(b -> assertThat(b).contains("Puzzle Piece Awards"));
+        });
+    }
+
     /** No vendor but PaceSetter's product id: never synced. It blocks, so it is seen — never silently left out. */
     @Test
     void blocksAPaceSetterProductWithNoVendor() {
