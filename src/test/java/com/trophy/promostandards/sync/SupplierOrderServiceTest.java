@@ -406,6 +406,24 @@ class SupplierOrderServiceTest {
         });
     }
 
+    /** A migrated order stays listed, but says what it is: it was not placed in this store. */
+    @Test
+    void aMigratedOrderIsMarkedAsSuchInThePreviewAndInTheList() {
+        String migrated = order("1", "#178881", "", CB35_ENGRAVED).replace("\"tags\":[]", "\"tags\":[\"Printed\",\"legacy-import\"]");
+        String orders = "{\"data\":{\"orders\":{\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null},\"nodes\":["
+                + migrated + "," + order("2", "#S74615", "", CB35_ENGRAVED) + "]}}}";
+
+        Preview p = preview(migrated);
+        List<PendingOrder> pending = service(http(Map.of("SupplierPendingOrders", orders))).pending();
+
+        assertThat(p.notices()).first().asString().contains("Migrated order", "previous site", "legacy-import");
+        // A warning, not a blocker: a migrated order whose lines are all linked can still be sent.
+        assertThat(p.isReady()).isTrue();
+        assertThat(pending).extracting(PendingOrder::orderName, PendingOrder::migrated)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple("#178881", true),
+                        org.assertj.core.groups.Tuple.tuple("#S74615", false));
+    }
+
     /** No vendor but PaceSetter's product id: never synced. It blocks, so it is seen — never silently left out. */
     @Test
     void blocksAPaceSetterProductWithNoVendor() {

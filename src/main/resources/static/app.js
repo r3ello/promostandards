@@ -1954,7 +1954,7 @@ function orderRowHtml(o) {
 			: `<span class="badge badge--caution">Not sent · can be sent</span>`;
 	return `<tr class="prod-row${openOrders.has(id) ? ' is-open' : ''}" data-order="${esc(id)}">
 		<td class="col-expand"><span class="chev">▸</span></td>
-		<td><div class="prod-name">${esc(o.orderName)}</div>${o.test ? '<span class="badge badge--neutral">Test</span>' : ''}</td>
+		<td><div class="prod-name">${esc(o.orderName)}</div>${o.test ? '<span class="badge badge--neutral">Test</span>' : ''}${o.migrated ? ' <span class="badge badge--caution" title="Placed on the previous site and imported by TrophyShift (tag legacy-import), not placed in this store. Its lines may not be linked to their products: check it against the original order before sending.">Migrated order</span>' : ''}</td>
 		<td>${esc(orderDate(o.createdAt))}</td>
 		<td>${o.destination ? esc(o.destination) : '<span class="muted">—</span>'}</td>
 		<td><div class="ord-items">${items}${others}</div></td>

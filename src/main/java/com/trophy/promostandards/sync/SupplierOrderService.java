@@ -56,6 +56,11 @@ public class SupplierOrderService {
     static final String ALREADY_SENT = "Already sent to PaceSetter.";
     /** Pages of 50 open orders read before giving up; a store is not expected to have more unsent ones. */
     private static final int MAX_PAGES = 10;
+    /** The tag TrophyShift puts on every order it brings over from the previous site. */
+    static final String MIGRATED_TAG = "legacy-import";
+    static final String MIGRATED_NOTICE = "Migrated order: it was placed on the previous site and imported "
+            + "by TrophyShift (tag " + MIGRATED_TAG + "), not placed in this store. Its lines may not be linked to "
+            + "their products, so check it against the original order before sending.";
     /** Why an {@link ExcludedLine} that is PaceSetter's after all was left out; keeps its order listed. */
     static final String UNLINKED_REASON = "PaceSetter SKU on a line linked to no product";
     /** A SKU safe to put in a search: anything else is not a store SKU anyway. */
@@ -130,10 +135,18 @@ public class SupplierOrderService {
      * @param sentAt when it was emailed to PaceSetter (from the sent record); null while pending, and
      *               for an order someone tagged by hand, which has no record
      * @param sentTo who it was emailed to, as recorded
+     * @param migrated imported from the previous site, not placed in this store ({@link #MIGRATED_TAG})
      */
     public record PendingOrder(String orderId, String orderName, String createdAt, boolean test,
                                String financialStatus, String destination, List<LineSummary> lines,
-                               int otherLines, List<String> blocking, String sentAt, String sentTo) {
+                               int otherLines, List<String> blocking, String sentAt, String sentTo,
+                               boolean migrated) {
+        public PendingOrder(String orderId, String orderName, String createdAt, boolean test,
+                            String financialStatus, String destination, List<LineSummary> lines,
+                            int otherLines, List<String> blocking, String sentAt, String sentTo) {
+            this(orderId, orderName, createdAt, test, financialStatus, destination, lines, otherLines, blocking,
+                    sentAt, sentTo, false);
+        }
     }
 
     public record LineSummary(String partId, String title, int quantity) {
@@ -195,7 +208,7 @@ public class SupplierOrderService {
                         new LineSummary(text(l.path("partId")), null, l.path("quantity").asInt(0))));
                 row = new PendingOrder(row.orderId(), row.orderName(), row.createdAt(), row.test(),
                         row.financialStatus(), row.destination(), went, 0, row.blocking(), row.sentAt(),
-                        row.sentTo());
+                        row.sentTo(), row.migrated());
             }
             sent.add(row);
         }
@@ -209,7 +222,8 @@ public class SupplierOrderService {
         List<LineSummary> lines = p.lines().stream()
                 .map(l -> new LineSummary(l.partId(), l.title(), l.quantity())).toList();
         return new PendingOrder(p.orderId(), p.orderName(), p.createdAt(), p.test(), p.financialStatus(),
-                destination(p.shipTo()), lines, p.excluded().size(), p.blocking(), sentAt, sentTo);
+                destination(p.shipTo()), lines, p.excluded().size(), p.blocking(), sentAt, sentTo,
+                p.notices().contains(MIGRATED_NOTICE));
     }
 
     /** The {@code trophy_sync.pacesetter_po} JSON; an empty node when absent or not JSON. */
@@ -422,6 +436,9 @@ public class SupplierOrderService {
         ShipTo shipTo = shipTo(order.path("shippingAddress"));
         if (shipTo == null && !lines.isEmpty()) {
             blocking.add("The order has no shipping address.");
+        }
+        if (hasTag(order, MIGRATED_TAG)) {
+            notices.add(0, MIGRATED_NOTICE);
         }
         if (order.path("test").asBoolean(false)) {
             notices.add("Test order.");
